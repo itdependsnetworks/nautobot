@@ -68,6 +68,7 @@ from .racks import (
 )
 
 __all__ = (
+    "BreakoutTemplateTable",
     "CableTable",
     "ConsoleConnectionTable",
     "ConsolePortTable",

@@ -33,6 +33,7 @@ from nautobot.dcim.choices import (
 )
 from nautobot.dcim.constants import NONCONNECTABLE_IFACE_TYPES, RACK_U_HEIGHT_MAXIMUM
 from nautobot.dcim.models import (
+    BreakoutTemplate,
     ConsolePortTemplate,
     ConsoleServerPortTemplate,
     Controller,
@@ -359,6 +360,29 @@ class DeviceRedundancyGroupFactory(PrimaryModelFactory):
 
     has_comments = NautobotBoolIterator()
     comments = factory.Maybe("has_comments", factory.Faker("paragraph"), "")
+
+
+class BreakoutTemplateFactory(PrimaryModelFactory):
+    class Meta:
+        model = BreakoutTemplate
+        exclude = ("has_description",)
+
+    name = UniqueFaker("word")
+
+    has_description = NautobotBoolIterator()
+    description = factory.Maybe("has_description", factory.Faker("sentence"), "")
+    a_connectors = 1
+    a_positions = 4
+    b_connectors = 4
+    b_positions = 1
+    is_shuffle = False
+    strands_per_lane = 1
+    polarity_method = ""
+    mapping = factory.LazyAttribute(
+        lambda o: [
+            {"a_connector": 1, "a_position": i, "b_connector": i, "b_position": 1} for i in range(1, o.a_positions + 1)
+        ]
+    )
 
 
 class DeviceFamilyFactory(PrimaryModelFactory):

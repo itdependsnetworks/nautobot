@@ -4295,6 +4295,10 @@ class ConnectCableToDeviceForm(ConnectCableExcludeIDMixin, NautobotModelForm):
     Base form for connecting a Cable to a Device component
     """
 
+    breakout_template = DynamicModelChoiceField(
+        queryset=BreakoutTemplate.objects.all(),
+        required=False,
+    )
     termination_b_location = DynamicModelChoiceField(
         queryset=Location.objects.all(),
         label="Location",
@@ -4328,10 +4332,7 @@ class ConnectCableToDeviceForm(ConnectCableExcludeIDMixin, NautobotModelForm):
     class Meta:
         model = Cable
         fields = [
-            "termination_b_location",
-            "termination_b_rack",
-            "termination_b_device",
-            "termination_b_id",
+            "breakout_template",
             "type",
             "status",
             "label",
@@ -4351,6 +4352,17 @@ class ConnectCableToDeviceForm(ConnectCableExcludeIDMixin, NautobotModelForm):
     def clean_termination_b_id(self):
         # Return the PK rather than the object
         return getattr(self.cleaned_data["termination_b_id"], "pk", None)
+
+    def save(self, commit=True):
+        # Store the B-side termination object on the Cable instance before save
+        # so the signal handler can create the CableTermination row
+        termination_b_id = self.cleaned_data.get("termination_b_id")
+        if termination_b_id and hasattr(self, "fields") and "termination_b_id" in self.fields:
+            # Resolve the object from the PK (clean_termination_b_id returns PK)
+            field = self.fields["termination_b_id"]
+            termination_b_obj = field.queryset.model.objects.get(pk=termination_b_id)
+            self.instance._initial_termination_b = termination_b_obj
+        return super().save(commit=commit)
 
 
 class ConnectCableToConsolePortForm(ConnectCableToDeviceForm):
@@ -4445,10 +4457,6 @@ class ConnectCableToCircuitTerminationForm(ConnectCableExcludeIDMixin, NautobotM
     class Meta:
         model = Cable
         fields = [
-            "termination_b_provider",
-            "termination_b_location",
-            "termination_b_circuit",
-            "termination_b_id",
             "type",
             "status",
             "label",
@@ -4461,6 +4469,14 @@ class ConnectCableToCircuitTerminationForm(ConnectCableExcludeIDMixin, NautobotM
     def clean_termination_b_id(self):
         # Return the PK rather than the object
         return getattr(self.cleaned_data["termination_b_id"], "pk", None)
+
+    def save(self, commit=True):
+        termination_b_id = self.cleaned_data.get("termination_b_id")
+        if termination_b_id and "termination_b_id" in self.fields:
+            field = self.fields["termination_b_id"]
+            termination_b_obj = field.queryset.model.objects.get(pk=termination_b_id)
+            self.instance._initial_termination_b = termination_b_obj
+        return super().save(commit=commit)
 
 
 class ConnectCableToPowerFeedForm(ConnectCableExcludeIDMixin, NautobotModelForm):
@@ -4494,9 +4510,6 @@ class ConnectCableToPowerFeedForm(ConnectCableExcludeIDMixin, NautobotModelForm)
     class Meta:
         model = Cable
         fields = [
-            "termination_b_rackgroup",
-            "termination_b_powerpanel",
-            "termination_b_id",
             "type",
             "status",
             "label",
@@ -4510,11 +4523,132 @@ class ConnectCableToPowerFeedForm(ConnectCableExcludeIDMixin, NautobotModelForm)
         # Return the PK rather than the object
         return getattr(self.cleaned_data["termination_b_id"], "pk", None)
 
+    def save(self, commit=True):
+        termination_b_id = self.cleaned_data.get("termination_b_id")
+        if termination_b_id and "termination_b_id" in self.fields:
+            field = self.fields["termination_b_id"]
+            termination_b_obj = field.queryset.model.objects.get(pk=termination_b_id)
+            self.instance._initial_termination_b = termination_b_obj
+        return super().save(commit=commit)
+
+
+#
+# Breakout Templates
+#
+
+
+class BreakoutTemplateForm(NautobotModelForm):
+    mapping = forms.JSONField(
+        widget=forms.HiddenInput(),
+        required=False,
+        help_text="Lane mapping JSON. Auto-generated from connector/position counts, or edit via table/JSON editor.",
+    )
+
+    class Meta:
+        model = BreakoutTemplate
+        fields = [
+            "name",
+            "description",
+            "a_connectors",
+            "a_positions",
+            "b_connectors",
+            "b_positions",
+            "mapping",
+            "is_shuffle",
+            "strands_per_lane",
+            "polarity_method",
+            "tags",
+        ]
+        widgets = {
+            "polarity_method": StaticSelect2,
+        }
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if not cleaned_data:
+            return cleaned_data
+
+        mapping = cleaned_data.get("mapping")
+
+        # Try to read mapping from server-rendered table select fields (table mode).
+        # These are named mapping_0_a_connector, mapping_0_a_position, etc.
+        if not mapping:
+            lane_count = int(self.data.get("lane_count", 0) or 0)
+            if lane_count > 0:
+                mapping = []
+                for lane_index in range(lane_count):
+                    prefix = f"mapping_{lane_index}"
+                    try:
+                        mapping.append(
+                            {
+                                "a_connector": int(self.data.get(f"{prefix}_a_connector", 0)),
+                                "a_position": int(self.data.get(f"{prefix}_a_position", 0)),
+                                "b_connector": int(self.data.get(f"{prefix}_b_connector", 0)),
+                                "b_position": int(self.data.get(f"{prefix}_b_position", 0)),
+                            }
+                        )
+                    except (ValueError, TypeError):
+                        continue
+
+        # Fall back to auto-generate if still no mapping
+        if not mapping:
+            a_connector_count = cleaned_data.get("a_connectors") or 0
+            a_position_count = cleaned_data.get("a_positions") or 0
+            b_connector_count = cleaned_data.get("b_connectors") or 0
+            b_position_count = cleaned_data.get("b_positions") or 0
+            if a_connector_count and a_position_count and b_connector_count and b_position_count:
+                mapping = []
+                lane_index = 0
+                for a_connector in range(1, a_connector_count + 1):
+                    for a_position in range(1, a_position_count + 1):
+                        b_connector = lane_index // b_position_count + 1
+                        b_position = lane_index % b_position_count + 1
+                        mapping.append(
+                            {
+                                "a_connector": a_connector,
+                                "a_position": a_position,
+                                "b_connector": b_connector,
+                                "b_position": b_position,
+                            }
+                        )
+                        lane_index += 1
+
+        if mapping:
+            cleaned_data["mapping"] = mapping
+        return cleaned_data
+
+
+class BreakoutTemplateFilterForm(NautobotFilterForm):
+    model = BreakoutTemplate
+    q = forms.CharField(required=False, label="Search")
+    is_shuffle = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+    tags = TagFilterField(model)
+
+
+class BreakoutTemplateBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):
+    pk = forms.ModelMultipleChoiceField(queryset=BreakoutTemplate.objects.all(), widget=forms.MultipleHiddenInput())
+    description = forms.CharField(required=False)
+    is_shuffle = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+
+    class Meta:
+        nullable_fields = ["description"]
+
+
+#
+# Cables
+#
+
 
 class CableForm(NautobotModelForm):
+    breakout_template = DynamicModelChoiceField(
+        queryset=BreakoutTemplate.objects.all(),
+        required=False,
+    )
+
     class Meta:
         model = Cable
         fields = [
+            "breakout_template",
             "type",
             "status",
             "label",
@@ -4528,6 +4662,251 @@ class CableForm(NautobotModelForm):
             "length_unit": StaticSelect2,
         }
         error_messages = {"length": {"max_value": "Maximum length is 32767 (any unit)"}}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Disable breakout template field for cables with incompatible termination types
+        if self.instance and self.instance.pk and not self.instance.breakout_eligible:
+            self.fields["breakout_template"].disabled = True
+            self.fields["breakout_template"].help_text = (
+                "Breakout templates are not available for this cable. "
+                "Only cables with interface, front port, rear port, or circuit termination types support breakout."
+            )
+
+        self._init_lane_fields()
+
+    def _init_lane_fields(self):
+        """Add connection fields. One picker per connector per side."""
+        from nautobot.dcim.termination_field_set import CableTerminationFieldSet
+
+        template = None
+
+        # Determine the breakout template (saved, or being submitted)
+        if self.instance and self.instance.pk and self.instance.breakout_template_id:
+            template = self.instance.breakout_template
+        elif self.data and self.data.get("breakout_template"):
+            try:
+                template = BreakoutTemplate.objects.get(pk=self.data["breakout_template"])
+            except (BreakoutTemplate.DoesNotExist, ValueError):
+                pass
+
+        # Determine connector counts per side
+        if template:
+            a_connectors = template.a_connectors
+            b_connectors = template.b_connectors
+            a_positions = template.a_positions
+            b_positions = template.b_positions
+        else:
+            a_connectors = b_connectors = 1
+            a_positions = b_positions = 1
+
+        # Build existing termination lookup from get_connections()
+        existing_a = {}  # connector_num → termination object
+        existing_b = {}
+        if self.instance and self.instance.present_in_database:
+            conns = self.instance.get_connections()
+            for row in conns["rows"]:
+                a = row["a"]
+                b = row["b"]
+                if a["connector"] not in existing_a:
+                    existing_a[a["connector"]] = a["termination"]
+                if b["connector"] not in existing_b:
+                    existing_b[b["connector"]] = b["termination"]
+
+        # Pre-populate A-side from URL params (used by the connect flow)
+        initial_a_type = self.initial.get("termination_a_type")
+        initial_a_id = self.initial.get("termination_a_id")
+        if not existing_a and initial_a_type and initial_a_id:
+            from django.contrib.contenttypes.models import ContentType
+
+            app_label, model_name = str(initial_a_type).split(".")
+            content_type = ContentType.objects.get_by_natural_key(app_label, model_name)
+            termination_obj = content_type.model_class().objects.get(pk=initial_a_id)
+            existing_a[1] = termination_obj
+
+        # Create form fields using CableTerminationFieldSet
+        fieldset = CableTerminationFieldSet()
+        self.connection_info = {
+            "a_side": [],
+            "b_side": [],
+            "is_breakout": template is not None,
+            "a_positions": a_positions,
+            "b_positions": b_positions,
+        }
+
+        for c in range(1, a_connectors + 1):
+            term = existing_a.get(c)
+            submitted_type = self.data.get(f"a_conn_{c}_type") if self.data else None
+            result = fieldset.get_fields(f"a_conn_{c}", existing_term=term, term_type=submitted_type)
+            self.fields.update(result["fields"])
+            self.initial.update(result["initial"])
+            self.connection_info["a_side"].append(
+                {
+                    "connector": c,
+                    "lanes": a_positions,
+                    "meta": result["meta"],
+                }
+            )
+
+        for c in range(1, b_connectors + 1):
+            term = existing_b.get(c)
+            submitted_type = self.data.get(f"b_conn_{c}_type") if self.data else None
+            result = fieldset.get_fields(f"b_conn_{c}", existing_term=term, term_type=submitted_type)
+            self.fields.update(result["fields"])
+            self.initial.update(result["initial"])
+            self.connection_info["b_side"].append(
+                {
+                    "connector": c,
+                    "lanes": b_positions,
+                    "meta": result["meta"],
+                }
+            )
+
+    def get_connection_fields(self):
+        """Return connection_info with BoundField objects, A-left B-right with rowspan."""
+        info = getattr(self, "connection_info", None)
+        if not info:
+            return None
+
+        def _enrich(conn):
+            meta = conn["meta"]
+            return {
+                "connector": conn["connector"],
+                "lanes": conn["lanes"],
+                "type_field": self[meta["type_field"]],
+                "parent_field": self[meta["parent_field"]],
+                "term_field": self[meta["term_field"]],
+            }
+
+        a_enriched = {conn["connector"]: _enrich(conn) for conn in info["a_side"]}
+        b_enriched = {conn["connector"]: _enrich(conn) for conn in info["b_side"]}
+
+        if info["is_breakout"] and self.instance and self.instance.breakout_template_id:
+            template = self.instance.breakout_template
+            a_to_b = {}
+            b_to_a = {}
+            for entry in template.mapping:
+                a_to_b.setdefault(entry["a_connector"], set()).add(entry["b_connector"])
+                b_to_a.setdefault(entry["b_connector"], set()).add(entry["a_connector"])
+
+            # Build flat rows with rowspan hints (same logic as get_connections)
+            rows = []
+            a_seen = set()
+            b_seen = set()
+            for entry in template.mapping:
+                ac, bc = entry["a_connector"], entry["b_connector"]
+                if (ac, bc) in {(r["_ac"], r["_bc"]) for r in rows}:
+                    continue
+                a_rowspan = len(a_to_b.get(ac, [])) if ac not in a_seen else 0
+                b_rowspan = len(b_to_a.get(bc, [])) if bc not in b_seen else 0
+                a_seen.add(ac)
+                b_seen.add(bc)
+                rows.append(
+                    {
+                        "a": a_enriched.get(ac, {}),
+                        "b": b_enriched.get(bc, {}),
+                        "a_rowspan": a_rowspan,
+                        "b_rowspan": b_rowspan,
+                        "_ac": ac,
+                        "_bc": bc,
+                    }
+                )
+        else:
+            rows = [
+                {
+                    "a": a_enriched.get(1, {}),
+                    "b": b_enriched.get(1, {}),
+                    "a_rowspan": 1,
+                    "b_rowspan": 1,
+                    "_ac": 1,
+                    "_bc": 1,
+                }
+            ]
+
+        return {
+            "rows": rows,
+            "is_breakout": info["is_breakout"],
+        }
+
+    def save(self, commit=True):
+        cable = super().save(commit=commit)
+
+        if commit:
+            self._save_connection_terminations(cable)
+
+        return cable
+
+    def _save_connection_terminations(self, cable):
+        """Process connector-based form fields — create/update CableTermination rows."""
+        from django.contrib.contenttypes.models import ContentType
+
+        from nautobot.dcim.models import CablePath, CableTerminationEndpoint, PathEndpoint
+
+        info = getattr(self, "connection_info", None)
+        if not info:
+            return
+
+        # Collect all old endpoint rows for this cable so we can remove stale ones
+        old_endpoints = {endpoint.pk: endpoint for endpoint in CableTerminationEndpoint.objects.filter(cable=cable)}
+        new_endpoint_pks = set()
+        all_terminations = []
+        seen_termination_pks = set()
+
+        for side_key, side_label in [("a_side", "A"), ("b_side", "B")]:
+            for conn in info[side_key]:
+                connector_number = conn["connector"]
+                field_name = f"{side_label.lower()}_conn_{connector_number}_termination"
+                termination = self.cleaned_data.get(field_name)
+                if termination:
+                    if termination.pk in seen_termination_pks:
+                        continue
+                    seen_termination_pks.add(termination.pk)
+
+                    content_type = ContentType.objects.get_for_model(termination)
+                    endpoint, _ = CableTerminationEndpoint.objects.update_or_create(
+                        termination_type=content_type,
+                        termination_id=termination.pk,
+                        defaults={
+                            "cable": cable,
+                            "cable_end": side_label,
+                            "connector": connector_number if info["is_breakout"] else None,
+                            "position": 1 if info["is_breakout"] else None,
+                        },
+                    )
+                    new_endpoint_pks.add(endpoint.pk)
+                    termination.cable = cable
+                    termination.save()
+                    all_terminations.append(termination)
+
+        # Remove stale endpoint rows (old terminations that were replaced)
+        stale_pks = set(old_endpoints.keys()) - new_endpoint_pks
+        for stale_pk in stale_pks:
+            stale_endpoint = old_endpoints[stale_pk]
+            old_termination = stale_endpoint.termination
+            if old_termination:
+                old_termination.cable = None
+                old_termination._cable_peer = None
+                old_termination.save()
+            stale_endpoint.delete()
+
+        # Sync _cable_peer caches: for standard cables, A↔B peer each other
+        if not info["is_breakout"] and len(all_terminations) == 2:
+            all_terminations[0]._cable_peer = all_terminations[1]
+            all_terminations[0].save()
+            all_terminations[1]._cable_peer = all_terminations[0]
+            all_terminations[1].save()
+
+        # Rebuild CablePaths (uses create_cablepath which handles per-lane paths for breakout cables)
+        from nautobot.dcim.signals import create_cablepath
+
+        for termination in all_terminations:
+            if isinstance(termination, PathEndpoint):
+                CablePath.objects.filter(
+                    origin_type=ContentType.objects.get_for_model(termination),
+                    origin_id=termination.pk,
+                ).delete()
+                create_cablepath(termination, rebuild=False)
 
 
 class CableBulkEditForm(TagsBulkEditFormMixin, StatusModelBulkEditFormMixin, NautobotBulkEditForm):
@@ -4569,6 +4948,9 @@ class CableBulkEditForm(TagsBulkEditFormMixin, StatusModelBulkEditFormMixin, Nau
 class CableFilterForm(BootstrapMixin, StatusModelFilterFormMixin, forms.Form):
     model = Cable
     q = forms.CharField(required=False, label="Search")
+    breakout_template = DynamicModelMultipleChoiceField(
+        queryset=BreakoutTemplate.objects.all(), to_field_name="name", required=False
+    )
     location = DynamicModelMultipleChoiceField(queryset=Location.objects.all(), to_field_name="name", required=False)
     tenant = DynamicModelMultipleChoiceField(
         queryset=Tenant.objects.all(), to_field_name="name", required=False, null_option="None"
@@ -5925,104 +6307,3 @@ class VirtualDeviceContextFilterForm(
         widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES),
     )
     tags = TagFilterField(model)
-
-
-#
-# Breakout Templates
-#
-
-
-class BreakoutTemplateForm(NautobotModelForm):
-    mapping = forms.JSONField(
-        widget=forms.HiddenInput(),
-        required=False,
-        help_text="Lane mapping JSON. Auto-generated from connector/position counts, or edit via table/JSON editor.",
-    )
-
-    class Meta:
-        model = BreakoutTemplate
-        fields = [
-            "name",
-            "description",
-            "a_connectors",
-            "a_positions",
-            "b_connectors",
-            "b_positions",
-            "mapping",
-            "is_shuffle",
-            "strands_per_lane",
-            "polarity_method",
-            "tags",
-        ]
-        widgets = {
-            "polarity_method": StaticSelect2,
-        }
-
-    def clean(self):
-        cleaned_data = super().clean()
-        if not cleaned_data:
-            return cleaned_data
-
-        mapping = cleaned_data.get("mapping")
-
-        # Try to read mapping from server-rendered table select fields (table mode).
-        if not mapping:
-            lane_count = int(self.data.get("lane_count", 0) or 0)
-            if lane_count > 0:
-                mapping = []
-                for lane_index in range(lane_count):
-                    prefix = f"mapping_{lane_index}"
-                    try:
-                        mapping.append(
-                            {
-                                "a_connector": int(self.data.get(f"{prefix}_a_connector", 0)),
-                                "a_position": int(self.data.get(f"{prefix}_a_position", 0)),
-                                "b_connector": int(self.data.get(f"{prefix}_b_connector", 0)),
-                                "b_position": int(self.data.get(f"{prefix}_b_position", 0)),
-                            }
-                        )
-                    except (ValueError, TypeError):
-                        continue
-
-        # Fall back to auto-generate if still no mapping
-        if not mapping:
-            a_connector_count = cleaned_data.get("a_connectors") or 0
-            a_position_count = cleaned_data.get("a_positions") or 0
-            b_connector_count = cleaned_data.get("b_connectors") or 0
-            b_position_count = cleaned_data.get("b_positions") or 0
-            if a_connector_count and a_position_count and b_connector_count and b_position_count:
-                mapping = []
-                lane_index = 0
-                for a_connector in range(1, a_connector_count + 1):
-                    for a_position in range(1, a_position_count + 1):
-                        b_connector = lane_index // b_position_count + 1
-                        b_position = lane_index % b_position_count + 1
-                        mapping.append(
-                            {
-                                "a_connector": a_connector,
-                                "a_position": a_position,
-                                "b_connector": b_connector,
-                                "b_position": b_position,
-                            }
-                        )
-                        lane_index += 1
-
-        if mapping:
-            cleaned_data["mapping"] = mapping
-        return cleaned_data
-
-
-class BreakoutTemplateFilterForm(NautobotFilterForm):
-    model = BreakoutTemplate
-    q = forms.CharField(required=False, label="Search")
-    is_shuffle = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
-    tags = TagFilterField(model)
-
-
-class BreakoutTemplateBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):
-    pk = forms.ModelMultipleChoiceField(queryset=BreakoutTemplate.objects.all(), widget=forms.MultipleHiddenInput())
-    description = forms.CharField(required=False)
-    is_shuffle = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
-
-    class Meta:
-        nullable_fields = ["description"]

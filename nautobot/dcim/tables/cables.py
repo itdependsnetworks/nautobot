@@ -3,16 +3,64 @@ from django_tables2.utils import Accessor
 
 from nautobot.core.tables import (
     BaseTable,
+    BooleanColumn,
     ColorColumn,
     TagColumn,
     ToggleColumn,
 )
-from nautobot.dcim.models import Cable
+from nautobot.dcim.models import BreakoutTemplate, Cable
 from nautobot.extras.tables import StatusTableMixin
 
-from .template_code import CABLE_LENGTH, CABLE_TERMINATION_PARENT
+from .template_code import CABLE_LENGTH, CABLE_TERMINATION_PARENT, CABLE_TERMINATIONS_MULTI
 
-__all__ = ("CableTable",)
+__all__ = (
+    "BreakoutTemplateTable",
+    "CableTable",
+)
+
+
+#
+# Breakout Templates
+#
+
+
+class BreakoutTemplateTable(BaseTable):
+    pk = ToggleColumn()
+    name = tables.Column(linkify=True)
+    is_shuffle = BooleanColumn()
+    total_lanes = tables.Column(accessor="total_lanes", verbose_name="Total Lanes", orderable=False)
+    total_strands = tables.Column(accessor="total_strands", verbose_name="Total Strands", orderable=False)
+    is_breakout = BooleanColumn(accessor="is_breakout", verbose_name="Is Breakout", orderable=False)
+    tags = TagColumn(url_name="dcim:breakouttemplate_list")
+
+    class Meta(BaseTable.Meta):
+        model = BreakoutTemplate
+        fields = (
+            "pk",
+            "name",
+            "description",
+            "a_connectors",
+            "a_positions",
+            "b_connectors",
+            "b_positions",
+            "is_shuffle",
+            "strands_per_lane",
+            "polarity_method",
+            "total_lanes",
+            "total_strands",
+            "is_breakout",
+            "tags",
+        )
+        default_columns = (
+            "pk",
+            "name",
+            "a_connectors",
+            "a_positions",
+            "b_connectors",
+            "b_positions",
+            "total_lanes",
+            "is_shuffle",
+        )
 
 
 #
@@ -23,6 +71,7 @@ __all__ = ("CableTable",)
 class CableTable(StatusTableMixin, BaseTable):
     pk = ToggleColumn()
     id = tables.Column(linkify=True, verbose_name="ID")
+    breakout_template = tables.Column(linkify=True, verbose_name="Breakout Template")
     termination_a_parent = tables.TemplateColumn(
         template_code=CABLE_TERMINATION_PARENT,
         accessor=Accessor("termination_a"),
@@ -33,6 +82,12 @@ class CableTable(StatusTableMixin, BaseTable):
         accessor=Accessor("termination_a"),
         orderable=False,
         verbose_name="Termination A",
+    )
+    terminations_a = tables.TemplateColumn(
+        template_code=CABLE_TERMINATIONS_MULTI,
+        accessor=Accessor("terminations_a"),
+        orderable=False,
+        verbose_name="A-Side Terminations",
     )
     termination_b_parent = tables.TemplateColumn(
         template_code=CABLE_TERMINATION_PARENT,
@@ -45,6 +100,12 @@ class CableTable(StatusTableMixin, BaseTable):
         orderable=False,
         verbose_name="Termination B",
     )
+    terminations_b = tables.TemplateColumn(
+        template_code=CABLE_TERMINATIONS_MULTI,
+        accessor=Accessor("terminations_b"),
+        orderable=False,
+        verbose_name="B-Side Terminations",
+    )
     length = tables.TemplateColumn(template_code=CABLE_LENGTH, order_by="_abs_length")
     color = ColorColumn()
     tags = TagColumn(url_name="dcim:cable_list")
@@ -55,10 +116,13 @@ class CableTable(StatusTableMixin, BaseTable):
             "pk",
             "id",
             "label",
+            "breakout_template",
             "termination_a_parent",
             "termination_a",
+            "terminations_a",
             "termination_b_parent",
             "termination_b",
+            "terminations_b",
             "status",
             "type",
             "color",
@@ -69,24 +133,8 @@ class CableTable(StatusTableMixin, BaseTable):
             "pk",
             "id",
             "label",
-            "termination_a_parent",
-            "termination_a",
-            "termination_b_parent",
-            "termination_b",
+            "terminations_a",
+            "terminations_b",
             "status",
             "type",
         )
-
-
-# PLACEHOLDER: BreakoutTemplateTable — full implementation in commit 5
-from nautobot.dcim.models import BreakoutTemplate
-
-
-class BreakoutTemplateTable(BaseTable):
-    pk = ToggleColumn()
-    name = tables.Column(linkify=True)
-
-    class Meta(BaseTable.Meta):
-        model = BreakoutTemplate
-        fields = ("pk", "name", "a_connectors", "a_positions", "b_connectors", "b_positions", "is_shuffle")
-        default_columns = ("pk", "name", "a_connectors", "a_positions", "b_connectors", "b_positions")

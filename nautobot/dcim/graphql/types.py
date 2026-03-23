@@ -4,6 +4,7 @@ from nautobot.circuits.graphql.types import CircuitTerminationType
 from nautobot.core.graphql.types import OptimizedNautobotObjectType
 from nautobot.core.graphql.utils import construct_resolver
 from nautobot.dcim.filters import (
+    BreakoutTemplateFilterSet,
     CableFilterSet,
     ConsolePortFilterSet,
     ConsoleServerPortFilterSet,
@@ -22,6 +23,7 @@ from nautobot.dcim.filters import (
 )
 from nautobot.dcim.graphql.mixins import CableTerminationMixin, PathEndpointMixin
 from nautobot.dcim.models import (
+    BreakoutTemplate,
     Cable,
     CablePath,
     ConsolePort,
@@ -116,26 +118,35 @@ class RackType(OptimizedNautobotObjectType):
         return DynamicGroup.objects.get_for_object(self)
 
 
+class BreakoutTemplateType(OptimizedNautobotObjectType):
+    """GraphQL Type Object for BreakoutTemplate model."""
+
+    class Meta:
+        model = BreakoutTemplate
+        filterset_class = BreakoutTemplateFilterSet
+
+
 class CableType(OptimizedNautobotObjectType):
     """Graphql Type Object for Cable model."""
 
     class Meta:
         model = Cable
         filterset_class = CableFilterSet
-        exclude = ["_termination_a_device", "_termination_b_device"]
 
     termination_a_type = graphene.String()
     termination_b_type = graphene.String()
 
     def resolve_termination_a_type(self, args):
-        if self.termination_a_type:
-            model = self.termination_a_type.model_class()  # pylint: disable=no-member
+        ct = self.termination_a_type
+        if ct:
+            model = ct.model_class()
             return f"{model._meta.app_label}.{model._meta.model_name}"
         return None
 
     def resolve_termination_b_type(self, args):
-        if self.termination_b_type:
-            model = self.termination_b_type.model_class()  # pylint: disable=no-member
+        ct = self.termination_b_type
+        if ct:
+            model = ct.model_class()
             return f"{model._meta.app_label}.{model._meta.model_name}"
         return None
 

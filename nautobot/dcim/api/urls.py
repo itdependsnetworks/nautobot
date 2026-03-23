@@ -57,6 +57,9 @@ router.register(
     basename="interfaceconnections",
 )
 
+# Breakout Templates
+router.register("breakout-templates", views.BreakoutTemplateViewSet)
+
 # Cables
 router.register("cables", views.CableViewSet)
 

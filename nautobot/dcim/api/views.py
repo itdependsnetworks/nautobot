@@ -28,6 +28,7 @@ from nautobot.core.models.querysets import count_related
 from nautobot.core.templatetags.helpers import bettertitle, validated_api_viewname, validated_viewname
 from nautobot.dcim import filters
 from nautobot.dcim.models import (
+    BreakoutTemplate,
     Cable,
     CablePath,
     ConsolePort,
@@ -683,8 +684,14 @@ class InterfaceConnectionViewSet(ListModelMixin, GenericViewSet):
 #
 
 
+class BreakoutTemplateViewSet(NautobotModelViewSet):
+    queryset = BreakoutTemplate.objects.all()
+    serializer_class = serializers.BreakoutTemplateSerializer
+    filterset_class = filters.BreakoutTemplateFilterSet
+
+
 class CableViewSet(NautobotModelViewSet):
-    queryset = Cable.objects.prefetch_related("termination_a", "termination_b")
+    queryset = Cable.objects.prefetch_related("terminations")
     serializer_class = serializers.CableSerializer
     filterset_class = filters.CableFilterSet
 
