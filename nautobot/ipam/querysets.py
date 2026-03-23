@@ -327,6 +327,11 @@ class PrefixQuerySet(LocationToLocationsQuerySetMixin, BaseNetworkQuerySet):
                     protected_objects=err.protected_objects,
                 ) from err
 
+            # IPRange objects with no grandparent cannot be reparented; delete them.
+            if protected_model._meta.model_name == "iprange" and new_parent is None:
+                protected_objects.delete()
+                return super().delete(*args, **kwargs)
+
             # Update protected objects to use grand-parent of the parent Prefix and delete the old
             # parent. This should be equivalent at the row level of saying `parent=self.parent`.
             protected_objects.update(parent=new_parent)

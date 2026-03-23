@@ -2291,6 +2291,8 @@ class TestIPRange(IPRangeTestDataMixin, ModelTestCases.BaseModelTestCase):
     def setUpTestData(cls):
         super().setUpTestData()
 
+        # Dedicated namespace/prefix for validation tests to avoid
+        # interference with the shared test data ranges.
         cls.namespace = Namespace.objects.create(name="iprange_model_test")
         cls.pfx_status = Status.objects.get_for_model(Prefix).first()
         cls.prefix = Prefix.objects.create(
@@ -2326,8 +2328,189 @@ class TestIPRange(IPRangeTestDataMixin, ModelTestCases.BaseModelTestCase):
         self.assertEqual(ip_range.description, "Full-field test range")
         self.assertTrue(ip_range.count_as_utilized)
         self.assertEqual(ip_range.tenant, self.tenant1)
+        self.assertEqual(ip_range.size, 11)
+
+    def test_end_must_be_gte_start(self):
+        ip_range = IPRange(
+            start_address="10.99.0.50",
+            end_address="10.99.0.10",
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        with self.assertRaises(ValidationError) as cm:
+            ip_range.full_clean()
+        self.assertIn("end_address", cm.exception.message_dict)
+
+    def test_start_end_must_be_same_version(self):
+        ip_range = IPRange(
+            start_address="10.99.0.1",
+            end_address="::1",
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        with self.assertRaises(ValidationError) as cm:
+            ip_range.full_clean()
+        self.assertIn("end_address", cm.exception.message_dict)
+
+    def test_overlap_with_existing_range_is_blocked(self):
+        IPRange.objects.create(
+            start_address="10.99.0.10",
+            end_address="10.99.0.20",
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        overlapping = IPRange(
+            start_address="10.99.0.15",
+            end_address="10.99.0.25",
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        with self.assertRaises(ValidationError):
+            overlapping.full_clean()
+
+    def test_exclusive_range_blocks_existing_ip(self):
+        IPAddress.objects.create(
+            address="10.99.0.30/24",
+            parent=self.prefix,
+            status=Status.objects.get_for_model(IPAddress).first(),
+        )
+        exclusive_range = IPRange(
+            start_address="10.99.0.28",
+            end_address="10.99.0.35",
+            parent=self.prefix,
+            status=self.ip_status,
+            is_exclusive=True,
+        )
+        with self.assertRaises(ValidationError) as cm:
+            exclusive_range.full_clean()
+        self.assertIn("is_exclusive", cm.exception.message_dict)
+
+    def test_ip_address_blocked_by_exclusive_range(self):
+        IPRange.objects.create(
+            start_address="10.99.0.40",
+            end_address="10.99.0.50",
+            parent=self.prefix,
+            status=self.ip_status,
+            is_exclusive=True,
+        )
+        blocked_ip = IPAddress(
+            address="10.99.0.45/24",
+            parent=self.prefix,
+            status=Status.objects.get_for_model(IPAddress).first(),
+        )
+        with self.assertRaises(ValidationError):
+            blocked_ip.full_clean()
+
+    def test_size_property(self):
+        ip_range = IPRange(start_address="10.99.0.1", end_address="10.99.0.10")
+        self.assertEqual(ip_range.size, 10)
+
+    def test_size_single_address(self):
+        ip_range = IPRange(start_address="10.99.0.5", end_address="10.99.0.5")
+        self.assertEqual(ip_range.size, 1)
+
+    def test_size_missing_addresses_returns_zero(self):
+        ip_range = IPRange()
+        self.assertEqual(ip_range.size, 0)
 
     def test_str(self):
         ip_range = IPRange(start_address="10.99.0.1", end_address="10.99.0.10")
         self.assertIn("10.99.0.1", str(ip_range))
         self.assertIn("10.99.0.10", str(ip_range))
+
+    def test_percent_utilized_no_ips(self):
+        """Range with no IP addresses has 0% utilization."""
+        ip_range = IPRange.objects.create(
+            start_address="10.99.0.200",
+            end_address="10.99.0.209",
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        self.assertEqual(ip_range.percent_utilized, 0.0)
+
+    def test_percent_utilized_partial(self):
+        """Range with some IP addresses shows correct utilization."""
+        ip_range = IPRange.objects.create(
+            start_address="10.99.0.100",
+            end_address="10.99.0.109",  # 10 addresses
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        IPAddress.objects.create(
+            address="10.99.0.100/24",
+            parent=self.prefix,
+            status=Status.objects.get_for_model(IPAddress).first(),
+        )
+        self.assertAlmostEqual(ip_range.percent_utilized, 10.0)
+
+    def test_percent_utilized_full(self):
+        """Range where every address has an IP object shows 100%."""
+        ip_range = IPRange.objects.create(
+            start_address="10.99.0.110",
+            end_address="10.99.0.112",  # 3 addresses
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        ip_status = Status.objects.get_for_model(IPAddress).first()
+        for i in range(110, 113):
+            IPAddress.objects.create(
+                address=f"10.99.0.{i}/24",
+                parent=self.prefix,
+                status=ip_status,
+            )
+        self.assertAlmostEqual(ip_range.percent_utilized, 100.0)
+
+    def test_addresses_outside_parent_prefix_rejected(self):
+        """Range addresses that fall outside the parent prefix raise a ValidationError."""
+        ip_range = IPRange(
+            start_address="192.168.1.1",
+            end_address="192.168.1.10",
+            parent=self.prefix,  # parent is 10.99.0.0/24
+            status=self.ip_status,
+        )
+        with self.assertRaises(ValidationError):
+            ip_range.full_clean()
+
+
+class TestPrefixGetUtilization(TestCase):
+    """Tests for Prefix.get_utilization(), specifically the IP Range count_as_utilized behaviour."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.namespace = Namespace.objects.create(name="get_utilization_test")
+        cls.pfx_status = Status.objects.get_for_model(Prefix).first()
+        cls.ip_status = Status.objects.get_for_model(IPRange).first()
+        # /28 → 14 host addresses (network + broadcast excluded)
+        cls.prefix = Prefix.objects.create(
+            prefix="10.88.0.0/28",
+            status=cls.pfx_status,
+            namespace=cls.namespace,
+        )
+
+    def test_get_utilization_count_as_utilized_range_counts_as_full(self):
+        """A range with count_as_utilized=True adds its entire span to the numerator."""
+        ip_range = IPRange.objects.create(
+            start_address="10.88.0.1",
+            end_address="10.88.0.5",  # 5 addresses
+            parent=self.prefix,
+            status=self.ip_status,
+            count_as_utilized=True,
+        )
+        util = self.prefix.get_utilization()
+        # 5 addresses from the count_as_utilized range out of 14 usable host addresses
+        self.assertEqual(util.numerator, 5)
+        self.assertEqual(util.denominator, 14)
+        ip_range.delete()
+
+    def test_get_utilization_non_count_as_utilized_range_not_counted(self):
+        """A range without count_as_utilized does not inflate the numerator."""
+        ip_range = IPRange.objects.create(
+            start_address="10.88.0.1",
+            end_address="10.88.0.5",
+            parent=self.prefix,
+            status=self.ip_status,
+            count_as_utilized=False,
+        )
+        util = self.prefix.get_utilization()
+        self.assertEqual(util.numerator, 0)
+        ip_range.delete()

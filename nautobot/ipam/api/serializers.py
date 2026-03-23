@@ -451,7 +451,7 @@ class IPAddressToInterfaceSerializer(ValidatedModelSerializer):
 class IPRangeSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
     start_address = serializers.CharField()
     end_address = serializers.CharField()
-    # PLACEHOLDER: size field added in [validation-and-utilization]
+    size = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = IPRange

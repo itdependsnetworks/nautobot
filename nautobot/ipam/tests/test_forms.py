@@ -220,4 +220,14 @@ class IPRangeFormTest(IPRangeTestDataMixin, FormTestCases.BaseFormTestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("status", form.errors)
 
-    # PLACEHOLDER: test_end_address_less_than_start_address_is_invalid added in [validation-and-utilization]
+    def test_end_address_less_than_start_address_is_invalid(self):
+        """Test that end_address < start_address produces a validation error."""
+        form = forms.IPRangeForm(
+            data={
+                "start_address": "10.100.1.50",
+                "end_address": "10.100.1.1",
+                "parent": self.parent.pk,
+                "status": self.ip_status.pk,
+            }
+        )
+        self.assertFalse(form.is_valid())

@@ -1184,6 +1184,12 @@ class Prefix(PrimaryModel):
         child_ips = netaddr.IPSet([ip.address.ip for ip in self.get_all_ips()])
         available_ips = prefix - child_ips
 
+        # Subtract addresses covered by exclusive IP Ranges
+        for ip_range in self.ip_ranges.filter(is_exclusive=True):
+            start = netaddr.IPAddress(ip_range.start_address)
+            end = netaddr.IPAddress(ip_range.end_address)
+            available_ips -= netaddr.IPSet(netaddr.IPRange(start, end))
+
         # IPv6, pool, or IPv4 /31-32 sets are fully usable
         if any(
             [
@@ -1307,6 +1313,12 @@ class Prefix(PrimaryModel):
             child_prefixes = netaddr.IPSet(p.prefix for p in self.children.all())
 
         numerator_set = child_ips | child_prefixes
+
+        # Add count_as_utilized IP Ranges to the numerator (each range counts as fully utilized)
+        for ip_range in self.ip_ranges.filter(count_as_utilized=True):
+            start = netaddr.IPAddress(ip_range.start_address)
+            end = netaddr.IPAddress(ip_range.end_address)
+            numerator_set |= netaddr.IPSet(netaddr.IPRange(start, end))
 
         # Exclude network and broadcast IPs from the denominator unless they're assigned to an IPAddress or child pool.
         # Only applies to IPv4 network prefixes with a prefix length of /30 or shorter
@@ -1499,6 +1511,25 @@ class IPAddress(PrimaryModel):
             and self.ip_version != choices.IPAddressVersionChoices.VERSION_6
         ):
             raise ValidationError({"type": "Only IPv6 addresses can be assigned SLAAC type"})
+
+        # Check if this IP falls within an exclusive IPRange
+        if self.host and self.ip_version:
+            exclusive_range = IPRange.objects.filter(
+                parent__namespace=self._namespace,
+                ip_version=self.ip_version,
+                is_exclusive=True,
+                start_address__lte=self.host,
+                end_address__gte=self.host,
+            ).first()
+            if exclusive_range:
+                raise ValidationError(
+                    {
+                        "__all__": (
+                            f"IP address {self.host} falls within exclusive IP Range {exclusive_range}. "
+                            "Creating an IP Address within an exclusive range is not permitted."
+                        )
+                    }
+                )
 
         closest_parent = self._get_closest_parent()
         if closest_parent is not None:
@@ -1693,13 +1724,100 @@ class IPRange(PrimaryModel):
 
     natural_key_field_names = ["parent__namespace", "start_address", "end_address"]
 
-    # PLACEHOLDER: size, percent_utilized properties added in [validation-and-utilization]
+    @property
+    def size(self) -> int:
+        """Total number of addresses in this range."""
+        if self.start_address and self.end_address:
+            start = int(netaddr.IPAddress(self.start_address))
+            end = int(netaddr.IPAddress(self.end_address))
+            return end - start + 1
+        return 0
+
+    @property
+    def percent_utilized(self) -> float:
+        """
+        Percentage of addresses in the range that have an IPAddress object.
+        Returns a float from 0.0 to 100.0. Returns 0.0 for unsaved instances
+        that have no start_address/end_address yet.
+        """
+        if not self.size:
+            return 0.0
+        count = IPAddress.objects.filter(
+            parent__namespace=self.parent.namespace,
+            ip_version=self.ip_version,
+            host__gte=self.start_address,
+            host__lte=self.end_address,
+        ).count()
+        return (count / self.size) * 100
+
+    def clean(self):
+        super().clean()
+
+        if self.start_address:
+            try:
+                start = netaddr.IPAddress(self.start_address)
+                self.ip_version = start.version
+            except (netaddr.AddrFormatError, TypeError, ValueError) as e:
+                raise ValidationError({"start_address": f"Invalid IP address: {e}"})
+
+        if self.start_address and self.end_address:
+            try:
+                start = netaddr.IPAddress(self.start_address)
+                end = netaddr.IPAddress(self.end_address)
+            except (netaddr.AddrFormatError, TypeError, ValueError) as e:
+                raise ValidationError(f"Invalid IP address: {e}")
+
+            if start.version != end.version:
+                raise ValidationError({"end_address": "Start and end addresses must be the same IP version."})
+
+            if start > end:
+                raise ValidationError({"end_address": "End address must be greater than or equal to start address."})
+
+            if self.parent_id:
+                parent_start = netaddr.IPAddress(self.parent.network)
+                parent_end = netaddr.IPAddress(self.parent.broadcast)
+                if start < parent_start or end > parent_end:
+                    raise ValidationError(
+                        {"__all__": (f"IP Range {self} is not contained within parent prefix {self.parent}.")}
+                    )
+
+                # Check for overlap with other IPRange objects in the same namespace
+                overlapping = IPRange.objects.filter(
+                    parent__namespace=self.parent.namespace,
+                    ip_version=start.version,
+                    start_address__lte=self.end_address,
+                    end_address__gte=self.start_address,
+                ).exclude(pk=self.pk)
+                if overlapping.exists():
+                    other = overlapping.first()
+                    raise ValidationError({"__all__": f"IP Range {self} overlaps with existing range {other}."})
+
+                # If exclusive, block creation if any IPAddress objects already exist within the range
+                if self.is_exclusive:
+                    conflicting_ips = IPAddress.objects.filter(
+                        parent__namespace=self.parent.namespace,
+                        ip_version=start.version,
+                        host__gte=self.start_address,
+                        host__lte=self.end_address,
+                    )
+                    if conflicting_ips.exists():
+                        count = conflicting_ips.count()
+                        first = conflicting_ips.first()
+                        raise ValidationError(
+                            {
+                                "is_exclusive": (
+                                    f"Cannot mark this range as exclusive: {count} IP address"
+                                    f"{'es' if count != 1 else ''} already exist within "
+                                    f"{self.start_address}-{self.end_address} "
+                                    f"(e.g. {first.address})."
+                                )
+                            }
+                        )
+
+    clean.alters_data = True
 
     def save(self, *args, **kwargs):
-        # Auto-populate ip_version from start_address so the field is never empty.
-        # PLACEHOLDER: full clean() validation added in [validation-and-utilization]
-        if self.start_address:
-            self.ip_version = netaddr.IPAddress(self.start_address).version
+        self.clean()
         super().save(*args, **kwargs)
 
 
