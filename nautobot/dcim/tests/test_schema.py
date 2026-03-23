@@ -34,11 +34,13 @@ class DCIMOpenAPISchemaTestCase(OpenAPISchemaTestCases.BaseSchemaTestCase):
             "Cable",
             "termination_a",
             models=get_all_concrete_models(CableTermination),
+            nullable=True,
         )
         termination_b_ref_name, _ = self.validate_polymorphic_property(
             "Cable",
             "termination_b",
             models=get_all_concrete_models(CableTermination),
+            nullable=True,
         )
         # both terminations should reference the same schema component since they're interchangeable.
         self.assertEqual(termination_a_ref_name, termination_b_ref_name)

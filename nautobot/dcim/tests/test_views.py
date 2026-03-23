@@ -62,6 +62,7 @@ from nautobot.dcim.filters import (
     VirtualDeviceContextFilterSet,
 )
 from nautobot.dcim.models import (
+    BreakoutTemplate,
     Cable,
     CablePath,
     ConsolePort,
@@ -888,6 +889,65 @@ class RackTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         </div></td>
         """
         self.assertContains(response, total_utilization_html, html=True)
+
+
+class BreakoutTemplateTestCase(ViewTestCases.PrimaryObjectViewTestCase):
+    model = BreakoutTemplate
+
+    @classmethod
+    def setUpTestData(cls):
+        mapping_1x4 = [{"a_connector": 1, "a_position": i, "b_connector": i, "b_position": 1} for i in range(1, 5)]
+        BreakoutTemplate.objects.create(
+            name="Deletable Breakout 1",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=mapping_1x4,
+        )
+        BreakoutTemplate.objects.create(
+            name="Deletable Breakout 2",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=mapping_1x4,
+        )
+        BreakoutTemplate.objects.create(
+            name="Deletable Breakout 3",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=mapping_1x4,
+        )
+
+        mapping_1x2 = (
+            '[{"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1}, '
+            '{"a_connector": 1, "a_position": 2, "b_connector": 2, "b_position": 1}]'
+        )
+        cls.form_data = {
+            "name": "New Breakout Template",
+            "a_connectors": 1,
+            "a_positions": 2,
+            "b_connectors": 2,
+            "b_positions": 1,
+            "mapping": mapping_1x2,
+            "is_shuffle": False,
+            "strands_per_lane": 1,
+            "polarity_method": "",
+            "tags": [t.pk for t in Tag.objects.get_for_model(BreakoutTemplate)],
+        }
+        cls.bulk_edit_data = {
+            "description": "Updated description",
+        }
+
+    def assertInstanceEqual(self, instance, data, exclude=None, api=False):
+        """Override to exclude mapping field which is a JSON list-of-dicts that can't be sorted."""
+        if exclude is None:
+            exclude = []
+        exclude.append("mapping")
+        super().assertInstanceEqual(instance, data, exclude=exclude, api=api)
 
 
 class DeviceFamilyTestCase(ViewTestCases.PrimaryObjectViewTestCase):

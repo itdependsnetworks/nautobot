@@ -29,6 +29,7 @@ from nautobot.dcim.choices import (
 )
 from nautobot.dcim.constants import NONCONNECTABLE_IFACE_TYPES, VIRTUAL_IFACE_TYPES
 from nautobot.dcim.filters import (
+    BreakoutTemplateFilterSet,
     CableFilterSet,
     ConsolePortFilterSet,
     ConsolePortTemplateFilterSet,
@@ -78,6 +79,7 @@ from nautobot.dcim.filters import (
     VirtualDeviceContextFilterSet,
 )
 from nautobot.dcim.models import (
+    BreakoutTemplate,
     Cable,
     ConsolePort,
     ConsolePortTemplate,
@@ -1406,6 +1408,74 @@ class ManufacturerTestCase(FilterTestCases.FilterTestCase, CustomFieldsFilters.C
         InventoryItem.objects.create(device=devices[0], name="Inventory Item 1", manufacturer=cls.manufacturers[0])
         InventoryItem.objects.create(device=devices[1], name="Inventory Item 2", manufacturer=cls.manufacturers[1])
         InventoryItem.objects.create(device=devices[2], name="Inventory Item 3", manufacturer=cls.manufacturers[2])
+
+
+class BreakoutTemplateTestCase(FilterTestCases.FilterTestCase):
+    queryset = BreakoutTemplate.objects.all()
+    filterset = BreakoutTemplateFilterSet
+    generic_filter_tests = [
+        ("name",),
+    ]
+
+    @classmethod
+    def setUpTestData(cls):
+        mapping_1x4 = [{"a_connector": 1, "a_position": i, "b_connector": i, "b_position": 1} for i in range(1, 5)]
+        mapping_2x2 = [
+            {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+            {"a_connector": 1, "a_position": 2, "b_connector": 1, "b_position": 2},
+            {"a_connector": 2, "a_position": 1, "b_connector": 2, "b_position": 1},
+            {"a_connector": 2, "a_position": 2, "b_connector": 2, "b_position": 2},
+        ]
+        BreakoutTemplate.objects.create(
+            name="1x4 Breakout",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=mapping_1x4,
+            is_shuffle=False,
+            strands_per_lane=1,
+        )
+        BreakoutTemplate.objects.create(
+            name="2x2 Shuffle",
+            a_connectors=2,
+            a_positions=2,
+            b_connectors=2,
+            b_positions=2,
+            mapping=mapping_2x2,
+            is_shuffle=True,
+            strands_per_lane=2,
+            polarity_method="reversed",
+        )
+        BreakoutTemplate.objects.create(
+            name="Another 1x4",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=mapping_1x4,
+            is_shuffle=False,
+            strands_per_lane=1,
+        )
+
+    def test_is_shuffle(self):
+        params = {"is_shuffle": True}
+        qs = self.filterset(params, self.queryset).qs
+        self.assertEqual(qs.count(), 1)
+
+        params = {"is_shuffle": False}
+        qs = self.filterset(params, self.queryset).qs
+        self.assertEqual(qs.count(), 2)
+
+    def test_is_breakout(self):
+        params = {"is_breakout": True}
+        qs = self.filterset(params, self.queryset).qs
+        # 1x4 templates are breakout (a_connectors!=b_connectors), 2x2 is not
+        self.assertEqual(qs.count(), 2)
+
+        params = {"is_breakout": False}
+        qs = self.filterset(params, self.queryset).qs
+        self.assertEqual(qs.count(), 1)
 
 
 class DeviceFamilyTestCase(FilterTestCases.FilterTestCase):

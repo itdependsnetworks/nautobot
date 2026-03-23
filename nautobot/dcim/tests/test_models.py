@@ -33,6 +33,7 @@ from nautobot.dcim.choices import (
     SubdeviceRoleChoices,
 )
 from nautobot.dcim.models import (
+    BreakoutTemplate,
     Cable,
     ConsolePort,
     ConsolePortTemplate,
@@ -5067,3 +5068,170 @@ class DeviceClusterAssignmentTestCase(ModelTestCases.BaseModelTestCase):
         self.assertEqual(device.clusters.first(), self.clusters[1])
         device.cluster = None
         self.assertEqual(device.clusters.count(), 0)
+
+
+class BreakoutTemplateModelTest(TestCase):
+    """Tests for BreakoutTemplate model validation."""
+
+    def _make_mapping_1x4(self):
+        return [{"a_connector": 1, "a_position": i, "b_connector": i, "b_position": 1} for i in range(1, 5)]
+
+    def test_valid_breakout_template(self):
+        bt = BreakoutTemplate(
+            name="1x4 Breakout",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=self._make_mapping_1x4(),
+        )
+        bt.full_clean()
+        bt.save()
+        self.assertEqual(bt.total_lanes, 4)
+        self.assertEqual(bt.total_strands, 4)
+        self.assertTrue(bt.is_breakout)
+
+    def test_total_strands_with_duplex(self):
+        bt = BreakoutTemplate(
+            name="1x4 Duplex Breakout",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=self._make_mapping_1x4(),
+            strands_per_lane=2,
+        )
+        bt.full_clean()
+        self.assertEqual(bt.total_strands, 8)
+
+    def test_is_breakout_false_for_equal_sides(self):
+        bt = BreakoutTemplate(
+            name="1:1 Trunk",
+            a_connectors=2,
+            a_positions=2,
+            b_connectors=2,
+            b_positions=2,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+                {"a_connector": 1, "a_position": 2, "b_connector": 1, "b_position": 2},
+                {"a_connector": 2, "a_position": 1, "b_connector": 2, "b_position": 1},
+                {"a_connector": 2, "a_position": 2, "b_connector": 2, "b_position": 2},
+            ],
+        )
+        bt.full_clean()
+        self.assertFalse(bt.is_breakout)
+
+    def test_invalid_mapping_not_list(self):
+        bt = BreakoutTemplate(
+            name="Bad",
+            a_connectors=1,
+            a_positions=1,
+            b_connectors=1,
+            b_positions=1,
+            mapping={"a_connector": 1},
+        )
+        with self.assertRaises(ValidationError) as cm:
+            bt.full_clean()
+        self.assertIn("mapping", cm.exception.message_dict)
+
+    def test_invalid_mapping_wrong_lane_count(self):
+        bt = BreakoutTemplate(
+            name="Bad Count",
+            a_connectors=1,
+            a_positions=4,
+            b_connectors=4,
+            b_positions=1,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+            ],
+        )
+        with self.assertRaises(ValidationError) as cm:
+            bt.full_clean()
+        self.assertIn("mapping", cm.exception.message_dict)
+
+    def test_invalid_mapping_duplicate_a_pair(self):
+        bt = BreakoutTemplate(
+            name="Dup A",
+            a_connectors=1,
+            a_positions=2,
+            b_connectors=2,
+            b_positions=1,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+                {"a_connector": 1, "a_position": 1, "b_connector": 2, "b_position": 1},
+            ],
+        )
+        with self.assertRaises(ValidationError) as cm:
+            bt.full_clean()
+        self.assertIn("mapping", cm.exception.message_dict)
+        self.assertIn("Duplicate A-side", str(cm.exception))
+
+    def test_invalid_mapping_duplicate_b_pair(self):
+        bt = BreakoutTemplate(
+            name="Dup B",
+            a_connectors=1,
+            a_positions=2,
+            b_connectors=2,
+            b_positions=1,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+                {"a_connector": 1, "a_position": 2, "b_connector": 1, "b_position": 1},
+            ],
+        )
+        with self.assertRaises(ValidationError) as cm:
+            bt.full_clean()
+        self.assertIn("mapping", cm.exception.message_dict)
+        self.assertIn("Duplicate B-side", str(cm.exception))
+
+    def test_invalid_mapping_out_of_range(self):
+        bt = BreakoutTemplate(
+            name="OOR",
+            a_connectors=1,
+            a_positions=2,
+            b_connectors=2,
+            b_positions=1,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+                {"a_connector": 1, "a_position": 2, "b_connector": 3, "b_position": 1},
+            ],
+        )
+        with self.assertRaises(ValidationError) as cm:
+            bt.full_clean()
+        self.assertIn("mapping", cm.exception.message_dict)
+        self.assertIn("out of range", str(cm.exception))
+
+    def test_invalid_mapping_missing_key(self):
+        bt = BreakoutTemplate(
+            name="Missing Key",
+            a_connectors=1,
+            a_positions=1,
+            b_connectors=1,
+            b_positions=1,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1},
+            ],
+        )
+        with self.assertRaises(ValidationError) as cm:
+            bt.full_clean()
+        self.assertIn("mapping", cm.exception.message_dict)
+        self.assertIn("missing keys", str(cm.exception))
+
+    def test_unique_name(self):
+        BreakoutTemplate.objects.create(
+            name="Unique Test",
+            a_connectors=1,
+            a_positions=1,
+            b_connectors=1,
+            b_positions=1,
+            mapping=[{"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1}],
+        )
+        bt2 = BreakoutTemplate(
+            name="Unique Test",
+            a_connectors=1,
+            a_positions=1,
+            b_connectors=1,
+            b_positions=1,
+            mapping=[{"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1}],
+        )
+        with self.assertRaises(ValidationError):
+            bt2.full_clean()
