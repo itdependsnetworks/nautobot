@@ -82,6 +82,23 @@ Custom Fields can now be scoped to display or edit only when specific, user-defi
 
 Added official support for Python 3.14.
 
+#### Breakout Cable Support
+
+> Note: THIS IS NOT FOR 3.1, just staging these updates here.
+
+Nautobot now supports multi-lane breakout cables. A new [`BreakoutTemplate`](../user-guide/core-data-model/dcim/breakouttemplate.md) model defines the internal lane structure of a cable (connectors, positions, and A→B mapping). Assigning a template to a [`Cable`](../user-guide/core-data-model/dcim/cable.md) unlocks multi-termination behavior — a single cable can connect to multiple devices across its lanes.
+
+Key features:
+
+- `BreakoutTemplate` with auto-generated or custom JSON lane mapping, table editor, and JSON toggle
+- [`CableTerminationEndpoint`](../user-guide/core-data-model/dcim/cableterminationendpoint.md) concrete join table replacing the previous GFK termination fields on Cable
+- Connector-based cable edit form with polymorphic termination type support (all termination types)
+- Lane mapping SVG diagrams on template and cable detail views
+- Per-lane cable path tracing with lane info displayed on trace hops
+- Full backward compatibility: `Cable.termination_a/b` properties, API filter preservation, creation kwargs
+
+See the [Breakout Cables feature guide](../user-guide/feature-guides/breakout-cables.md) for details.
+
 ### Changed
 
 #### HTMX List View Rendering

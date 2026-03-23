@@ -13,11 +13,21 @@ Each cable must have two endpoints defined. These endpoints are sometimes refere
 * Power outlets
 * Power ports
 
-Each cable may be assigned a type, label, length, and color. Each cable must also assigned to an operational [`status`](../../platform-functionality/status.md). The following statuses are available by default:
+Each cable may be assigned a type, label, length, and color. Each cable must also be assigned to an operational [`status`](../../platform-functionality/status.md). The following statuses are available by default:
 
 * Active
 * Planned
 * Decommissioning
+
+## Breakout Cables
+
++++ 3.1
+
+A cable can optionally be assigned a [breakout template](breakouttemplate.md), which defines its internal lane structure — how the connectors and positions on the A side map to the B side. When a template is assigned, the cable supports multiple terminations per side, stored as [cable termination endpoint](cableterminationendpoint.md) rows.
+
+Breakout templates can only be assigned to cables with compatible termination types: interfaces, front ports, rear ports, and circuit terminations. Power and console cables do not support breakout.
+
+For more information, see the [Breakout Cables feature guide](../../feature-guides/breakout-cables.md).
 
 ## Tracing Cables
 
