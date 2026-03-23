@@ -17,6 +17,7 @@ from nautobot.ipam.models import (
     get_default_namespace,
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     RIR,
@@ -26,6 +27,7 @@ from nautobot.ipam.models import (
     VLANGroup,
     VRF,
 )
+from nautobot.ipam.tests import IPRangeTestDataMixin
 from nautobot.virtualization.models import Cluster, ClusterType, VirtualMachine, VMInterface
 
 
@@ -2280,3 +2282,52 @@ class TestVLAN(ModelTestCases.BaseModelTestCase):
 class TestVRF(ModelTestCases.BaseModelTestCase):
     model = VRF
     # TODO(jathan): Add VRF model tests.
+
+
+class TestIPRange(IPRangeTestDataMixin, ModelTestCases.BaseModelTestCase):
+    model = IPRange
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+
+        cls.namespace = Namespace.objects.create(name="iprange_model_test")
+        cls.pfx_status = Status.objects.get_for_model(Prefix).first()
+        cls.prefix = Prefix.objects.create(
+            prefix="10.99.0.0/24",
+            status=cls.pfx_status,
+            namespace=cls.namespace,
+        )
+
+    def test_create_ip_range_only_required(self):
+        """Create IPRange with only required fields and validate __str__."""
+        ip_range = IPRange.objects.create(
+            start_address="10.99.0.1",
+            end_address="10.99.0.5",
+            parent=self.prefix,
+            status=self.ip_status,
+        )
+        self.assertIn("10.99.0.1", str(ip_range))
+        self.assertIn("10.99.0.5", str(ip_range))
+
+    def test_create_ip_range_all_fields(self):
+        """Create IPRange with all optional fields populated."""
+        ip_range = IPRange.objects.create(
+            start_address="10.99.0.60",
+            end_address="10.99.0.70",
+            parent=self.prefix,
+            status=self.ip_status,
+            role=self.ip_role,
+            tenant=self.tenant1,
+            description="Full-field test range",
+            count_as_utilized=True,
+            is_exclusive=False,
+        )
+        self.assertEqual(ip_range.description, "Full-field test range")
+        self.assertTrue(ip_range.count_as_utilized)
+        self.assertEqual(ip_range.tenant, self.tenant1)
+
+    def test_str(self):
+        ip_range = IPRange(start_address="10.99.0.1", end_address="10.99.0.10")
+        self.assertIn("10.99.0.1", str(ip_range))
+        self.assertIn("10.99.0.10", str(ip_range))

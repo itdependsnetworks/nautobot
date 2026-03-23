@@ -8,6 +8,7 @@ from nautobot.extras.models import Status
 from nautobot.ipam import forms, models
 from nautobot.ipam.choices import IPAddressTypeChoices
 from nautobot.ipam.models import IPAddress, Namespace, Prefix
+from nautobot.ipam.tests import IPRangeTestDataMixin
 
 
 class NetworkFormTestCases:
@@ -132,3 +133,91 @@ class IPAddressBulkCreateFormTest(TestCase):
         with self.subTest("Assert IPAddressBulkCreateForm with valid pattern"):
             form = form_class(data={"pattern": "192.0.2.[1,5,100-254]/24"})
             self.assertTrue(form.is_valid())
+
+
+class IPRangeFormTest(IPRangeTestDataMixin, FormTestCases.BaseFormTestCase):
+    """Test the IPRangeForm."""
+
+    form_class = forms.IPRangeForm
+
+    def test_specifying_all_fields_success(self):
+        """Test that a form with all fields specified is valid and saves."""
+        form = forms.IPRangeForm(
+            data={
+                "start_address": "10.100.1.1",
+                "end_address": "10.100.1.20",
+                "parent": self.parent.pk,
+                "status": self.ip_status.pk,
+                "role": self.ip_role.pk if self.ip_role else None,
+                "description": "Test range with all fields",
+                "count_as_utilized": True,
+                "is_exclusive": False,
+                "tenant_group": self.tenant_group1.pk,
+                "tenant": self.tenant1.pk,
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.save())
+
+    def test_specifying_required_fields_success(self):
+        """Test that a form with only required fields is valid and saves."""
+        form = forms.IPRangeForm(
+            data={
+                "start_address": "10.100.1.30",
+                "end_address": "10.100.1.40",
+                "parent": self.parent.pk,
+                "status": self.ip_status.pk,
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.save())
+
+    def test_start_address_is_required(self):
+        """Test that omitting start_address makes the form invalid."""
+        form = forms.IPRangeForm(
+            data={
+                "end_address": "10.100.1.10",
+                "parent": self.parent.pk,
+                "status": self.ip_status.pk,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("start_address", form.errors)
+
+    def test_end_address_is_required(self):
+        """Test that omitting end_address makes the form invalid."""
+        form = forms.IPRangeForm(
+            data={
+                "start_address": "10.100.1.1",
+                "parent": self.parent.pk,
+                "status": self.ip_status.pk,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("end_address", form.errors)
+
+    def test_parent_is_required(self):
+        """Test that omitting parent makes the form invalid."""
+        form = forms.IPRangeForm(
+            data={
+                "start_address": "10.100.1.1",
+                "end_address": "10.100.1.10",
+                "status": self.ip_status.pk,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("parent", form.errors)
+
+    def test_status_is_required(self):
+        """Test that omitting status makes the form invalid."""
+        form = forms.IPRangeForm(
+            data={
+                "start_address": "10.100.1.1",
+                "end_address": "10.100.1.10",
+                "parent": self.parent.pk,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("status", form.errors)
+
+    # PLACEHOLDER: test_end_address_less_than_start_address_is_invalid added in [validation-and-utilization]

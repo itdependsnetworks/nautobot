@@ -5,6 +5,7 @@ import math
 from django.contrib.contenttypes.models import ContentType
 import factory
 import faker
+import netaddr
 
 from nautobot.core.constants import CHARFIELD_MAX_LENGTH
 from nautobot.core.factory import (
@@ -18,7 +19,7 @@ from nautobot.core.factory import (
 from nautobot.dcim.models import Location, VirtualDeviceContext
 from nautobot.extras.models import Role, Status
 from nautobot.ipam.choices import PrefixTypeChoices
-from nautobot.ipam.models import IPAddress, Namespace, Prefix, RIR, RouteTarget, VLAN, VLANGroup, VRF
+from nautobot.ipam.models import IPAddress, IPRange, Namespace, Prefix, RIR, RouteTarget, VLAN, VLANGroup, VRF
 from nautobot.tenancy.models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -516,3 +517,65 @@ class IPAddressFactory(PrimaryModelFactory):
     tenant = factory.Maybe("has_tenant", random_instance(Tenant))
     # Obviously improve this
     # namespace = Namespace.objects.first()
+
+
+class IPRangeFactory(PrimaryModelFactory):
+    """Create random IPRange objects spanning a small block of addresses within a randomly selected IPv4 Prefix.
+
+    start_address and end_address are generated from the same parent prefix, with the range spanning
+    between 1 and 10 addresses. is_exclusive defaults to False to avoid conflicting with any
+    IPAddress objects that may already exist within the prefix.
+
+    Examples:
+        Create 10 IP ranges:
+
+            >>> IPRangeFactory.create_batch(10)
+    """
+
+    class Meta:
+        model = IPRange
+        exclude = ("has_description", "has_role", "has_tenant", "_parent_prefix", "_start_idx")
+
+    class Params:
+        has_description = NautobotBoolIterator()
+        has_role = NautobotBoolIterator()
+        has_tenant = NautobotBoolIterator()
+
+    # Pick a parent prefix that has enough room for a range (at least a /28)
+    _parent_prefix = random_instance(
+        lambda: Prefix.objects.filter(ip_version=4, prefix_length__lte=28),
+        allow_null=False,
+    )
+    _start_idx = factory.LazyAttribute(
+        lambda o: (
+            factory.random.randgen.randint(1, max(1, o._parent_prefix.prefix.size - 11)) if o._parent_prefix else 1
+        )
+    )
+
+    parent = factory.LazyAttribute(lambda o: o._parent_prefix)
+
+    @factory.lazy_attribute
+    def start_address(self):
+        if not self._parent_prefix:
+            return None
+        net = netaddr.IPNetwork(str(self._parent_prefix.prefix))
+        return str(netaddr.IPAddress(net.first + self._start_idx))
+
+    @factory.lazy_attribute
+    def end_address(self):
+        if not self._parent_prefix:
+            return None
+        net = netaddr.IPNetwork(str(self._parent_prefix.prefix))
+        range_size = factory.random.randgen.randint(1, 10)
+        return str(netaddr.IPAddress(net.first + self._start_idx + range_size))
+
+    description = factory.Maybe("has_description", factory.Faker("text", max_nb_chars=CHARFIELD_MAX_LENGTH), "")
+    role = factory.Maybe(
+        "has_role",
+        random_instance(lambda: Role.objects.get_for_model(IPRange), allow_null=False),
+        None,
+    )
+    status = random_instance(lambda: Status.objects.get_for_model(IPRange), allow_null=False)
+    tenant = factory.Maybe("has_tenant", random_instance(Tenant))
+    count_as_utilized = factory.Faker("pybool")
+    is_exclusive = factory.LazyFunction(lambda: False)

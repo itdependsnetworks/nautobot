@@ -53,6 +53,7 @@ from . import filters, forms, tables, ui
 from .models import (
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     RIR,
@@ -1536,6 +1537,39 @@ class ServiceEditView(generic.ObjectEditView):  # This view is used to assign se
                 pk=url_kwargs["virtualmachine"],
             )
         return obj
+
+
+class IPRangeUIViewSet(NautobotUIViewSet):
+    bulk_update_form_class = forms.IPRangeBulkEditForm
+    filterset_class = filters.IPRangeFilterSet
+    filterset_form_class = forms.IPRangeFilterForm
+    form_class = forms.IPRangeForm
+    queryset = IPRange.objects.select_related("parent", "status", "role", "tenant__tenant_group")
+    serializer_class = serializers.IPRangeSerializer
+    table_class = tables.IPRangeTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            object_detail.ObjectFieldsPanel(
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=[
+                    "start_address",
+                    "end_address",
+                    "ip_version",
+                    "parent",
+                    "size",
+                    "status",
+                    "role",
+                    "tenant",
+                    "count_as_utilized",
+                    "is_exclusive",
+                    "description",
+                ],
+                ignore_nonexistent_fields=True,  # size is a property, not a model field
+            ),
+        ),
+    )
 
 
 class ServiceUIViewSet(NautobotUIViewSet):  # 3.0 TODO: remove, unused BulkImportView

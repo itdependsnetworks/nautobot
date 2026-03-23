@@ -34,6 +34,7 @@ __all__ = (
     "VRF",
     "IPAddress",
     "IPAddressToInterface",
+    "IPRange",
     "Namespace",
     "Prefix",
     "PrefixLocationAssignment",
@@ -1608,6 +1609,98 @@ class IPAddress(PrimaryModel):
 
         def __str__(self):
             return f"Multiple IPAddress objects specify this object (pk: {self.obj.pk}) as nat_inside. Please refer to nat_outside_list."
+
+
+@extras_features(
+    "custom_links",
+    "custom_validators",
+    "export_templates",
+    "graphql",
+    "statuses",
+    "webhooks",
+)
+class IPRange(PrimaryModel):
+    """
+    An IPRange represents a contiguous span of IP addresses defined by a start address and an end address,
+    both within the same parent Prefix. IP Ranges can optionally be marked as fully utilized or exclusive
+    (blocking creation of individual IP Address objects within the range).
+    """
+
+    documentation_static_path = "docs/user-guide/core-data-model/ipam/ip-range.html"
+
+    start_address = VarbinaryIPField(
+        db_index=True,
+        editable=True,
+        help_text="First IP address in the range (inclusive)",
+    )
+    end_address = VarbinaryIPField(
+        db_index=True,
+        editable=True,
+        help_text="Last IP address in the range (inclusive)",
+    )
+    ip_version = models.IntegerField(
+        choices=choices.IPAddressVersionChoices,
+        editable=False,
+        db_index=True,
+        verbose_name="IP Version",
+    )
+    parent = models.ForeignKey(
+        "ipam.Prefix",
+        related_name="ip_ranges",
+        on_delete=models.PROTECT,
+        help_text="The parent Prefix of this IP Range.",
+    )
+    status = StatusField()
+    role = RoleField(blank=True, null=True)
+    tenant = models.ForeignKey(
+        to="tenancy.Tenant",
+        on_delete=models.PROTECT,
+        related_name="ip_ranges",
+        blank=True,
+        null=True,
+    )
+    description = models.CharField(max_length=CHARFIELD_MAX_LENGTH, blank=True)
+    count_as_utilized = models.BooleanField(
+        default=False,
+        verbose_name="Mark as fully utilized",
+        help_text="Forces this range to count as fully utilized in prefix utilization calculations.",
+    )
+    is_exclusive = models.BooleanField(
+        default=False,
+        verbose_name="Exclusive (block IPs)",
+        help_text="Prevent individual IP Address objects from being created within this range.",
+    )
+
+    clone_fields = ["parent", "status", "role", "tenant", "description", "count_as_utilized", "is_exclusive"]
+
+    class Meta:
+        ordering = ("parent", "start_address")
+        verbose_name = "IP Range"
+        verbose_name_plural = "IP Ranges"
+        indexes = [
+            models.Index(fields=("start_address", "end_address")),
+            models.Index(fields=("ip_version", "start_address", "end_address")),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["parent", "start_address", "end_address"],
+                name="unique_iprange_parent_start_end",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.start_address} - {self.end_address}"
+
+    natural_key_field_names = ["parent__namespace", "start_address", "end_address"]
+
+    # PLACEHOLDER: size, percent_utilized properties added in [validation-and-utilization]
+
+    def save(self, *args, **kwargs):
+        # Auto-populate ip_version from start_address so the field is never empty.
+        # PLACEHOLDER: full clean() validation added in [validation-and-utilization]
+        if self.start_address:
+            self.ip_version = netaddr.IPAddress(self.start_address).version
+        super().save(*args, **kwargs)
 
 
 @extras_features("graphql")

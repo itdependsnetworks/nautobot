@@ -20,6 +20,7 @@ from nautobot.ipam.api import serializers
 from nautobot.ipam.models import (
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     PrefixLocationAssignment,
@@ -412,6 +413,17 @@ class IPAddressToInterfaceViewSet(NautobotModelViewSet):
     queryset = IPAddressToInterface.objects.all()
     serializer_class = serializers.IPAddressToInterfaceSerializer
     filterset_class = filters.IPAddressToInterfaceFilterSet
+
+
+#
+# IP Ranges
+#
+
+
+class IPRangeViewSet(NautobotModelViewSet):
+    queryset = IPRange.objects.select_related("parent", "status", "role", "tenant")
+    serializer_class = serializers.IPRangeSerializer
+    filterset_class = filters.IPRangeFilterSet
 
 
 #

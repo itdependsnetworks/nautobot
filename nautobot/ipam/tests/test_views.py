@@ -38,6 +38,7 @@ from nautobot.extras.models import (
 from nautobot.ipam.choices import IPAddressTypeChoices, PrefixTypeChoices, ServiceProtocolChoices
 from nautobot.ipam.models import (
     IPAddress,
+    IPRange,
     Namespace,
     Prefix,
     RIR,
@@ -47,6 +48,7 @@ from nautobot.ipam.models import (
     VLANGroup,
     VRF,
 )
+from nautobot.ipam.tests import IPRangeTestDataMixin
 from nautobot.tenancy.models import Tenant
 from nautobot.users.models import ObjectPermission
 from nautobot.virtualization.models import Cluster, ClusterType, VirtualMachine
@@ -526,6 +528,45 @@ class PrefixTestCase(ViewTestCases.PrimaryObjectViewTestCase, ViewTestCases.List
         self.assertTemplateUsed(response, "components/htmx/subtree_children.html")
         for child in pfx_with_children.children.all():
             self.assertBodyContains(response, str(child.pk))
+
+
+class IPRangeTestCase(IPRangeTestDataMixin, ViewTestCases.PrimaryObjectViewTestCase):
+    model = IPRange
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+
+        cls.form_data = {
+            "start_address": "10.100.1.1",
+            "end_address": "10.100.1.20",
+            "parent": cls.parent.pk,
+            "status": cls.ip_status.pk,
+            "role": cls.ip_role.pk if cls.ip_role else None,
+            "description": "A test IP range",
+            "count_as_utilized": False,
+            "is_exclusive": False,
+            "tenant_group": None,
+            "tenant": cls.tenant1.pk,
+        }
+
+        cls.update_data = {
+            "start_address": "10.100.2.1",
+            "end_address": "10.100.2.10",
+            "parent": cls.parent.pk,
+            "status": cls.ip_status.pk,
+            "role": None,
+            "description": "Updated IP range",
+            "count_as_utilized": True,
+            "is_exclusive": False,
+            "tenant_group": None,
+            "tenant": cls.tenant2.pk,
+        }
+
+        cls.bulk_edit_data = {
+            "description": "Bulk updated description",
+            "status": cls.ip_status.pk,
+        }
 
 
 class IPAddressTestCase(ViewTestCases.PrimaryObjectViewTestCase):

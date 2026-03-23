@@ -18,6 +18,7 @@ from nautobot.ipam.choices import PrefixTypeChoices, ServiceProtocolChoices
 from nautobot.ipam.filters import (
     IPAddressFilterSet,
     IPAddressToInterfaceFilterSet,
+    IPRangeFilterSet,
     NamespaceFilterSet,
     PrefixFilterSet,
     PrefixLocationAssignmentFilterSet,
@@ -34,6 +35,7 @@ from nautobot.ipam.filters import (
 from nautobot.ipam.models import (
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     PrefixLocationAssignment,
@@ -47,6 +49,7 @@ from nautobot.ipam.models import (
     VRFDeviceAssignment,
     VRFPrefixAssignment,
 )
+from nautobot.ipam.tests import IPRangeTestDataMixin
 from nautobot.tenancy.models import Tenant
 from nautobot.virtualization.models import (
     Cluster,
@@ -578,6 +581,28 @@ class PrefixFilterCustomDataTestCase(TestCase):
         self.assertQuerySetEqualAndNotEmpty(
             self.filterset(params, self.queryset).qs, self.queryset.filter(vlan__vid__in=[vlans[0].vid, vlans[1].vid])
         )
+
+
+class IPRangeFilterTestCase(
+    IPRangeTestDataMixin,
+    FilterTestCases.TenancyFilterTestCaseMixin,
+    FilterTestCases.FilterTestCase,
+):
+    queryset = IPRange.objects.all()
+    filterset = IPRangeFilterSet
+    tenancy_related_name = "ip_ranges"
+    generic_filter_tests = (
+        ("id",),
+        ("created",),
+        ("last_updated",),
+        ("description",),
+        ("status", "status__id"),
+        ("status", "status__name"),
+        ("role", "role__id"),
+        ("role", "role__name"),
+        ("parent", "parent__id"),
+        ("namespace", "parent__namespace__name"),
+    )
 
 
 class IPAddressTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):

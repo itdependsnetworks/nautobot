@@ -47,9 +47,11 @@ from .constants import (
     SERVICE_PORT_MAX,
     SERVICE_PORT_MIN,
 )
+from .formfields import IPAddressFormField
 from .models import (
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     RIR,
@@ -1012,3 +1014,109 @@ class ServiceBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):
         nullable_fields = [
             "description",
         ]
+
+
+#
+# IP Ranges
+#
+
+
+class IPRangeForm(NautobotModelForm, TenancyForm):
+    start_address = IPAddressFormField(
+        help_text="First IP address in the range (inclusive, without mask)",
+    )
+    end_address = IPAddressFormField(
+        help_text="Last IP address in the range (inclusive, without mask)",
+    )
+    parent = DynamicModelChoiceField(
+        queryset=Prefix.objects.all(),
+        label="Parent Prefix",
+    )
+
+    class Meta:
+        model = IPRange
+        fields = [
+            "start_address",
+            "end_address",
+            "parent",
+            "status",
+            "role",
+            "description",
+            "count_as_utilized",
+            "is_exclusive",
+            "tenant_group",
+            "tenant",
+            "tags",
+        ]
+
+
+class IPRangeBulkEditForm(
+    TagsBulkEditFormMixin,
+    StatusModelBulkEditFormMixin,
+    RoleModelBulkEditFormMixin,
+    NautobotBulkEditForm,
+):
+    pk = forms.ModelMultipleChoiceField(queryset=IPRange.objects.all(), widget=forms.MultipleHiddenInput())
+    tenant = DynamicModelChoiceField(queryset=Tenant.objects.all(), required=False)
+    description = forms.CharField(max_length=CHARFIELD_MAX_LENGTH, required=False)
+    count_as_utilized = forms.NullBooleanField(
+        required=False,
+        widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    is_exclusive = forms.NullBooleanField(
+        required=False,
+        widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+
+    class Meta:
+        model = IPRange
+        nullable_fields = ["description", "tenant", "role"]
+
+
+class IPRangeFilterForm(
+    NautobotFilterForm,
+    TenancyFilterForm,
+    StatusModelFilterFormMixin,
+    RoleModelFilterFormMixin,
+):
+    model = IPRange
+    field_order = [
+        "q",
+        "namespace",
+        "parent",
+        "ip_version",
+        "status",
+        "role",
+        "count_as_utilized",
+        "is_exclusive",
+        "tenant_group",
+        "tenant",
+    ]
+    q = forms.CharField(required=False, label="Search")
+    namespace = DynamicModelMultipleChoiceField(
+        queryset=Namespace.objects.all(),
+        to_field_name="name",
+        required=False,
+    )
+    parent = DynamicModelMultipleChoiceField(
+        queryset=Prefix.objects.all(),
+        required=False,
+        label="Parent Prefix",
+    )
+    ip_version = forms.ChoiceField(
+        required=False,
+        choices=add_blank_choice(IPAddressVersionChoices),
+        label="IP Version",
+        widget=StaticSelect2(),
+    )
+    count_as_utilized = forms.NullBooleanField(
+        required=False,
+        label="Mark Utilized",
+        widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    is_exclusive = forms.NullBooleanField(
+        required=False,
+        label="Exclusive",
+        widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
+    tags = TagFilterField(model)

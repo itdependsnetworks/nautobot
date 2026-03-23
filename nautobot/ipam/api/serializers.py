@@ -19,6 +19,7 @@ from nautobot.ipam.models import (
     get_default_namespace,
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     PrefixLocationAssignment,
@@ -445,6 +446,19 @@ class IPAddressToInterfaceSerializer(ValidatedModelSerializer):
             )
             validator(attrs, self)
         return super().validate(attrs)
+
+
+class IPRangeSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
+    start_address = serializers.CharField()
+    end_address = serializers.CharField()
+    # PLACEHOLDER: size field added in [validation-and-utilization]
+
+    class Meta:
+        model = IPRange
+        fields = "__all__"
+        extra_kwargs = {
+            "ip_version": {"read_only": True},
+        }
 
 
 #

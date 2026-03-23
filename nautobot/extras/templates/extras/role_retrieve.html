@@ -110,6 +110,22 @@
         </div>
         {% include 'inc/paginator.html' with paginator=ipaddress_table.paginator page=ipaddress_table.page %}
     {% endif %}
+    {% if iprange_table %}
+        <div class="card">
+            <div class="card-header">
+                <strong>IP Ranges</strong>
+            </div>
+            {% include 'inc/table.html' with table=iprange_table %}
+            {% if perms.ipam.add_iprange %}
+                <div class="card-footer text-end d-print-none">
+                    <a href="{% url 'ipam:iprange_add' %}?role={{ object.pk }}" class="btn btn-sm btn-primary">
+                        <span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add IP Range
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+        {% include 'inc/paginator.html' with paginator=iprange_table.paginator page=iprange_table.page %}
+    {% endif %}
     {% if prefix_table %}
         <div class="card">
             <div class="card-header">

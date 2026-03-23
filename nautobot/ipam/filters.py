@@ -33,6 +33,7 @@ from nautobot.vpn.models import VPNTunnelEndpoint
 from .models import (
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     PrefixLocationAssignment,
@@ -49,6 +50,7 @@ from .models import (
 
 __all__ = (
     "IPAddressFilterSet",
+    "IPRangeFilterSet",
     "NamespaceFilterSet",
     "PrefixFilter",
     "PrefixFilterSet",
@@ -770,3 +772,37 @@ class ServiceFilterSet(NautobotFilterSet):
     class Meta:
         model = Service
         fields = ["id", "name", "protocol", "tags"]
+
+
+#
+# IP Ranges
+#
+
+
+class IPRangeFilterSet(
+    NautobotFilterSet,
+    TenancyModelFilterSetMixin,
+    StatusModelFilterSetMixin,
+    RoleModelFilterSetMixin,
+):
+    q = SearchFilter(
+        filter_predicates={
+            "description": "icontains",
+            "start_address": "icontains",
+            "end_address": "icontains",
+        },
+    )
+    parent = PrefixFilter()
+    namespace = NaturalKeyOrPKMultipleChoiceFilter(
+        queryset=Namespace.objects.all(),
+        field_name="parent__namespace",
+        to_field_name="name",
+        label="Namespace (name or ID)",
+    )
+    ip_version = django_filters.NumberFilter()
+    count_as_utilized = django_filters.BooleanFilter()
+    is_exclusive = django_filters.BooleanFilter()
+
+    class Meta:
+        model = IPRange
+        fields = ["id", "description", "tags"]

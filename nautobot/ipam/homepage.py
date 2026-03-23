@@ -1,5 +1,5 @@
 from nautobot.core.apps import HomePageItem, HomePagePanel
-from nautobot.ipam.models import IPAddress, Prefix, VLAN, VRF
+from nautobot.ipam.models import IPAddress, IPRange, Prefix, VLAN, VRF
 
 layout = (
     HomePagePanel(
@@ -21,6 +21,14 @@ layout = (
                 description="IPv4 and IPv6 network assignments",
                 permissions=["ipam.view_prefix"],
                 weight=300,
+            ),
+            HomePageItem(
+                name="IP Ranges",
+                link="ipam:iprange_list",
+                model=IPRange,
+                description="Contiguous spans of IP addresses within a prefix",
+                permissions=["ipam.view_iprange"],
+                weight=350,
             ),
             HomePageItem(
                 name="IP Addresses",

@@ -156,6 +156,7 @@ GLOBAL_SEARCH_EXCLUDE_LIST = [
     "interfacevdcassignment",
     "inventoryitem",
     "ipaddresstointerface",
+    "iprange",
     "job",
     "jobbutton",
     "jobhook",

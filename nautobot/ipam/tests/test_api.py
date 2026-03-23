@@ -27,6 +27,7 @@ from nautobot.ipam import choices
 from nautobot.ipam.models import (
     IPAddress,
     IPAddressToInterface,
+    IPRange,
     Namespace,
     Prefix,
     PrefixLocationAssignment,
@@ -40,6 +41,7 @@ from nautobot.ipam.models import (
     VRFDeviceAssignment,
     VRFPrefixAssignment,
 )
+from nautobot.ipam.tests import IPRangeTestDataMixin
 from nautobot.tenancy.models import Tenant
 from nautobot.virtualization.models import Cluster, ClusterType, VirtualMachine, VMInterface
 
@@ -1514,6 +1516,57 @@ class ParallelPrefixTest(APITransactionTestCase):
             # Django will use a separate DB connection for each thread, but will not
             # automatically close connections, it must be done here.
             connection.close()
+
+
+class IPRangeTest(IPRangeTestDataMixin, APIViewTestCases.APIViewTestCase):
+    model = IPRange
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+
+        cls.create_data = [
+            {
+                "start_address": "10.100.1.1",
+                "end_address": "10.100.1.10",
+                "parent": cls.parent.pk,
+                "status": cls.ip_status.pk,
+                "description": "API create range 1",
+                "count_as_utilized": False,
+                "is_exclusive": False,
+                "tenant": cls.tenant1.pk,
+            },
+            {
+                "start_address": "10.100.1.20",
+                "end_address": "10.100.1.30",
+                "parent": cls.parent.pk,
+                "status": cls.ip_status.pk,
+                "description": "API create range 2",
+                "count_as_utilized": True,
+                "is_exclusive": False,
+                "tenant": cls.tenant2.pk,
+            },
+            {
+                "start_address": "10.100.1.40",
+                "end_address": "10.100.1.50",
+                "parent": cls.parent.pk,
+                "status": cls.ip_status.pk,
+                "description": "API create range 3",
+                "count_as_utilized": False,
+                "is_exclusive": False,
+                "tenant": None,
+            },
+        ]
+
+        cls.update_data = {
+            "description": "Updated description",
+            "count_as_utilized": True,
+            "tenant": cls.tenant1.pk,
+        }
+
+        cls.bulk_update_data = {
+            "description": "Bulk updated description",
+        }
 
 
 class IPAddressTest(APIViewTestCases.APIViewTestCase):
