@@ -123,6 +123,7 @@ class Command(BaseCommand):
             from nautobot.extras.utils import FeatureQuery, TaggableClassesQuery
             from nautobot.ipam.choices import PrefixTypeChoices
             from nautobot.ipam.factory import (
+                IPRangeFactory,
                 NamespaceFactory,
                 PrefixFactory,
                 RIRFactory,
@@ -222,6 +223,7 @@ class Command(BaseCommand):
             description="without a Tenant and without any Prefixes or IPAddresses",
             has_tenant=False,
         )
+        _create_batch(IPRangeFactory, 20)
         _create_batch(DeviceFamilyFactory, 20)
         _create_batch(ManufacturerFactory, 8)  # First 8 hard-coded Manufacturers
         _create_batch(PlatformFactory, 20, description="with Manufacturers", has_manufacturer=True)

@@ -529,6 +529,38 @@ class PrefixTestCase(ViewTestCases.PrimaryObjectViewTestCase, ViewTestCases.List
         for child in pfx_with_children.children.all():
             self.assertBodyContains(response, str(child.pk))
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_prefix_ip_ranges_tab(self):
+        """ip_ranges view action returns IPRangeTable rows for all ranges under the prefix."""
+        ip_range_status = Status.objects.get_for_model(IPRange).first()
+        instance = Prefix.objects.create(
+            prefix="10.90.0.0/24",
+            namespace=self.namespace,
+            status=self.statuses[0],
+        )
+        ip_range_1 = IPRange.objects.create(
+            start_address="10.90.0.1",
+            end_address="10.90.0.10",
+            parent=instance,
+            status=ip_range_status,
+            description="Range one",
+        )
+        ip_range_2 = IPRange.objects.create(
+            start_address="10.90.0.20",
+            end_address="10.90.0.30",
+            parent=instance,
+            status=ip_range_status,
+            description="Range two",
+        )
+        url = reverse("ipam:prefix_ipranges", args=(instance.pk,))
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        content = extract_page_body(response.content.decode(response.charset))
+        self.assertIn(str(ip_range_1.start_address), strip_tags(content))
+        self.assertIn(str(ip_range_2.start_address), strip_tags(content))
+        self.assertIn("Range one", strip_tags(content))
+        self.assertIn("Range two", strip_tags(content))
+
 
 class IPRangeTestCase(IPRangeTestDataMixin, ViewTestCases.PrimaryObjectViewTestCase):
     model = IPRange

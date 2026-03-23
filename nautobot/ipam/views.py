@@ -367,6 +367,7 @@ class PrefixUIViewSet(NautobotUIViewSet):
     view_titles = Titles(
         titles={
             "prefixes": f"{DEFAULT_TITLES['detail']} - Prefixes",
+            "ip_ranges": f"{DEFAULT_TITLES['detail']} - IP Ranges",
             "ip_addresses": f"{DEFAULT_TITLES['detail']} - IP Addresses",
         }
     )
@@ -510,6 +511,28 @@ class PrefixUIViewSet(NautobotUIViewSet):
                 ),
             ),
             object_detail.DistinctViewTab(
+                weight=850,
+                tab_id="ip-ranges",
+                label="IP Ranges",
+                related_object_attribute="ip_ranges",
+                url_name="ipam:prefix_ipranges",
+                panels=[
+                    object_detail.ObjectsTablePanel(
+                        section=SectionChoices.FULL_WIDTH,
+                        weight=100,
+                        context_table_key="iprange_table",
+                        add_button_route=None,
+                        include_paginator=True,
+                        related_field_name="parent",
+                        form_id="iprange_form",
+                        enable_bulk_actions=True,
+                        footer_buttons=[
+                            BulkDeleteButton(form_id="iprange_form", model=IPRange),
+                        ],
+                    ),
+                ],
+            ),
+            object_detail.DistinctViewTab(
                 weight=900,
                 tab_id="ip-addresses",
                 label="IP Addresses",
@@ -563,6 +586,24 @@ class PrefixUIViewSet(NautobotUIViewSet):
                 icon="mdi-plus-thick",
                 required_permissions=["ipam.add_ipaddress"],
                 render_on_tab_id=["ip-addresses"],
+            ),
+            ui.AddIPRangeButton(
+                weight=300,
+                label="Add IP Range",
+                link_name="ipam:iprange_add",
+                color=ButtonActionColorChoices.SUBMIT,
+                icon="mdi-plus-thick",
+                required_permissions=["ipam.add_iprange"],
+                render_on_tab_id="ip-addresses",
+            ),
+            ui.AddIPRangeButton(
+                weight=200,
+                label="Add IP Range",
+                link_name="ipam:iprange_add",
+                color=ButtonActionColorChoices.SUBMIT,
+                icon="mdi-plus-thick",
+                required_permissions=["ipam.add_iprange"],
+                render_on_tab_id="ip-ranges",
             ),
         ],
     )
@@ -798,6 +839,49 @@ class PrefixUIViewSet(NautobotUIViewSet):
                 "view_action": "ip_addresses",
                 "show_available": request.GET.get("show_available", "true") == "true",
                 "badge_count_override": ipaddresses.count(),
+            }
+        )
+
+    @action(
+        detail=True,
+        url_path="ip-ranges",
+        url_name="ipranges",
+        custom_view_base_action="view",
+        custom_view_additional_permissions=["ipam.view_iprange"],
+    )
+    def ip_ranges(self, request, *args, **kwargs):
+        instance = self.get_object()
+        ip_ranges_qs = instance.ip_ranges.restrict(request.user, "view").select_related("status", "role", "tenant")
+
+        iprange_table = tables.IPRangeTable(
+            ip_ranges_qs,
+            configurable=True,
+            exclude=["parent"],
+            user=request.user,
+        )
+        if request.user.has_perm("ipam.change_iprange") or request.user.has_perm("ipam.delete_iprange"):
+            iprange_table.columns.show("pk")
+
+        paginate = {
+            "paginator_class": EnhancedPaginator,
+            "per_page": get_paginate_count(request),
+        }
+        RequestConfig(request, paginate).configure(iprange_table)
+
+        permissions = {
+            "add": request.user.has_perm("ipam.add_iprange"),
+            "change": request.user.has_perm("ipam.change_iprange"),
+            "delete": request.user.has_perm("ipam.delete_iprange"),
+        }
+
+        return Response(
+            {
+                "iprange_table": iprange_table,
+                "permissions": permissions,
+                "active_tab": "ip-ranges",
+                "view_action": "ip_ranges",
+                "first_available_ip": instance.get_first_available_ip(),
+                "badge_count_override": ip_ranges_qs.count(),
             }
         )
 

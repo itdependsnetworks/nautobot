@@ -448,6 +448,11 @@ class IPAddressToInterfaceSerializer(ValidatedModelSerializer):
         return super().validate(attrs)
 
 
+#
+# IP Ranges
+#
+
+
 class IPRangeSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
     start_address = serializers.CharField()
     end_address = serializers.CharField()

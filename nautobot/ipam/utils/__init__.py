@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from typing import Optional
 
 from django.core.exceptions import ValidationError
 from django.utils.html import format_html, format_html_join
@@ -41,7 +42,13 @@ def get_add_available_prefixes_callback(show_available: bool, parent: Prefix):
     return lambda prefixes: prefixes
 
 
-def add_available_ipaddresses(prefix: netaddr.IPNetwork, ipaddress_list: Iterable[IPAddress], is_pool: bool = False):
+def add_available_ipaddresses(
+    prefix: netaddr.IPNetwork,
+    ipaddress_list: Iterable[IPAddress],
+    is_pool: bool = False,
+    ip_ranges: Optional[Iterable] = None,
+    show_available: bool = True,
+):
     """
     Annotate ranges of available IP addresses within a given prefix.
 
@@ -49,15 +56,43 @@ def add_available_ipaddresses(prefix: netaddr.IPNetwork, ipaddress_list: Iterabl
         prefix (netaddr.IPNetwork): The network to calculate available addresses within.
         ipaddress_list (Iterable[IPAddress]): List or QuerySet of extant IPAddress objects.
         is_pool (bool): If True, the first/last IPs in the prefix will be considered usable, regardless of mask length.
+        ip_ranges (Iterable[IPRange], optional): IPRange objects to inject as rows at their start_address position.
+        show_available (bool): If True, emit available-IP tuples for gaps. If False, only IPAddress and IPRange rows.
 
     Returns:
         The contents of `ipaddress_list` interleaved with tuples of the form
-        `(number_of_available_addresses, first_such_address)`.
+        `(number_of_available_addresses, first_such_address)` and any IPRange objects sorted by start_address.
     """
-    output = []
-    prev_ip = None
+    # Workflow
+    # │
+    # ├─ Usable boundaries: for non-pool IPv4 prefixes shorter than /31 (i.e. /30 and
+    # │      below), the network (.0) and broadcast (.255) addresses are not usable.
+    # │
+    # ├─ Sort inputs: ip_ranges by start address; ipaddress_list by host
+    # │      (using the QuerySet ordering when available, otherwise Python sort).
+    # │
+    # ├─ Empty fast-path: if there are no IPs and no ranges, return either a
+    # │      single "all-available" tuple or [] depending on show_available.
+    # │
+    # ├─ Combine: build one flat list of (addr_int, type_order, obj) covering
+    # │      both IPAddress and IPRange objects, then sort by (address, type_order).
+    # │      IPRanges sort before IPAddresses at the same address (type_order 0 < 1).
+    # │
+    # ├─ Iterate IPs and ranges, tracking high_water_int (highest address seen so far):
+    # │   ├─ IPAddress: if there is a gap before this address, record it as
+    # │   │      available, then add the IP object. Skip IPs outside the usable boundaries.
+    # │   └─ IPRange: trim the range to the usable bounds of the prefix. If there
+    # │          is a gap before the range, record it as available, then add the
+    # │          range object. The full span of the range is marked as covered so
+    # │          no available entries appear inside it.
+    # │
+    # └─ Remaining gap: record any available space after the last item.
+    #
+    # show_available=False: available gap entries are never added; only IPAddress
+    #     and IPRange objects appear in the output.
 
-    # Ignore the network and broadcast addresses for non-pool IPv4 prefixes larger than /31.
+    # For non-pool IPv4 prefixes shorter than /31 (i.e. /30 and below), the network
+    # and broadcast addresses are not usable and should not appear as available.
     if prefix.version == 4 and prefix.prefixlen < 31 and not is_pool:
         first_ip_in_prefix = netaddr.IPAddress(prefix.first + 1, version=prefix.version)
         last_ip_in_prefix = netaddr.IPAddress(prefix.last - 1, version=prefix.version)
@@ -65,7 +100,19 @@ def add_available_ipaddresses(prefix: netaddr.IPNetwork, ipaddress_list: Iterabl
         first_ip_in_prefix = netaddr.IPAddress(prefix.first, version=prefix.version)
         last_ip_in_prefix = netaddr.IPAddress(prefix.last, version=prefix.version)
 
-    if not ipaddress_list:
+    # Sort both inputs by address so we can walk them in order below.
+    sorted_ranges = sorted(ip_ranges or [], key=lambda r: int(netaddr.IPAddress(r.start_address)))
+    if isinstance(ipaddress_list, IPAddressQuerySet):
+        ipaddress_list = list(ipaddress_list.order_by("host"))
+    elif isinstance(ipaddress_list, list):
+        ipaddress_list = sorted(ipaddress_list, key=lambda ip: ip.host)
+    else:
+        ipaddress_list = list(ipaddress_list)
+
+    # Nothing to walk — the entire prefix is either one big available block or empty.
+    if not ipaddress_list and not sorted_ranges:
+        if not show_available:
+            return []
         return [
             (
                 int(last_ip_in_prefix - first_ip_in_prefix + 1),
@@ -73,44 +120,64 @@ def add_available_ipaddresses(prefix: netaddr.IPNetwork, ipaddress_list: Iterabl
             )
         ]
 
-    # sort the IP address list
-    if isinstance(ipaddress_list, IPAddressQuerySet):
-        ipaddress_list = ipaddress_list.order_by("host")
-    elif isinstance(ipaddress_list, list):
-        ipaddress_list.sort(key=lambda ip: ip.host)
-
-    # Account for any available IPs before the first real IP
-    if ipaddress_list[0].address.ip.value > first_ip_in_prefix.value:
-        skipped_count = ipaddress_list[0].address.ip.value - first_ip_in_prefix.value
-        first_skipped = f"{first_ip_in_prefix}/{prefix.prefixlen}"
-        output.append((skipped_count, first_skipped))
-
-    # Iterate through existing IPs and annotate free ranges
+    # Combine IPAddress and IPRange objects into one list sorted by address.
+    # When an IPRange and an IPAddress share the same start address, the range
+    # comes first (type_order 0 < 1).
+    merged = []
     for ip in ipaddress_list:
-        if prev_ip:
-            diff = ip.address.ip.value - prev_ip.address.ip.value
-            if diff > 1:
-                first_skipped = f"{prev_ip.address.ip + 1}/{prefix.prefixlen}"
-                output.append((diff - 1, first_skipped))
-        output.append(ip)
-        prev_ip = ip
+        merged.append((ip.address.ip.value, 1, ip))
+    for ip_range in sorted_ranges:
+        merged.append((int(netaddr.IPAddress(ip_range.start_address)), 0, ip_range))
+    merged.sort(key=lambda x: (x[0], x[1]))
 
-    # Include any remaining available IPs
-    if prev_ip.address.ip < last_ip_in_prefix:
-        skipped_count = last_ip_in_prefix.value - prev_ip.address.ip.value
-        first_skipped = f"{prev_ip.address.ip + 1}/{prefix.prefixlen}"
-        output.append((skipped_count, first_skipped))
+    output = []
+    high_water_int = first_ip_in_prefix.value - 1  # the highest address we have already accounted for
+
+    def _emit_available(gap_start_int, gap_end_int):
+        """Record a gap of available addresses between gap_start_int and gap_end_int (inclusive)."""
+        if show_available and gap_start_int <= gap_end_int:
+            count = gap_end_int - gap_start_int + 1
+            output.append((count, f"{netaddr.IPAddress(gap_start_int, version=prefix.version)}/{prefix.prefixlen}"))
+
+    for _, _, obj in merged:
+        if isinstance(obj, IPAddress):
+            ip_int = obj.address.ip.value
+            if ip_int < first_ip_in_prefix.value or ip_int > last_ip_in_prefix.value:
+                continue  # address falls outside the usable range (e.g. network or broadcast)
+            if ip_int > high_water_int + 1:
+                _emit_available(high_water_int + 1, ip_int - 1)  # record the gap before this address
+            output.append(obj)
+            high_water_int = max(high_water_int, ip_int)
+        else:  # IPRange
+            # Trim the range to fit within the usable addresses of the prefix.
+            range_start_int = max(int(netaddr.IPAddress(obj.start_address)), first_ip_in_prefix.value)
+            range_end_int = min(int(netaddr.IPAddress(obj.end_address)), last_ip_in_prefix.value)
+            if range_end_int < range_start_int:
+                continue  # the entire range falls outside the usable addresses
+            if range_start_int > high_water_int + 1:
+                _emit_available(high_water_int + 1, range_start_int - 1)  # record the gap before this range
+            output.append(obj)
+            # TODO: for `is_exclusive=False` ranges should, available IPs inside the span should still be shown?
+            # if so replace this line with:
+            #   high_water_int = max(high_water_int, range_end_int) if obj.is_exclusive else max(high_water_int, range_start_int)
+            high_water_int = max(high_water_int, range_end_int)  # the range covers everything up to its end
+
+    # Record any remaining available addresses after the last item.
+    _emit_available(high_water_int + 1, last_ip_in_prefix.value)
 
     return output
 
 
 def get_add_available_ipaddresses_callback(show_available: bool, parent: Prefix):
     """Conditionally provide a callback for add_available_ipaddresses()."""
-    if show_available:
-        return lambda ip_addresses: add_available_ipaddresses(
-            parent.prefix, ip_addresses, is_pool=(parent.type == PrefixTypeChoices.TYPE_POOL)
-        )
-    return lambda ip_addresses: ip_addresses
+    ip_ranges = list(parent.ip_ranges.all())
+    return lambda ip_addresses: add_available_ipaddresses(
+        parent.prefix,
+        ip_addresses,
+        is_pool=(parent.type == PrefixTypeChoices.TYPE_POOL),
+        ip_ranges=ip_ranges,
+        show_available=show_available,
+    )
 
 
 def add_available_vlans(vlan_group: VLANGroup, vlans: list[VLAN]):

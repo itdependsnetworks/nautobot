@@ -134,7 +134,12 @@ IPADDRESS_LINK = """
 """
 
 IPADDRESS_COPY_LINK = """
-{% if record.present_in_database %}
+{% if record.start_address %}
+    <a href="{{ record.get_absolute_url }}" class="btn btn-xs btn-info">
+        <span class="mdi mdi-arrow-right-bold-outline"></span>
+        IP Range: {{ record.start_address }} &ndash; {{ record.end_address }}
+    </a>
+{% elif record.present_in_database %}
     <span>
         <a href="{{ record.get_absolute_url }}" id="copy_{{record.id}}">
             {{ record.address }}</a>
@@ -190,6 +195,68 @@ VRF_LINK = """
     <a href="{{ object.vrf.get_absolute_url }}">{{ object.vrf }}</a>
 {% else %}
     Global
+{% endif %}
+"""
+
+IPADDRESS_OR_RANGE_ACTIONS = """\
+{% if record.present_in_database %}
+    <div class="dropdown">
+        <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <span class="mdi mdi-dots-vertical" aria-hidden="true"></span>
+            <span class="visually-hidden">Toggle Dropdown</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            {% with request.path|default:"" as request_path %}
+                {% if record.start_address %}
+                    <li>
+                        <a href="{% url 'ipam:iprange_changelog' pk=record.pk %}" class="dropdown-item">
+                            <span class="mdi mdi-history" aria-hidden="true"></span>
+                            Change Log
+                        </a>
+                    </li>
+                    {% if perms.ipam.change_iprange %}
+                        <li>
+                            <a href="{% url 'ipam:iprange_edit' pk=record.pk %}?return_url={{ return_url|default:request_path }}" class="dropdown-item text-warning">
+                                <span class="mdi mdi-pencil" aria-hidden="true"></span>
+                                Edit
+                            </a>
+                        </li>
+                    {% endif %}
+                    {% if perms.ipam.delete_iprange %}
+                        <li>
+                            <a href="{% url 'ipam:iprange_delete' pk=record.pk %}?return_url={{ return_url|default:request_path }}" class="dropdown-item text-danger">
+                                <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
+                                Delete
+                            </a>
+                        </li>
+                    {% endif %}
+                {% else %}
+                    <li>
+                        <a href="{% url 'ipam:ipaddress_changelog' pk=record.pk %}" class="dropdown-item">
+                            <span class="mdi mdi-history" aria-hidden="true"></span>
+                            Change Log
+                        </a>
+                    </li>
+                    {% if perms.ipam.change_ipaddress %}
+                        <li>
+                            <a href="{% url 'ipam:ipaddress_edit' pk=record.pk %}?return_url={{ return_url|default:request_path }}" class="dropdown-item text-warning">
+                                <span class="mdi mdi-pencil" aria-hidden="true"></span>
+                                Edit
+                            </a>
+                        </li>
+                    {% endif %}
+                    {% if perms.ipam.delete_ipaddress %}
+                        <li>
+                            <a href="{% url 'ipam:ipaddress_delete' pk=record.pk %}?return_url={{ return_url|default:request_path }}" class="dropdown-item text-danger">
+                                <span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>
+                                Delete
+                            </a>
+                        </li>
+                    {% endif %}
+                {% endif %}
+            {% endwith %}
+        </ul>
+    </div>
 {% endif %}
 """
 
@@ -557,7 +624,21 @@ class IPAddressTable(StatusTableMixin, RoleTableMixin, BaseTable):
         distinct=True,
         verbose_name="Virtual Machines",
     )
-    actions = ButtonsColumn(IPAddress)
+    actions = tables.TemplateColumn(
+        template_code=IPADDRESS_OR_RANGE_ACTIONS,
+        attrs={
+            "td": {"class": "d-print-none text-end text-nowrap nb-actions nb-w-0"},
+            "th": {"class": "nb-actionable nb-w-0"},
+        },
+        orderable=False,
+        verbose_name="",
+    )
+
+    def render_pk(self, value, record):
+        """Suppress the bulk-select checkbox for non-IPAddress rows (e.g. IPRange or available-IP rows)."""
+        if not isinstance(record, IPAddress):
+            return mark_safe("")
+        return self.columns["pk"].column.render(value=value, bound_column=self.columns["pk"], record=record)
 
     class Meta(BaseTable.Meta):
         model = IPAddress
