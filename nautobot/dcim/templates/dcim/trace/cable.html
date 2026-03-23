@@ -11,6 +11,23 @@
     {% endwith %}
     <div class="nb-cable-info">
         <strong>{{ cable|hyperlinked_object }}</strong><br>
+        {% if cable.breakout_template %}
+            {% if near_end %}
+                {% get_cable_lane_info cable near_end as lane_near %}
+                {% if lane_near and lane_near.connector is not None %}
+                    <small>
+                        <span class="mdi mdi-call-split" title="Breakout: {{ cable.breakout_template }}"></span>
+                        {{ lane_near.cable_end }}{{ lane_near.connector }}
+                        {% if far_end %}
+                            {% get_cable_lane_info cable far_end as lane_far %}
+                            {% if lane_far and lane_far.connector is not None %}
+                                &rarr; {{ lane_far.cable_end }}{{ lane_far.connector }}
+                            {% endif %}
+                        {% endif %}
+                    </small><br />
+                {% endif %}
+            {% endif %}
+        {% endif %}
         {% if cable.type %}
             {{ cable.get_type_display|default:"" }}<br />
         {% endif %}
