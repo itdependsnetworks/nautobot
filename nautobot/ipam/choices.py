@@ -12,6 +12,23 @@ class IPAddressVersionChoices(ChoiceSet):
 
 
 #
+# IP Ranges
+#
+
+
+class IPRangeStatusChoices(ChoiceSet):
+    STATUS_ACTIVE = "active"
+    STATUS_RESERVED = "reserved"
+    STATUS_DEPRECATED = "deprecated"
+
+    CHOICES = (
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_RESERVED, "Reserved"),
+        (STATUS_DEPRECATED, "Deprecated"),
+    )
+
+
+#
 # Prefixes
 #
 

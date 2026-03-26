@@ -1720,7 +1720,7 @@ class IPRange(PrimaryModel):
         ]
 
     def __str__(self):
-        return f"{self.start_address} - {self.end_address}"
+        return f"{self.parent.namespace}: {self.start_address} - {self.end_address}"
 
     natural_key_field_names = ["parent__namespace", "start_address", "end_address"]
 
@@ -1733,12 +1733,13 @@ class IPRange(PrimaryModel):
             return end - start + 1
         return 0
 
-    @property
-    def percent_utilized(self) -> float:
+    def get_percent_utilized(self) -> float:
         """
         Percentage of addresses in the range that have an IPAddress object.
         Returns a float from 0.0 to 100.0. Returns 0.0 for unsaved instances
         that have no start_address/end_address yet.
+
+        Note: This method executes a COUNT query each time it is called.
         """
         if not self.size:
             return 0.0
@@ -1750,50 +1751,76 @@ class IPRange(PrimaryModel):
         ).count()
         return (count / self.size) * 100
 
-    def clean(self):
-        super().clean()
-
+    def _set_ip_version(self):
+        """Derive ip_version from start_address."""
         if self.start_address:
             try:
                 start = netaddr.IPAddress(self.start_address)
                 self.ip_version = start.version
+            except (netaddr.AddrFormatError, TypeError, ValueError):
+                pass  # clean() will raise the proper validation error
+
+    _set_ip_version.alters_data = True
+
+    def save(self, *args, **kwargs):
+        self._set_ip_version()
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        self._set_ip_version()
+
+        errors = {}
+
+        if self.start_address:
+            try:
+                netaddr.IPAddress(self.start_address)
             except (netaddr.AddrFormatError, TypeError, ValueError) as e:
-                raise ValidationError({"start_address": f"Invalid IP address: {e}"})
+                errors["start_address"] = f"Invalid IP address: {e}"
+
+        if self.end_address:
+            try:
+                netaddr.IPAddress(self.end_address)
+            except (netaddr.AddrFormatError, TypeError, ValueError) as e:
+                errors["end_address"] = f"Invalid IP address: {e}"
+
+        # If either address is invalid, bail out before relational checks.
+        if errors:
+            raise ValidationError(errors)
 
         if self.start_address and self.end_address:
-            try:
-                start = netaddr.IPAddress(self.start_address)
-                end = netaddr.IPAddress(self.end_address)
-            except (netaddr.AddrFormatError, TypeError, ValueError) as e:
-                raise ValidationError(f"Invalid IP address: {e}")
+            start = netaddr.IPAddress(self.start_address)
+            end = netaddr.IPAddress(self.end_address)
 
             if start.version != end.version:
-                raise ValidationError({"end_address": "Start and end addresses must be the same IP version."})
+                errors["end_address"] = "Start and end addresses must be the same IP version."
 
             if start > end:
-                raise ValidationError({"end_address": "End address must be greater than or equal to start address."})
+                errors.setdefault("end_address", "End address must be greater than or equal to start address.")
+
+            if errors:
+                raise ValidationError(errors)
 
             if self.parent_id:
                 parent_start = netaddr.IPAddress(self.parent.network)
                 parent_end = netaddr.IPAddress(self.parent.broadcast)
                 if start < parent_start or end > parent_end:
-                    raise ValidationError(
-                        {"__all__": (f"IP Range {self} is not contained within parent prefix {self.parent}.")}
-                    )
+                    errors["__all__"] = f"IP Range {self} is not contained within parent prefix {self.parent}."
 
                 # Check for overlap with other IPRange objects in the same namespace
-                overlapping = IPRange.objects.filter(
-                    parent__namespace=self.parent.namespace,
-                    ip_version=start.version,
-                    start_address__lte=self.end_address,
-                    end_address__gte=self.start_address,
-                ).exclude(pk=self.pk)
-                if overlapping.exists():
-                    other = overlapping.first()
-                    raise ValidationError({"__all__": f"IP Range {self} overlaps with existing range {other}."})
+                if not errors:
+                    overlapping = IPRange.objects.filter(
+                        parent__namespace=self.parent.namespace,
+                        ip_version=start.version,
+                        start_address__lte=self.end_address,
+                        end_address__gte=self.start_address,
+                    ).exclude(pk=self.pk)
+                    if overlapping.exists():
+                        other = overlapping.first()
+                        errors["__all__"] = f"IP Range {self} overlaps with existing range {other}."
 
                 # If exclusive, block creation if any IPAddress objects already exist within the range
-                if self.is_exclusive:
+                if not errors and self.is_exclusive:
                     conflicting_ips = IPAddress.objects.filter(
                         parent__namespace=self.parent.namespace,
                         ip_version=start.version,
@@ -1803,22 +1830,15 @@ class IPRange(PrimaryModel):
                     if conflicting_ips.exists():
                         count = conflicting_ips.count()
                         first = conflicting_ips.first()
-                        raise ValidationError(
-                            {
-                                "is_exclusive": (
-                                    f"Cannot mark this range as exclusive: {count} IP address"
-                                    f"{'es' if count != 1 else ''} already exist within "
-                                    f"{self.start_address}-{self.end_address} "
-                                    f"(e.g. {first.address})."
-                                )
-                            }
+                        errors["is_exclusive"] = (
+                            f"Cannot mark this range as exclusive: {count} IP address"
+                            f"{'es' if count != 1 else ''} already exist within "
+                            f"{self.start_address}-{self.end_address} "
+                            f"(e.g. {first.address})."
                         )
 
-    clean.alters_data = True
-
-    def save(self, *args, **kwargs):
-        self.clean()
-        super().save(*args, **kwargs)
+                if errors:
+                    raise ValidationError(errors)
 
 
 @extras_features("graphql")

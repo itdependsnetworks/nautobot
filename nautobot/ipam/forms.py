@@ -1103,11 +1103,9 @@ class IPRangeFilterForm(
         required=False,
         label="Parent Prefix",
     )
-    ip_version = forms.ChoiceField(
+    ip_version = forms.IntegerField(
         required=False,
-        choices=add_blank_choice(IPAddressVersionChoices),
         label="IP Version",
-        widget=StaticSelect2(),
     )
     count_as_utilized = forms.NullBooleanField(
         required=False,

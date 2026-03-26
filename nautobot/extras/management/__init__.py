@@ -33,6 +33,7 @@ STATUS_CHOICESET_MAP = {
     "dcim.VirtualDeviceContext": dcim_choices.VirtualDeviceContextStatusChoices,
     "extras.ContactAssociation": extras_choices.ContactAssociationStatusChoices,
     "ipam.IPAddress": ipam_choices.IPAddressStatusChoices,
+    "ipam.IPRange": ipam_choices.IPRangeStatusChoices,
     "ipam.Prefix": ipam_choices.PrefixStatusChoices,
     "ipam.VLAN": ipam_choices.VLANStatusChoices,
     "ipam.VRF": ipam_choices.VRFStatusChoices,

@@ -126,7 +126,7 @@ menu_items = (
                     NavMenuItem(
                         link="ipam:vrf_list",
                         name="VRFs",
-                        weight=100,
+                        weight=150,
                         permissions=[
                             "ipam.view_vrf",
                         ],

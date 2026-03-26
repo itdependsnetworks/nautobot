@@ -13,7 +13,7 @@ from nautobot.core.api import (
 from nautobot.dcim.models.locations import Location
 from nautobot.extras.api.mixins import TaggedModelSerializerMixin
 from nautobot.ipam import constants
-from nautobot.ipam.api.fields import IPFieldSerializer
+from nautobot.ipam.api.fields import IPAddressOnlyFieldSerializer, IPFieldSerializer
 from nautobot.ipam.choices import PrefixTypeChoices, ServiceProtocolChoices
 from nautobot.ipam.models import (
     get_default_namespace,
@@ -454,13 +454,15 @@ class IPAddressToInterfaceSerializer(ValidatedModelSerializer):
 
 
 class IPRangeSerializer(NautobotModelSerializer, TaggedModelSerializerMixin):
-    start_address = serializers.CharField()
-    end_address = serializers.CharField()
+    start_address = IPAddressOnlyFieldSerializer()
+    end_address = IPAddressOnlyFieldSerializer()
     size = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = IPRange
         fields = "__all__"
+        extra_fields = ["size"]
+        validators = []
         extra_kwargs = {
             "ip_version": {"read_only": True},
         }

@@ -75,8 +75,7 @@ class AddIPRangeButton(Button):
     def should_render(self, context: Context):
         if not super().should_render(context):
             return False
-        # Show whenever we're in a prefix context (parent object exists)
-        return get_obj_from_context(context) is not None
+        return context.get("first_available_ip") is not None
 
     def get_link(self, context: Context):
         obj = get_obj_from_context(context)

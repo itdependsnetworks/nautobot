@@ -526,6 +526,9 @@ class IPRangeFactory(PrimaryModelFactory):
     between 1 and 10 addresses. is_exclusive defaults to False to avoid conflicting with any
     IPAddress objects that may already exist within the prefix.
 
+    The factory avoids overlap with existing ranges by checking for conflicts and retrying
+    with a different start offset (up to 10 attempts).
+
     Examples:
         Create 10 IP ranges:
 
@@ -534,7 +537,7 @@ class IPRangeFactory(PrimaryModelFactory):
 
     class Meta:
         model = IPRange
-        exclude = ("has_description", "has_role", "has_tenant", "_parent_prefix", "_start_idx")
+        exclude = ("has_description", "has_role", "has_tenant", "_parent_prefix", "_start_idx", "_range_size")
 
     class Params:
         has_description = NautobotBoolIterator()
@@ -546,11 +549,27 @@ class IPRangeFactory(PrimaryModelFactory):
         lambda: Prefix.objects.filter(ip_version=4, prefix_length__lte=28),
         allow_null=False,
     )
-    _start_idx = factory.LazyAttribute(
-        lambda o: (
-            factory.random.randgen.randint(1, max(1, o._parent_prefix.prefix.size - 11)) if o._parent_prefix else 1
-        )
-    )
+    _range_size = factory.LazyAttribute(lambda o: factory.random.randgen.randint(1, 10))
+
+    @factory.lazy_attribute
+    def _start_idx(self):
+        """Pick a random start offset, retrying if it overlaps an existing range."""
+        if not self._parent_prefix:
+            return 1
+        net = netaddr.IPNetwork(str(self._parent_prefix.prefix))
+        max_start = max(1, net.size - self._range_size - 1)
+        for _ in range(10):
+            idx = factory.random.randgen.randint(1, max_start)
+            candidate_start = str(netaddr.IPAddress(net.first + idx))
+            candidate_end = str(netaddr.IPAddress(net.first + idx + self._range_size))
+            overlapping = IPRange.objects.filter(
+                parent__namespace=self._parent_prefix.namespace,
+                start_address__lte=candidate_end,
+                end_address__gte=candidate_start,
+            )
+            if not overlapping.exists():
+                return idx
+        return factory.random.randgen.randint(1, max_start)
 
     parent = factory.LazyAttribute(lambda o: o._parent_prefix)
 
@@ -566,8 +585,7 @@ class IPRangeFactory(PrimaryModelFactory):
         if not self._parent_prefix:
             return None
         net = netaddr.IPNetwork(str(self._parent_prefix.prefix))
-        range_size = factory.random.randgen.randint(1, 10)
-        return str(netaddr.IPAddress(net.first + self._start_idx + range_size))
+        return str(netaddr.IPAddress(net.first + self._start_idx + self._range_size))
 
     description = factory.Maybe("has_description", factory.Faker("text", max_nb_chars=CHARFIELD_MAX_LENGTH), "")
     role = factory.Maybe(

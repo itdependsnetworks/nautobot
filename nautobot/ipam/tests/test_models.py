@@ -2426,7 +2426,7 @@ class TestIPRange(IPRangeTestDataMixin, ModelTestCases.BaseModelTestCase):
             parent=self.prefix,
             status=self.ip_status,
         )
-        self.assertEqual(ip_range.percent_utilized, 0.0)
+        self.assertEqual(ip_range.get_percent_utilized(), 0.0)
 
     def test_percent_utilized_partial(self):
         """Range with some IP addresses shows correct utilization."""
@@ -2441,7 +2441,7 @@ class TestIPRange(IPRangeTestDataMixin, ModelTestCases.BaseModelTestCase):
             parent=self.prefix,
             status=Status.objects.get_for_model(IPAddress).first(),
         )
-        self.assertAlmostEqual(ip_range.percent_utilized, 10.0)
+        self.assertAlmostEqual(ip_range.get_percent_utilized(), 10.0)
 
     def test_percent_utilized_full(self):
         """Range where every address has an IP object shows 100%."""
@@ -2458,7 +2458,7 @@ class TestIPRange(IPRangeTestDataMixin, ModelTestCases.BaseModelTestCase):
                 parent=self.prefix,
                 status=ip_status,
             )
-        self.assertAlmostEqual(ip_range.percent_utilized, 100.0)
+        self.assertAlmostEqual(ip_range.get_percent_utilized(), 100.0)
 
     def test_addresses_outside_parent_prefix_rejected(self):
         """Range addresses that fall outside the parent prefix raise a ValidationError."""

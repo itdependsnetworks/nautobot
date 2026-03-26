@@ -788,21 +788,32 @@ class IPRangeFilterSet(
     q = SearchFilter(
         filter_predicates={
             "description": "icontains",
-            "start_address": "icontains",
-            "end_address": "icontains",
+            "start_address": "istartswith",
+            "end_address": "istartswith",
         },
     )
     parent = PrefixFilter()
+    start_address = MultiValueCharFilter(
+        method="filter_address",
+        label="Start address",
+    )
+    end_address = MultiValueCharFilter(
+        method="filter_address",
+        label="End address",
+    )
     namespace = NaturalKeyOrPKMultipleChoiceFilter(
         queryset=Namespace.objects.all(),
         field_name="parent__namespace",
         to_field_name="name",
         label="Namespace (name or ID)",
     )
-    ip_version = django_filters.NumberFilter()
-    count_as_utilized = django_filters.BooleanFilter()
-    is_exclusive = django_filters.BooleanFilter()
+
+    def filter_address(self, queryset, name, value):
+        try:
+            return queryset.net_in(value)
+        except ValidationError:
+            return queryset.none()
 
     class Meta:
         model = IPRange
-        fields = ["id", "description", "tags"]
+        fields = "__all__"

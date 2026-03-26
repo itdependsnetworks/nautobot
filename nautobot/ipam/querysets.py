@@ -1,3 +1,4 @@
+import logging
 import re
 
 from django.core.exceptions import ValidationError
@@ -7,6 +8,8 @@ import netaddr
 
 from nautobot.core.models.querysets import LocationToLocationsQuerySetMixin, RestrictedQuerySet
 from nautobot.core.utils.data import merge_dicts_without_collision
+
+logger = logging.getLogger(__name__)
 
 
 class RIRQuerySet(RestrictedQuerySet):
@@ -327,8 +330,16 @@ class PrefixQuerySet(LocationToLocationsQuerySetMixin, BaseNetworkQuerySet):
                     protected_objects=err.protected_objects,
                 ) from err
 
-            # IPRange objects with no grandparent cannot be reparented; delete them.
+            # IPRange objects with no grandparent cannot be reparented; cascade-delete them.
+            # Unlike IPAddress (which raises ProtectedError), IPRanges are removed because they
+            # cannot exist without a parent Prefix and there is no grandparent to reparent to.
             if protected_model._meta.model_name == "iprange" and new_parent is None:
+                count = protected_objects.count()
+                logger.warning(
+                    "Deleting %d IPRange object(s) whose parent Prefix %s has no grandparent to reparent to.",
+                    count,
+                    protected_parent,
+                )
                 protected_objects.delete()
                 return super().delete(*args, **kwargs)
 

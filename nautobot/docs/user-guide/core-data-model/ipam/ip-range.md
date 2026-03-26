@@ -56,3 +56,10 @@ When a range has `is_exclusive` enabled:
 - Individual IP Address objects cannot be created at any address within the range. The model's `clean()` method enforces this at the database level.
 - The range cannot be saved with `is_exclusive=True` if IP Address objects already exist within it.
 - The addresses within the range are excluded from the parent prefix's available-IP pool.
+
+### Deletion Behavior
+
+When a parent Prefix is deleted:
+
+- If the prefix has a grandparent (the parent's own parent), any IP Ranges are reparented to the grandparent prefix.
+- If the prefix has **no** grandparent (it is a top-level prefix), any IP Ranges within it are **cascade-deleted** along with the prefix. This differs from IP Address objects, which raise a `ProtectedError` in the same situation. A warning is logged when this occurs.

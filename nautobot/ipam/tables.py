@@ -996,6 +996,7 @@ class InterfaceVLANTable(StatusTableMixin, RoleTableMixin, BaseTable):
 class IPRangeTable(StatusTableMixin, RoleTableMixin, BaseTable):
     pk = ToggleColumn()
     start_address = tables.Column(linkify=True)
+    end_address = tables.Column(linkify=True)
     parent = tables.Column(linkify=True, verbose_name="Parent Prefix")
     size = tables.Column(orderable=False)
     tenant = TenantColumn()
