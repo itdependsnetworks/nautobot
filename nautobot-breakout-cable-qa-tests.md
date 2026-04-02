@@ -87,7 +87,7 @@
 | 7.12 | Row heights consistent | In fan-out, check that cells at the same depth align horizontally. | No misaligned rows between columns. |
 | 7.13 | Clickable links | Click device name and interface name in SVG. | Navigate to correct object detail pages. |
 | 7.14 | Connector labels on fork | Check the fork bar in a fan-out trace. | B1, B2, B3, B4 labels above each leg drop line. |
-| 7.15 | Breakout template name on cable | Check the trunk cable segment in a fan-out. | Shows "Breakout: <template name>" below the cable name. |
+| 7.15 | Breakout template name on cable | Check the trunk cable segment in a fan-out. | Shows "Breakout: $template_name" below the cable name. |
 
 ## 8. Device Interface Table Columns
 
