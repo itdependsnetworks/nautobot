@@ -1,0 +1,1 @@
+Refactored `ConsolePort` and `ConsolePortTemplate` model related UI views and component UI to use `NautobotUIViewSet`.
