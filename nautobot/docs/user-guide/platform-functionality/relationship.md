@@ -66,19 +66,19 @@ For context, here is an image of the entire Relationship:
 
 ![Image of Relationship with json filter](../../img/relationship_w_json_filter_light.png#only-light){: style="width: 50%" .on-glb }
 ![Image of Relationship with json filter](../../img/relationship_w_json_filter_dark.png#only-dark){: style="width: 50%" .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/relationships/cedcf63b-002f-570d-a2f0-4d0550d56e91/`"
+[//]: # (screenshot: url=/extras/relationships/cedcf63b-002f-570d-a2f0-4d0550d56e91/ region=full)
 
 Now, the Device Relationship field will show up on a VLAN with an `wireless` role:
 
 ![Image of Vlan with Device Relationships](../../img/vlan_device_relationship_light.png#only-light){ .on-glb }
 ![Image of Vlan with Device Relationships](../../img/vlan_device_relationship_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/vlans/c91906db-290e-50c8-89ef-5e60d71c1307/`"
+[//]: # (screenshot: url=/ipam/vlans/c91906db-290e-50c8-89ef-5e60d71c1307/ region=full)
 
 The Device Relationship field will _not_ show up on a Vlan with a role `branch_data`:
 
 ![Image of Vlan with no Device Relationship](../../img/no_device_relationship_light.png#only-light){ .on-glb }
 ![Image of Vlan with no Device Relationship](../../img/no_device_relationship_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/vlans/9feba4b3-9fc8-5298-a6c1-8f0f77378f21/`"
+[//]: # (screenshot: url=/ipam/vlans/9feba4b3-9fc8-5298-a6c1-8f0f77378f21/ region=full)
 
 ## Relationship Labels
 

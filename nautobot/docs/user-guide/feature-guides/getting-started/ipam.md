@@ -26,7 +26,7 @@ To create a RIR:
 
 ![Add RIR](../images/getting-started-nautobot-ui/27-add-rir-light.png#only-light){ .on-glb }
 ![Add RIR](../images/getting-started-nautobot-ui/27-add-rir-dark.png#only-dark.png){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/rirs/add/`"
+[//]: # (screenshot: url=/ipam/rirs/add/ region=center-panel)
 
 ## Creating a Prefix
 
@@ -46,7 +46,7 @@ To create a prefix:
 
 ![Add prefix](../images/getting-started-nautobot-ui/30-add-prefix-light.png#only-light){ .on-glb }
 ![Add prefix](../images/getting-started-nautobot-ui/30-add-prefix-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/prefixes/add/`"
+[//]: # (screenshot: url=/ipam/prefixes/add/ region=center-panel)
 
 ## Creating IP Addresses
 
@@ -66,7 +66,7 @@ To create an IP address:
 
 ![Add IP address](../images/getting-started-nautobot-ui/32-add-ip-addr-light.png#only-light){ .on-glb }
 ![Add IP address](../images/getting-started-nautobot-ui/32-add-ip-addr-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/ip-addresses/bulk-add/`"
+[//]: # (screenshot: url=/ipam/ip-addresses/bulk-add/ region=center-panel)
 
 ## Assigning IP Addresses
 

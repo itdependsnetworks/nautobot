@@ -10,13 +10,13 @@ Some examples:
 
 ![DCIM Panel](../../media/development/homepage_dcim_panel_light.png#only-light "DCIM Panel"){ .on-glb }
 ![DCIM Panel](../../media/development/homepage_dcim_panel_dark.png#only-dark "DCIM Panel"){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/`"
+[//]: # (screenshot: url=/ region=full)
 
 This is a single `HomePagePanel` (defined in `nautobot/dcim/homepage.py`) containing seven `HomePageItem` and one `HomePageGroup` (the `Connections` group, which in turn contains four more `HomePageItem`). Using these objects together allows you to create panels that match the visual style of most other panels on the Nautobot home page.
 
 ![Changelog Panel](../../media/development/homepage_changelog_panel_light.png#only-light "Changelog Panel"){ .on-glb }
 ![Changelog Panel](../../media/development/homepage_changelog_panel_dark.png#only-dark "Changelog Panel"){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/`"
+[//]: # (screenshot: url=/ region=full)
 
 This is a `HomePagePanel` (defined in `nautobot/extras/homepage.py`) that uses a custom template to render content that doesn't fit into the `HomePageGroup`/`HomePageItem` pattern.
 

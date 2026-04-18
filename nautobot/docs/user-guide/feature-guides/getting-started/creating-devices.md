@@ -36,7 +36,7 @@ To create a new Device Role:
 
 ![Create a device role](../images/getting-started-nautobot-ui/3-create-role-light.png#only-light){ .on-glb }
 ![Create a device role](../images/getting-started-nautobot-ui/3-create-role-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/roles/add/`"
+[//]: # (screenshot: url=/extras/roles/add/ region=center-panel)
 
 ## Creating a Manufacturer
 
@@ -56,7 +56,7 @@ To create a new Manufacturer:
 
 ![Create a manufacturer](../images/getting-started-nautobot-ui/2-create-manufacturer-light.png#only-light){ .on-glb }
 ![Create a manufacturer](../images/getting-started-nautobot-ui/2-create-manufacturer-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/manufacturers/add/`"
+[//]: # (screenshot: url=/dcim/manufacturers/add/ region=center-panel)
 
 ## Creating a Device Type
 
@@ -79,7 +79,7 @@ To create a new Device Type:
 
 ![Create a device type](../images/getting-started-nautobot-ui/4-create-device-type-light.png#only-light){ .on-glb }
 ![Create a device type](../images/getting-started-nautobot-ui/4-create-device-type-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/device-types/add/`"
+[//]: # (screenshot: url=/dcim/device-types/add/ region=center-panel)
 
 ## Creating a Location Type
 
@@ -100,7 +100,7 @@ To create a new Location Type:
 
 ![Create a location type](../images/getting-started-nautobot-ui/1-create-location-type-light.png#only-light){ .on-glb }
 ![Create a location type](../images/getting-started-nautobot-ui/1-create-location-type-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/location-types/add/`"
+[//]: # (screenshot: url=/dcim/location-types/add/ region=center-panel)
 
 ## Creating a Location
 
@@ -124,7 +124,7 @@ To create a new Location:
 
 ![Create a location](../images/getting-started-nautobot-ui/6-create-location-light.png#only-light){ .on-glb }
 ![Create a location](../images/getting-started-nautobot-ui/6-create-location-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/add/`"
+[//]: # (screenshot: url=/dcim/locations/add/ region=center-panel)
 
 ## Creating a Device
 
@@ -143,4 +143,4 @@ To create a new Device:
 
 ![Create a device](../images/getting-started-nautobot-ui/5-create-device-light.png#only-light){ .on-glb }
 ![Create a device](../images/getting-started-nautobot-ui/5-create-device-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/devices/add/`"
+[//]: # (screenshot: url=/dcim/devices/add/ region=center-panel)

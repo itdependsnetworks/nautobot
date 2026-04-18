@@ -113,19 +113,19 @@ Nautobot has a thriving ecosystem of **Apps**, developed as separate projects, f
 
 - ![Main Page](media/ss_main_page_light.png#only-light){ .on-glb }
   ![Main Page](media/ss_main_page_dark.png#only-dark){ .on-glb }
-  [//]: # "`https://next.demo.nautobot.com/`"
+  [//]: # (screenshot: url=/ region=full height=700)
 
 - ![Config Contexts](media/ss_config_contexts_light.png#only-light){ .on-glb }
   ![Config Contexts](media/ss_config_contexts_dark.png#only-dark){ .on-glb }
-  [//]: # "`https://next.demo.nautobot.com/extras/config-contexts/5170335b-785e-476a-a495-1a6cec1571d1/`"
+  [//]: # (screenshot: url=/extras/config-contexts/5170335b-785e-476a-a495-1a6cec1571d1/ region=full)
 
 - ![Prefix Hierarchy](media/ss_prefix_hierarchy_light.png#only-light){ .on-glb }
   ![Prefix Hierarchy](media/ss_prefix_hierarchy_dark.png#only-dark){ .on-glb }
-  [//]: # "`https://next.demo.nautobot.com/ipam/prefixes/`"
+  [//]: # (screenshot: url=/ipam/prefixes/ region=full crop_bottom='#object_list_form tbody tr:nth-child(7)')
 
 - ![GraphQL API](media/ss_graphiql_light.png#only-light){ .on-glb }
   ![GraphQL API](media/ss_graphiql_dark.png#only-dark){ .on-glb }
-  [//]: # "`https://next.demo.nautobot.com/graphql/?id=d51955b1-caa3-428c-8ea4-5dfd17887821`"
+  [//]: # (screenshot: url=/graphql/?id=d51955b1-caa3-428c-8ea4-5dfd17887821 region=full)
 
 </div>
 
@@ -136,11 +136,11 @@ Nautobot has a thriving ecosystem of **Apps**, developed as separate projects, f
 
 - ![Golden Config App](media/ss_app_golden_config_light.png#only-light){ .on-glb }
   ![Golden Config App](media/ss_app_golden_config_dark.png#only-dark){ .on-glb }
-  [//]: # "`https://next.demo.nautobot.com/plugins/golden-config/config-compliance/`"
+  [//]: # (screenshot: url=/plugins/golden-config/config-compliance/ region=full)
 
 - ![Golden Config App - Report](media/ss_app_golden_config_report_light.png#only-light){ .on-glb }
   ![Golden Config App - Report](media/ss_app_golden_config_report_dark.png#only-dark){ .on-glb }
-  [//]: # "`https://next.demo.nautobot.com/plugins/golden-config/config-compliance/overview/`"
+  [//]: # (screenshot: url=/plugins/golden-config/config-compliance/overview/ region=full)
 
 - ![ChatOps App](media/ss_app_chatops.png){ .on-glb }
 

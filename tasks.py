@@ -1005,6 +1005,141 @@ def compress_images(context, path=None, fix=False):
         raise Exit(f"Found {unoptimized} image files that are not optimized", code=1)
 
 
+@task(
+    help={
+        "base_url": "Nautobot instance URL (default: http://nautobot:8080 or NAUTOBOT_SCREENSHOT_BASE_URL env var)",
+        "path": "Markdown file or directory to scan (repeatable, default: nautobot/docs)",
+        "username": "Login username (default: admin)",
+        "password": "Login password (default: admin)",
+        "selenium_url": "Selenium WebDriver hub URL (default: http://selenium:4444/wd/hub or NAUTOBOT_SELENIUM_URL env var)",
+        "dry_run": "Parse and report what would be captured without actually capturing",
+        "compress": "Run compress-images on output directories after capture (default: True)",
+        "stamp_media": "Add a red triangle to non-automated media images so they stand out in diffs",
+        "media_only": "Only list or stamp non-automated (media:) items, skip screenshot capture",
+        "media_type": "Filter media items by type (e.g., unknown, manual, diagram). Use with --media-only",
+        "migrate": "Convert old-style URL comments to new (screenshot:) syntax",
+        "report": "Compare current vs last-committed image dimensions, sorted by largest change",
+        "report_threshold": "Minimum percent change to show in report (default: 10)",
+        "review": "Numbered checklist in git-diff order for side-by-side review",
+        "name": "Only capture screenshots matching this filename (repeatable, partial match). E.g., --name ss_circuit_button --name ss_contact_forms",
+    },
+    iterable=["path", "name"],
+)
+def capture_screenshots(
+    context,
+    base_url=None,
+    path=None,
+    username="admin",
+    password="admin",
+    selenium_url=None,
+    dry_run=False,
+    compress=True,
+    stamp_media=False,
+    media_only=False,
+    media_type=None,
+    migrate=False,
+    report=False,
+    report_threshold=10,
+    review=False,
+    name=None,
+):
+    """Capture documentation screenshots from (screenshot: ...) comments in markdown files."""
+    from nautobot.docs._screenshots.capture import (
+        DEFAULT_BASE_URL,
+        DEFAULT_SELENIUM_URL,
+        filter_specs_by_name,
+        find_all_specs,
+        migrate_old_comments,
+        print_dry_run,
+        print_media_summary,
+        print_report,
+        print_review_list,
+        run_capture,
+        stamp_media_specs,
+    )
+
+    if base_url is None:
+        base_url = DEFAULT_BASE_URL
+    if selenium_url is None:
+        selenium_url = DEFAULT_SELENIUM_URL
+    if not path:
+        path = ["nautobot/docs"]
+
+    # --migrate: convert old URL comments to new syntax, then exit
+    if migrate:
+        print("Previewing migration (dry run):" if dry_run else "Migrating old URL comments...")
+        count = migrate_old_comments(path, dry_run=dry_run)
+        if dry_run:
+            print(f"\n{count} comment(s) would be migrated. Run without --dry-run to apply.")
+        else:
+            print(f"\n{count} comment(s) migrated.")
+        return
+
+    screenshot_specs, media_specs = find_all_specs(path)
+
+    # --name: filter to only specs matching the given filenames
+    if name:
+        screenshot_specs = filter_specs_by_name(screenshot_specs, name)
+
+    # --report: compare current vs committed dimensions, then exit
+    if report:
+        print_report(screenshot_specs, threshold=report_threshold)
+        return
+
+    # --review: numbered checklist in git-diff order
+    if review:
+        print_review_list(screenshot_specs)
+        return
+
+    # Filter media by type if requested
+    if media_type:
+        media_specs = [s for s in media_specs if s["type"] == media_type]
+
+    # --media-only: just list or stamp non-automated items
+    if media_only:
+        if not media_specs:
+            filter_msg = f" of type '{media_type}'" if media_type else ""
+            print(f"No media items{filter_msg} found.")
+            return
+        print_media_summary(media_specs)
+        if stamp_media:
+            print("Stamping media images...")
+            stamped, errors = stamp_media_specs(media_specs)
+            print(f"\nDone: {stamped} images stamped, {errors} errors.")
+        return
+
+    if not screenshot_specs:
+        print("No screenshot specs found.")
+        if media_specs:
+            print_media_summary(media_specs)
+        return
+
+    if dry_run:
+        print_dry_run(screenshot_specs, media_specs)
+        return
+
+    captured, errors = run_capture(screenshot_specs, base_url, username, password, selenium_url)
+
+    # Stamp non-automated media if requested
+    if stamp_media and media_specs:
+        print(f"\nStamping {len(media_specs)} non-automated media item(s)...")
+        stamped, stamp_errors = stamp_media_specs(media_specs)
+        errors += stamp_errors
+
+    # Run compression on directories that had screenshots written
+    if compress and captured:
+        affected_dirs = {os.path.dirname(f) for f in captured}
+        for d in sorted(affected_dirs):
+            print(f"\nCompressing images in {d}...")
+            compress_images(context, path=[d], fix=True)
+
+    print(f"\nDone: {len(captured)} screenshots captured, {errors} errors.")
+    if media_specs:
+        print(f"  ({len(media_specs)} non-automated media items -- use --media-only to list)")
+    if errors:
+        raise Exit(f"Encountered {errors} error(s) during capture", code=1)
+
+
 @task
 def hadolint(context):
     """Check Dockerfile for hadolint compliance and other style issues."""

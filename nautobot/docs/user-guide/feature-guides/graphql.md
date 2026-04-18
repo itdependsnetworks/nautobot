@@ -117,7 +117,7 @@ In Nautobot, there is a link to the GraphQL web interface at the bottom right-ha
 
 ![GraphiQL Interface](./images/graphql/00-graphiql-light.png#only-light){ .on-glb }
 ![GraphiQL Interface](./images/graphql/00-graphiql_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 ### Documentation Explorer
 
@@ -125,19 +125,19 @@ If you're new to GraphQL, take a little bit of time to explore the *Documentatio
 
 ![Documentation Explorer](./images/graphql/01-graphiql-explorer-light.png#only-light){ .on-glb }
 ![Documentation Explorer](./images/graphql/01-graphiql-explorer-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 In the *Documentation Explorer*, search for `devices`. The results are all of the models that utilize the `devices` model.
 
 ![Documentation Explorer: Devices](./images/graphql/02-graphiql-explorer-device-query-light.png#only-light){ .on-glb }
 ![Documentation Explorer: Devices](./images/graphql/02-graphiql-explorer-device-query-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 From the `devices` query, select `devices` from `Query.devices`. This will display all of the potential query fields from devices.
 
 ![Documentation Explorer: Device Attributes](./images/graphql/03-graphiql-explorer-device-attributes-light.png#only-light){ on-glb }
 ![Documentation Explorer: Device Attributes](./images/graphql/03-graphiql-explorer-device-attributes-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 ### First Query
 
@@ -158,13 +158,13 @@ This query will retrieve a list of all devices by their hostname.
 ??? info "View GraphQL Query Results"
     ![GraphQL: Query Results](./images/graphql/04-graphql-query-01-light.png#only-light){ .on-glb }
     ![GraphQL: Query Results](./images/graphql/04-graphql-query-01-dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/graphql/`"
+    [//]: # (screenshot: url=/graphql/ region=full)
 
 Now, let's modify the query to provide interface names for each device. We can do that by modifying the existing query to add `interfaces { name }` as a sub-query of `devices`. GraphiQL makes this process a bit easier, because it has syntax completion built in.
 
 ![GraphQL: Autocompletion](./images/graphql/05-graphiql-autocomplete-light.png#only-light){ .on-glb }
 ![GraphQL: Autocompletion](./images/graphql/05-graphiql-autocomplete-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 ```graphql
 query {
@@ -182,7 +182,7 @@ The result is a list of all the devices by their hostname and associated interfa
 ??? info "View GraphQL Query Results"
     ![GraphQL: Query Results](./images/graphql/06-graphql-query-02-light.png#only-light){ .on-glb }
     ![GraphQL: Query Results](./images/graphql/06-graphql-query-02-dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/graphql/`"
+    [//]: # (screenshot: url=/graphql/ region=full)
 
 We can continue iterating on the query until we get exactly what we want from the query. For example, if I wanted to iterate on the previous query to not only display the interfaces of the devices, but also display the interface description, the IP Addresses associated with the interface, and whether or not the interface was a dedicated management interface; I would structure the query like:
 
@@ -207,7 +207,7 @@ The results of the query look like:
 ??? info "View GraphQL Query Results"
     ![GraphQL: Query Results](./images/graphql/07-graphql-query-03-light.png#only-light){ .on-glb }
     ![GraphQL: Query Results](./images/graphql/07-graphql-query-03-dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/graphql/`"
+    [//]: # (screenshot: url=/graphql/ region=full)
 
 ### Filtering Queries
 
@@ -218,7 +218,7 @@ As an example. We can query devices by their location. This is done by adding `(
 ??? info "View GraphQL Query Results"
     ![GraphQL: Query Results](./images/graphql/08-graphql-query-04-light.png#only-light){ .on-glb }
     ![GraphQL: Query Results](./images/graphql/08-graphql-query-04-dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/graphql/`"
+    [//]: # (screenshot: url=/graphql/ region=full)
 
 GraphQL also allows you to filter by multiple attributes at once if desired. You can use the *Documentation Explorer* to assist you in finding criteria attributes to filter on. In this example, I add the `role` attribute in addition to `location`.
 
@@ -233,7 +233,7 @@ query {
 ??? info "View GraphQL Query Results"
     ![GraphQL: Query Results](./images/graphql/09-graphql-query-05-light.png#only-light){ .on-glb }
     ![GraphQL: Query Results](./images/graphql/09-graphql-query-05-dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/graphql/`"
+    [//]: # (screenshot: url=/graphql/ region=full)
 
 You can also filter at deeper levels of the query. On many to one relationships you can filter the results based on an attribute of the field. Any attribute that relates to a GraphQLType can be filtered.
 
@@ -274,7 +274,7 @@ You can also paginate the results returned to you when the data set gets larger.
 ??? info "View GraphQL Query Results"
     ![GraphQL: Query Results](./images/graphql/11-graphql-query-06-light.png#only-light){ .on-glb }
     ![GraphQL: Query Results](./images/graphql/11-graphql-query-06-dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/graphql/`"
+    [//]: # (screenshot: url=/graphql/ region=full)
 
 ## Using the GraphQL API in Nautobot
 
@@ -282,7 +282,7 @@ Now that we've explored how to use the GraphiQL interface to help us create Grap
 
 ![GraphQL: Swagger](./images/graphql/10-graphql-swagger-light.png#only-light){ .on-glb }
 ![GraphQL: Swagger](./images/graphql/10-graphql-swagger-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/api/docs/`"
+[//]: # (screenshot: url=/api/docs/ region=full)
 
 From the [Nautobot Swagger documentation](https://demo.nautobot.com/api/docs/), we can see that the API calls to `/api/graphql` require a HTTP POST method. In the HTTP POST, the `query` field is required, as it is where we specify the GraphQL query. The `variables` field is optional; it's where we can assign values to any variables included in the query, if we choose to do so.
 

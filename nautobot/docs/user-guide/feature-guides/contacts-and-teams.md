@@ -6,23 +6,23 @@ In order to assign contacts/teams to a particular object, we first need to defin
 
 ![Circuit](./images/contact-and-team/ss_circuit_light.png#only-light){ .on-glb }
 ![Circuit](./images/contact-and-team/ss_circuit_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/`"
+[//]: # (screenshot: url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/ region=full crop_bottom=#termination-z-side)
 
 At the top right corner, you should see a group of buttons and one of them should say **Add Contact**.
 ![Circuit Add Contact Button](./images/contact-and-team/ss_circuit_button_light.png#only-light){ .on-glb }
 ![Circuit Add Contact Button](./images/contact-and-team/ss_circuit_button_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/?tab=contacts`"
+[//]: # (screenshot: url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/?tab=contacts region=full crop_bottom='#contacts .card-footer' highlight='#contacts .card-footer .btn-primary')
 Click on the **Add Contact** button and it will redirect you to a page with forms on three separate tabs.
 ![Contact Form](./images/contact-and-team/ss_contact_forms_light.png#only-light){ .on-glb }
 ![Contact Form](./images/contact-and-team/ss_contact_forms_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel height=750)
 
 1. The first tab contains a form that allows the user to create a **new** contact and associate it with the object.
 2. The second tab contains a form that allows the user to create a **new** team and associate it with the object.
 3. The third tab contains a form that allows the user to select an **existing** contact or team and associate it with the object.
 ![Contact Form Tabs](./images/contact-and-team/ss_contact_form_tabs_light.png#only-light){ .on-glb }
 ![Contact Form Tabs](./images/contact-and-team/ss_contact_form_tabs_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel crop_bottom=.nav-tabs)
 
 ### Assign a New Contact/Team
 
@@ -31,19 +31,19 @@ Which form to use depends on the use case but in this example, we will use the f
 1. We first fill out the contact information.
 ![Contact Info](./images/contact-and-team/ss_new_contact_info_light.png#only-light){ .on-glb }
 ![Contact Info](./images/contact-and-team/ss_new_contact_info_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel crop_bottom='.card:nth-of-type(1)')
 
 2. Then we fill out the information needed for the assignment of this contact to the object.
 ![Contact Association Info](./images/contact-and-team/ss_new_contact_association_info_light.png#only-light){ .on-glb }
 ![Contact Association Info](./images/contact-and-team/ss_new_contact_association_info_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/add-new-contact/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel crop_top='.card:nth-of-type(2)' crop_bottom='.card:nth-of-type(2)')
 3. Click **Create** at the bottom of the page.
 4. It will redirect us to the detail view of the circuit.
 5. We can click on the **Contacts** tab that displays a table of contacts and teams that are associated with this circuit. Our New Contact should be in the table.
 
 ![Table with New Contact](./images/contact-and-team/ss_new_contact_table_light.png#only-light){ .on-glb }
 ![Table with New Contact](./images/contact-and-team/ss_new_contact_table_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/?tab=contacts`"
+[//]: # (screenshot: url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/?tab=contacts region=full crop_bottom='#contacts .card-footer')
 
 ### Assign an Existing Contact/Team
 
@@ -54,18 +54,18 @@ In this example, we will use the third form which links an existing contact to t
 3. Select the third tab **Assign Contact/Team**.
 ![Existing Contact Form](./images/contact-and-team/ss_existing_contact_form_light.png#only-light){ .on-glb }
 ![Existing Contact Form](./images/contact-and-team/ss_existing_contact_form_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/assign-contact-team/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/assign-contact-team/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel height=750)
 4. Select the existing contact to link to the object. (Notice that an existing team dropdown is no longer enabled because those two form fields are mutually exclusive)
 
 ![Existing Contact Selected](./images/contact-and-team/ss_existing_contact_selected_light.png#only-light){ .on-glb }
 ![Existing Contact Selected](./images/contact-and-team/ss_existing_contact_selected_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/assign-contact-team/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/assign-contact-team/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel height=750)
 5. Select the desired role and status and click **Create**.
 ![Existing Contact Association](./images/contact-and-team/ss_existing_contact_association_light.png#only-light){ .on-glb }
 ![Existing Contact Association](./images/contact-and-team/ss_existing_contact_association_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/extras/contact-associations/assign-contact-team/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1`"
+[//]: # (screenshot: url=/extras/contact-associations/assign-contact-team/?return_url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/%3Ftab%3Dcontacts&associated_object_id=957c7d20-4b81-5902-8fc8-78ca885069e7&associated_object_type=1 region=center-panel height=750)
 6. The page should redirect us to the detail view of the circuit.
 7. We can click on the **Contacts** tab that displays a table of contacts and teams that are associated with this circuit. Both our Existing Contact and New Contact should in the table.
 ![Table with New Contact and Existing Contact](./images/contact-and-team/ss_existing_contact_table_light.png#only-light){ .on-glb }
 ![Table with New Contact and Existing Contact](./images/contact-and-team/ss_existing_contact_table_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/?tab=contacts`"
+[//]: # (screenshot: url=/circuits/circuits/957c7d20-4b81-5902-8fc8-78ca885069e7/?tab=contacts region=full crop_bottom='#contacts .card-footer')

@@ -43,7 +43,7 @@ To create a Location Type:
 
 ![Location Type page](../images/getting-started-nautobot-ui/7-location-type-page-light.png#only-light){ .on-glb }
 ![Location Type page](../images/getting-started-nautobot-ui/7-location-type-page-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/location-types/`"
+[//]: # (screenshot: url=/dcim/location-types/ region=full)
 
 The screenshots below show the creation of each Location Type.
 
@@ -73,7 +73,7 @@ Site:
 
 ![Create location type](../images/getting-started-nautobot-ui/1-create-location-type-light.png#only-light){ .on-glb }
 ![Create location type](../images/getting-started-nautobot-ui/1-create-location-type-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/location-types/add/`"
+[//]: # (screenshot: url=/dcim/location-types/add/ region=center-panel)
 
 To create a Location of a certain Location Type:
 
@@ -84,7 +84,7 @@ To create a Location of a certain Location Type:
 
 ![Location page](../images/getting-started-nautobot-ui/8-location-page-light.png#only-light){ .on-glb }
 ![Location page](../images/getting-started-nautobot-ui/8-location-page-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 The screenshots below show the creation of each Location.
 
@@ -122,4 +122,4 @@ Vancouver 1:
 
 ![Create location](../images/getting-started-nautobot-ui/6-create-location-light.png#only-light){ .on-glb }
 ![Create location](../images/getting-started-nautobot-ui/6-create-location-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/add/`"
+[//]: # (screenshot: url=/dcim/locations/add/ region=center-panel)

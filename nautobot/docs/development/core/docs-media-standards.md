@@ -34,7 +34,7 @@ Screenshots are essential for demonstrating product functionality. Follow these 
     ```markdown
     ![Filter Button](../../feature-guides/images/saved-views/filter-button_light.png#only-light){ .on-glb }
     ![Filter Button](../../feature-guides/images/saved-views/filter-button_dark.png#only-dark){ .on-glb }
-    [//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+    [//]: # (screenshot: url=/dcim/locations/ region=full)
     ```
 
 - To highlight specific areas in a screenshot, use a red line with a thickness of 3 pixels.

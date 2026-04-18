@@ -8,7 +8,7 @@ Request profiling may be enabled by individual users in their profile within the
 
 ![user advanced settings](../../../media/user-guide/administration/guides/request-profiling/advanced-settings-light.png#only-light){ .on-glb }
 ![user advanced settings](../../../media/user-guide/administration/guides/request-profiling/advanced-settings-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/users/advanced-settings/`"
+[//]: # (screenshot: url=/users/advanced-settings/ region=full)
 
 Once a user enables request profiling, all subsequent HTTP requests made by that specific user to the system will be logged by `django-silk`. This setting will persist until the user either logs out or disables the setting in their profile.
 
@@ -24,7 +24,7 @@ Nautobot administrators with super-user permissions can access the `django-silk`
 
 ![silk ui](../../../media/user-guide/administration/guides/request-profiling/silk-ui.png#only-light){ .on-glb }
 ![silk ui](../../../media/user-guide/administration/guides/request-profiling/silk-ui.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/silk/`"
+[//]: # (screenshot: url=/silk/ region=full)
 
 From there, administrators can view details of individual requests, including timing, SQL queries, and cProfile artifacts.
 

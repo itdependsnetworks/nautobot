@@ -20,7 +20,7 @@ Supported rule types include:
 
 ![Min/Max Rules List](../../media/data-validation-engine/ss_min-max-rules-list_light.png#only-light){ .on-glb }
 ![Min/Max Rules List](../../media/data-validation-engine/ss_min-max-rules-list_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/min-max-rules/`"
+[//]: # (screenshot: url=/data-validation/min-max-rules/ region=full)
 
 Each rule is defined with these fields:
 
@@ -34,19 +34,19 @@ Each rule is defined with these fields:
 
 ![Min/Max Rules Edit](../../media/data-validation-engine/ss_min-max-rules-edit_light.png#only-light){ .on-glb }
 ![Min/Max Rules Edit](../../media/data-validation-engine/ss_min-max-rules-edit_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/min-max-rules/57f06495-503e-5202-8ce3-ccba5acc8ecc/edit/`"
+[//]: # (screenshot: url=/data-validation/min-max-rules/57f06495-503e-5202-8ce3-ccba5acc8ecc/edit/ region=center-panel)
 
 In this example, a max value for VLAN IDs has been configured, preventing VLANs greater than 3999 from being created.
 
 ![Min/Max Rules Enforcement](../../media/data-validation-engine/ss_min-max-rules-enforcement_light.png#only-light){ .on-glb }
 ![Min/Max Rules Enforcement](../../media/data-validation-engine/ss_min-max-rules-enforcement_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/vlans/add/`"
+[//]: # (screenshot: url=/ipam/vlans/add/ region=center-panel)
 
 ### Regular Expression Rules
 
 ![Regex Rules List](../../media/data-validation-engine/ss_regex-rules-list_light.png#only-light){ .on-glb }
 ![Regex Rules List](../../media/data-validation-engine/ss_regex-rules-list_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/regex-rules/`"
+[//]: # (screenshot: url=/data-validation/regex-rules/ region=full)
 
 Each rule is defined with these fields:
 
@@ -60,13 +60,13 @@ Each rule is defined with these fields:
 
 ![Regex Rules Edit](../../media/data-validation-engine/ss_regex-rules-edit_light.png#only-light){ .on-glb }
 ![Regex Rules Edit](../../media/data-validation-engine/ss_regex-rules-edit_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/regex-rules/a5fbe536-92c1-4ea2-9634-0fb08f081532/edit/`"
+[//]: # (screenshot: url=/data-validation/regex-rules/a5fbe536-92c1-4ea2-9634-0fb08f081532/edit/ region=center-panel)
 
 In this example, a device hostname validation rule has been created and prevents device records from being created or updated that do not conform to the naming standard.
 
 ![Regex Rules Enforcement](../../media/data-validation-engine/ss_regex-rules-enforcement_light.png#only-light){ .on-glb }
 ![Regex Rules Enforcement](../../media/data-validation-engine/ss_regex-rules-enforcement_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/devices/add/`"
+[//]: # (screenshot: url=/dcim/devices/add/ region=center-panel)
 
 Regex rules may also support complex Jinja2 rendering called context processing which allows for the regular expression itself to by dynamically generated based on the context of the data it is validating.
 
@@ -74,7 +74,7 @@ In this example the name of a device must start with the first three characters 
 
 ![Regex Rules Jinja2 Context Processing](../../media/data-validation-engine/ss_regex-rules-jinja2-context-processing_light.png#only-light){ .on-glb }
 ![Regex Rules Jinja2 Context Processing](../../media/data-validation-engine/ss_regex-rules-jinja2-context-processing_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/regex-rules/a5fbe536-92c1-4ea2-9634-0fb08f081532/`"
+[//]: # (screenshot: url=/data-validation/regex-rules/a5fbe536-92c1-4ea2-9634-0fb08f081532/ region=full)
 
 !!! warning
     If there is an exception while rendering the Jinja2 template or the resulting regular expression string is invalid, data validation against the rule will fail and users will be instructed to either fix the rule or disable it before the data may be saved.
@@ -83,7 +83,7 @@ In this example the name of a device must start with the first three characters 
 
 ![Required List](../../media/data-validation-engine/ss_required-rules-list_light.png#only-light){ .on-glb }
 ![Required List](../../media/data-validation-engine/ss_required-rules-list_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/regex-rules/`"
+[//]: # (screenshot: url=/data-validation/regex-rules/ region=full)
 
 Each rule is defined with these fields:
 
@@ -95,19 +95,19 @@ Each rule is defined with these fields:
 
 ![Required Rules Edit](../../media/data-validation-engine/ss_required-rules-edit_light.png#only-light){ .on-glb }
 ![Required Rules Edit](../../media/data-validation-engine/ss_required-rules-edit_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/regex-rules/783fbab7-8b2d-40be-8649-621c025d2e42/edit/`"
+[//]: # (screenshot: url=/data-validation/regex-rules/783fbab7-8b2d-40be-8649-621c025d2e42/edit/ region=center-panel)
 
 In this example, a rule is enforcing that location objects must always have a description populated.
 
 ![Required Rules Enforcement](../../media/data-validation-engine/ss_required-rules-enforcement_light.png#only-light){ .on-glb }
 ![Required Rules Enforcement](../../media/data-validation-engine/ss_required-rules-enforcement_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/add/`"
+[//]: # (screenshot: url=/dcim/locations/add/ region=center-panel)
 
 ### Unique Rules
 
 ![Unique List](../../media/data-validation-engine/ss_unique-rules-list_light.png#only-light){ .on-glb }
 ![Unique List](../../media/data-validation-engine/ss_unique-rules-list_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/unique-rules/`"
+[//]: # (screenshot: url=/data-validation/unique-rules/ region=full)
 
 Each rule is defined with these fields:
 
@@ -120,10 +120,10 @@ Each rule is defined with these fields:
 
 ![Unique Rules Edit](../../media/data-validation-engine/ss_unique-rules-edit_light.png#only-light){ .on-glb }
 ![Unique Rules Edit](../../media/data-validation-engine/ss_unique-rules-edit_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/data-validation/unique-rules/add/`"
+[//]: # (screenshot: url=/data-validation/unique-rules/add/ region=center-panel)
 
 In this example, the rule enforces that the assigned ASN for a location is unique across all other locations.
 
 ![Unique Rules Enforcement](../../media/data-validation-engine/ss_unique-rules-enforcement_light.png#only-light){ .on-glb }
 ![Unique Rules Enforcement](../../media/data-validation-engine/ss_unique-rules-enforcement_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/add/`"
+[//]: # (screenshot: url=/dcim/locations/add/ region=center-panel)

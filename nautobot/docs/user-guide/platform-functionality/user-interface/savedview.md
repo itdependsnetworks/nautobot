@@ -61,27 +61,27 @@ Note that there is a "Saved Views" icon on the right hand side.
 
 ![Location List View](../../feature-guides/images/saved-views/default-location-list-view_light.png#only-light){ .on-glb }
 ![Location List View](../../feature-guides/images/saved-views/default-location-list-view_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 Configure the list view to your liking by clicking on the "Filter" and/or "Configure" buttons on the right hand side. You can also change the pagination from the dropdown on the bottom right side of the table and sort by a sortable column by clicking on the column header.
 
 ![Filter Button](../../feature-guides/images/saved-views/filter-button_light.png#only-light){ .on-glb }
 ![Filter Button](../../feature-guides/images/saved-views/filter-button_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 ![Applying Filters to Location List View](../../feature-guides/images/saved-views/filter-application-to-locations_light.png#only-light){ .on-glb }
 ![Applying Filters to Location List View](../../feature-guides/images/saved-views/filter-application-to-locations_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 ![Configure Button](../../feature-guides/images/saved-views/config-table-columns-to-locations_light.png#only-light){ .on-glb }
 ![Configure Button](../../feature-guides/images/saved-views/config-table-columns-to-locations_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 Once you are satisfied with the current list view configurations, click on the "Saved Views" icon. There will be a "Actions" named "Save As New".
 
 ![Save As New View](../../feature-guides/images/saved-views/save-as-new-view-drop-down_light.png#only-light){ .on-glb }
 ![Save As New View](../../feature-guides/images/saved-views/save-as-new-view-drop-down_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 Click the "Save As New" option, a modal should appear to prompt you to give a name to your new Saved View and decide whether to make this Saved View available to other users.
 
@@ -89,7 +89,7 @@ In this example, we will name this new Saved View "Branch Active Location List V
 
 ![Saved View Modal](../../feature-guides/images/saved-views/save-view-modal_light.png#only-light){ .on-glb }
 ![Saved View Modal](../../feature-guides/images/saved-views/save-view-modal_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/locations/`"
+[//]: # (screenshot: url=/dcim/locations/ region=full)
 
 Click the "Save" button on the modal and the browser should take you to the new Saved View. Note the success banner on top of the page stating "Successfully created new Saved View Branch Active Location List View". Note that the current Saved View name also appeared in the page heading. This is an indicator that you are currently viewing a Saved View.
 

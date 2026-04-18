@@ -51,61 +51,61 @@
 
 ![Virtual Servers List](./images/load-balancer/load-balancer-virtual-server-light.png#only-light){ .on-glb }
 ![Virtual Servers List](./images/load-balancer/load-balancer-virtual-server-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/virtual-servers/`"
+[//]: # (screenshot: url=/load-balancers/virtual-servers/ region=full)
 
 A list view of all configured Virtual Servers, including name, load balancer type, protocol, and associated pools.
 
 ![Virtual Server Detail](./images/load-balancer/load_balancer-virtual-server-detail-light.png#only-light){ .on-glb }
 ![Virtual Server Detail](./images/load-balancer/load-balancer-virtual-server-detail-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/virtual-servers/19736556-378c-4a61-b3b8-aaae2f2f422c/`"
+[//]: # (screenshot: url=/load-balancers/virtual-servers/19736556-378c-4a61-b3b8-aaae2f2f422c/ region=full)
 
 Detailed view of a single Virtual Server, showing the VIP, port, protocol, associated Certificate Profile, and linked Load Balancer Pool.
 
 ![Load Balancer Pools List](./images/load-balancer/load-balancer-pools-light.png#only-light){ .on-glb }
 ![Load Balancer Pools List](./images/load-balancer/load-balancer-pools-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/load-balancer-pools/`"
+[//]: # (screenshot: url=/load-balancers/load-balancer-pools/ region=full crop_bottom=#bulk-action-buttons)
 
 A list view of Load Balancer Pools, showing pool names and algorithms.
 
 ![Load Balancer Pool Detail](./images/load-balancer/load-balancer-pools-detail-light.png#only-light){ .on-glb }
 ![Load Balancer Pools Detail](./images/load-balancer/load-balancer-pools-detail-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/load-balancer-pools/d5097984-9c43-4c33-a6b2-43339dfd65f4/`"
+[//]: # (screenshot: url=/load-balancers/load-balancer-pools/d5097984-9c43-4c33-a6b2-43339dfd65f4/ region=full)
 
 Detailed view of a specific Load Balancer Pool, including load balancing algorithm, associated pool members, and associated Health Check Monitor.
 
 ![Load Balancer Pool Members List](./images/load-balancer/load-balancer-pool-member-light.png#only-light){ .on-glb }
 ![Load Balancer Pool Members List](./images/load-balancer/load-balancer-pool-member-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/load-balancer-pool-members/`"
+[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/ region=full crop_bottom=#bulk-action-buttons)
 
 A list view of Load Balancer Pool Members, displaying IP Addresses, ports, and status.
 
 ![Load Balancer Pool Member Detail](./images/load-balancer/load-balancer-pool-member-detail-light.png#only-light){ .on-glb }
 ![Load Balancer Pool Member Detail](./images/load-balancer/load-balancer-pool-member-detail-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/load-balancer-pool-members/132759f4-1fa9-47dd-94f3-371abb943dd7/`"
+[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/132759f4-1fa9-47dd-94f3-371abb943dd7/ region=full)
 
 Detailed view of an individual Load Balancer Pool Member, including its linked pool, port, health check monitor configuration, and certificate profile.
 
 ![Health Checks List](./images/load-balancer/load-balancer-health-check-light.png#only-light){ .on-glb }
 ![Health Checks List](./images/load-balancer/load-balancer-health-check-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/health-check-monitors/`"
+[//]: # (screenshot: url=/load-balancers/health-check-monitors/ region=full crop_bottom=#bulk-action-buttons)
 
 A list view of a Health Check Monitor showing health check types, port, interval, retry and timeout settings.
 
 ![Health Check Detail](./images/load-balancer/load-balancer-health-check-detail-light.png#only-light){ .on-glb }
 ![Health Check Detail](./images/load-balancer/load-balancer-health-check-detail-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/health-check-monitors/497deb96-e43b-4408-b3fb-2a1ae6bf7856/`"
+[//]: # (screenshot: url=/load-balancers/health-check-monitors/497deb96-e43b-4408-b3fb-2a1ae6bf7856/ region=full)
 
 Detailed view of a Health Check Monitor including interval, timeout, and target port.
 
 ![Certificate Profiles List](./images/load-balancer/load-balancer-cert-light.png#only-light){ .on-glb }
 ![Certificate Profiles List](./images/load-balancer/load-balancer-cert-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/certificate-profiles/`"
+[//]: # (screenshot: url=/load-balancers/certificate-profiles/ region=full crop_bottom=#bulk-action-buttons)
 
 A list view of available Certificate Profiles used for SSL/TLS termination, showing certificate type and other optional fields.
 
 ![Certificate Profile Detail](./images/load-balancer/load-balancer-cert-detail-light.png#only-light){ .on-glb }
 ![Certificate Profile Detail](./images/load-balancer/load-balancer-cert-detail-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/certificate-profiles/c80b768a-498d-4111-be42-e9462afe645e/`"
+[//]: # (screenshot: url=/load-balancers/certificate-profiles/c80b768a-498d-4111-be42-e9462afe645e/ region=full)
 
 Detailed view for a Certificate Profile, including certificate type, certificate file path, and key file paths.
 
@@ -128,7 +128,7 @@ Ensure the following IP Addresses exist in Nautobot's IPAM:
 
 ![F5 Simple IP Addresses](./images/load-balancer/load-balancer-f5-simple-1-light.png#only-light){ .on-glb }
 ![F5 Simple IP Addresses](./images/load-balancer/load-balancer-f5-simple-1-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/ip-addresses/`"
+[//]: # (screenshot: url=/ipam/ip-addresses/ region=full crop_bottom='#object_list_form tbody tr:nth-child(2)')
 
 ### 2. Configuring Load Balancer Pool
 
@@ -139,7 +139,7 @@ Ensure the following IP Addresses exist in Nautobot's IPAM:
 
 ![F5 Simple Adding Load Balancer Pool](./images/load-balancer/load-balancer-f5-simple-3-light.png#only-light){ .on-glb }
 ![F5 Simple Adding Load Balancer Pool](./images/load-balancer/load-balancer-f5-simple-3-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/virtual-servers/add/`"
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750)
 
 ### 3. Adding a Load Balancer Pool Member
 
@@ -167,7 +167,7 @@ In the Nautobot UI:
 
 ![F5 Simple Adding Virtual Server](./images/load-balancer/load-balancer-f5-simple-2-light.png#only-light){ .on-glb }
 ![F5 Simple Adding Virtual Server](./images/load-balancer/load-balancer-f5-simple-2-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/virtual-servers/add/`"
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750)
 
 ### 5. Validation and Configuration Snippet
 
@@ -228,7 +228,7 @@ A sample JSON response for that query would look like:
 
 ![F5 Simple GraphQL](./images/load-balancer/load-balancer-f5-simple-4-light.png#only-light){ .on-glb }
 ![F5 Simple GraphQL](./images/load-balancer/load-balancer-f5-simple-4-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 Using that JSON response, you can then build a Jinja2 template following the data model:
 
@@ -323,7 +323,7 @@ In this advanced configuration scenario, we illustrate:
 
 ![F5 Advanced IPAM Configuration](./images/load-balancer/load-balancer-f5-advanced-1-light.png#only-light){ .on-glb }
 ![F5 Advanced IPAM Configuration](./images/load-balancer/load-balancer-f5-advanced-1-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/ipam/ip-addresses/`"
+[//]: # (screenshot: url=/ipam/ip-addresses/ region=full crop_bottom='#object_list_form tbody tr:nth-child(10)')
 
 Ensure these IP Addresses are available in Nautobot's IPAM:
 
@@ -334,7 +334,7 @@ Ensure these IP Addresses are available in Nautobot's IPAM:
 
 ![F5 Advanced Health Check](./images/load-balancer/load-balancer-f5-advanced-2-light.png#only-light){ .on-glb }
 ![F5 Advanced Health Check](./images/load-balancer/load-balancer-f5-advanced-2-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/health-check-monitors/add/`"
+[//]: # (screenshot: url=/load-balancers/health-check-monitors/add/ region=center-panel height=750)
 
 Before configuring your pools, set up your health checks:
 
@@ -351,7 +351,7 @@ Before configuring your pools, set up your health checks:
 
 ![F5 Advanced Certificate Profile](./images/load-balancer/load-balancer-f5-advanced-3-light.png#only-light){ .on-glb }
 ![F5 Advanced Certificate Profile](./images/load-balancer/load-balancer-f5-advanced-3-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/certificate-profiles/add/`"
+[//]: # (screenshot: url=/load-balancers/certificate-profiles/add/ region=center-panel height=750)
 
 Define Certificate Profiles:
 
@@ -367,7 +367,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Pool Config](./images/load-balancer/load-balancer-f5-advanced-4-light.png#only-light){ .on-glb }
 ![F5 Advanced Pool Config](./images/load-balancer/load-balancer-f5-advanced-4-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/load-balancer-pools/add/`"
+[//]: # (screenshot: url=/load-balancers/load-balancer-pools/add/ region=center-panel height=750)
 
 - Navigate to **Load Balancer > Pools**.
 - Click **Add Load Balancer Pool**.
@@ -379,7 +379,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Pool Members](./images/load-balancer/load-balancer-f5-advanced-5-light.png#only-light){ .on-glb }
 ![F5 Advanced Pool Members](./images/load-balancer/load-balancer-f5-advanced-5-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/load-balancer-pool-members/add/`"
+[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/add/ region=center-panel height=750)
 
 - Navigate to **Load Balancer > Pool Members**.
 - Add each pool member individually:
@@ -397,7 +397,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Virtual Server](./images/load-balancer/load-balancer-f5-advanced-6-light.png#only-light){ .on-glb }
 ![F5 Advanced Virtual Server](./images/load-balancer/load-balancer-f5-advanced-6-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/load-balancers/virtual-servers/add/`"
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750)
 
 - Navigate to **Load Balancer > Virtual Servers**.
 - Click **Add Virtual Server**.
@@ -450,7 +450,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced GraphQL Response](./images/load-balancer/load-balancer-f5-advanced-7-light.png#only-light){ .on-glb }
 ![F5 Advanced GraphQL Response](./images/load-balancer/load-balancer-f5-advanced-7-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/graphql/`"
+[//]: # (screenshot: url=/graphql/ region=full)
 
 ```json
 {

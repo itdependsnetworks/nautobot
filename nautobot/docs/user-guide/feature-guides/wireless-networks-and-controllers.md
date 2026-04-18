@@ -23,7 +23,7 @@ To create a Wireless Network:
 
 ![Add Wireless Network](images/wireless/ss_wireless-network-add_light.png#only-light){ .on-glb }
 ![Add Wireless Network](images/wireless/ss_wireless-network-add_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/wireless/wireless-networks/`"
+[//]: # (screenshot: url=/wireless/wireless-networks/ region=full)
 
 Fill in the required fields for the Wireless Network:
 
@@ -35,7 +35,7 @@ Fill in the required fields for the Wireless Network:
 
 ![Create Wireless Network Form](images/wireless/ss_wireless-network-create_light.png#only-light){ .on-glb }
 ![Create Wireless Network Form](images/wireless/ss_wireless-network-create_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/wireless/wireless-networks/add/`"
+[//]: # (screenshot: url=/wireless/wireless-networks/add/ region=center-panel)
 
 ## Controllers
 
@@ -47,7 +47,7 @@ To create a Wireless Controller:
 
 ![Add Wireless Controller](images/wireless/ss_wireless-controller-add_light.png#only-light){ .on-glb }
 ![Add Wireless Controller](images/wireless/ss_wireless-controller-add_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/controllers/?capabilities=wireless`"
+[//]: # (screenshot: url=/dcim/controllers/?capabilities=wireless region=full)
 
 Fill in the required fields for the Wireless Controller:
 
@@ -62,7 +62,7 @@ Fill in the required fields for the Wireless Controller:
 ![Create Wireless Controller Optional Device](images/wireless/ss_wireless-controller-create-2_light.png#only-light){ .on-glb }
 ![Create Wireless Controller Form](images/wireless/ss_wireless-controller-create-1_dark.png#only-dark){ .on-glb }
 ![Create Wireless Controller Optional Device](images/wireless/ss_wireless-controller-create-2_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/controllers/add/`"
+[//]: # (screenshot: url=/dcim/controllers/add/ region=center-panel)
 
 ## Device Groups
 
@@ -74,7 +74,7 @@ To create a Device Group:
 
 ![Add Device Group](images/wireless/ss_device-group-add_light.png#only-light){ .on-glb }
 ![Add Device Group](images/wireless/ss_device-group-add_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/controller-managed-device-groups/?capabilities=wireless`"
+[//]: # (screenshot: url=/dcim/controller-managed-device-groups/?capabilities=wireless region=full)
 
 Fill in the required fields for the Device Group:
 
@@ -90,7 +90,7 @@ Fill in the required fields for the Device Group:
 ![Create Device Group Form Add Networks](images/wireless/ss_device-group-create-2_light.png#only-light){ .on-glb }
 ![Create Device Group Form](images/wireless/ss_device-group-create-1_dark.png#only-dark){ .on-glb }
 ![Create Device Group Form Add Networks](images/wireless/ss_device-group-create-2_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/controller-managed-device-groups/add/`"
+[//]: # (screenshot: url=/dcim/controller-managed-device-groups/add/ region=center-panel)
 
 ## Supported Data Rates (Optional)
 
@@ -102,7 +102,7 @@ This part is optional, Supported Data Rates supports tracking wireless speed and
 
 ![Add Supported Data Rate](images/wireless/ss_supported-data-rate-add_light.png#only-light){ .on-glb }
 ![Add Supported Data Rate](images/wireless/ss_supported-data-rate-add_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/wireless/supported-data-rates/`"
+[//]: # (screenshot: url=/wireless/supported-data-rates/ region=full)
 
 Fill in the required fields for Supported Data Rates:
 
@@ -112,7 +112,7 @@ Fill in the required fields for Supported Data Rates:
 
 ![Create Supported Data Rate](images/wireless/ss_supported-data-rate-create_light.png#only-light){ .on-glb }
 ![Create Supported Data Rate](images/wireless/ss_supported-data-rate-create_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/wireless/supported-data-rates/add/`"
+[//]: # (screenshot: url=/wireless/supported-data-rates/add/ region=center-panel)
 
 ## Radio Profiles (Optional)
 
@@ -124,7 +124,7 @@ This part is optional, Radio Profiles provide context to the Wireless Radios of 
 
 ![Add Radio Profile](images/wireless/ss_radio-profile-add_light.png#only-light){ .on-glb }
 ![Add Radio Profile](images/wireless/ss_radio-profile-add_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/wireless/radio-profiles/`"
+[//]: # (screenshot: url=/wireless/radio-profiles/ region=full)
 
 Fill in the required fields for Radio Profiles:
 
@@ -134,4 +134,4 @@ Fill in the required fields for Radio Profiles:
 
 ![Radio Profile Create](images/wireless/ss_radio-profile-create_light.png#only-light){ .on-glb }
 ![Radio Profile Create](images/wireless/ss_radio-profile-create_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/wireless/radio-profiles/add/`"
+[//]: # (screenshot: url=/wireless/radio-profiles/add/ region=center-panel)

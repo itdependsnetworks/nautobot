@@ -11,7 +11,7 @@ User Groups allow Nautobot administrators (users with the `is_staff` flag set on
 2. In the **Users** section, select **Groups > Add** or **Groups > Edit**.
    ![Users section](../../../media/development/users/groups/admin-user-section-light.png#only-light){ .on-glb }
    ![Users section](../../../media/development/users/groups/admin-user-section-dark.png#only-dark){ .on-glb }
-   [//]: # "`https://next.demo.nautobot.com/admin/`"
+   [//]: # (screenshot: url=/admin/ region=full)
 
 ## Adding a Group
 
@@ -23,7 +23,7 @@ User Groups allow Nautobot administrators (users with the `is_staff` flag set on
 
    ![Add Group form](../../../media/development/users/groups/user-groups_light.png#only-light){ .on-glb }
    ![Add Group form](../../../media/development/users/groups/user-groups_dark.png#only-dark){ .on-glb }
-   [//]: # "`https://next.demo.nautobot.com/admin/users/admingroup/add/`"
+   [//]: # (screenshot: url=/admin/users/admingroup/add/ region=center-panel)
 
 ## Using Groups
 

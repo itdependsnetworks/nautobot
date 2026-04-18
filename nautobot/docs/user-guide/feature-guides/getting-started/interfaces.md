@@ -28,7 +28,7 @@ Device Types can serve as templates for Devices, and as such the two are very si
 
 ![Device type example](../images/getting-started-nautobot-ui/21-device-type-light.png#only-light){ .on-glb }
 ![Device type example](../images/getting-started-nautobot-ui/21-device-type-dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/device-types/add/`"
+[//]: # (screenshot: url=/dcim/device-types/add/ region=center-panel)
 
 Creating a Device Type is very similar to [creating a Device](creating-devices.md).
 

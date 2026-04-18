@@ -11,7 +11,7 @@ To create a new Software Version, navigate to **Devices > Software Versions** an
 
 ![Create a Software Version](images/software-image-files-and-versions/ss_software-version-create_light.png#only-light){ .on-glb }
 ![Create a Software Version](images/software-image-files-and-versions/ss_software-version-create_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/software-versions/add/`"
+[//]: # (screenshot: url=/dcim/software-versions/add/ region=center-panel)
 
 ## Create a Software Image File
 
@@ -22,7 +22,7 @@ To create a new Software Image File, navigate to **Devices > Software Image File
 
 ![Create a Software Image File](images/software-image-files-and-versions/ss_software-image-file-create_light.png#only-light){ .on-glb }
 ![Create a Software Image File](images/software-image-files-and-versions/ss_software-image-file-create_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/software-image-files/add/`"
+[//]: # (screenshot: url=/dcim/software-image-files/add/ region=center-panel)
 
 ## Assigning Software Image Files to Device Types
 
@@ -34,7 +34,7 @@ Devices, Inventory Items and Virtual Machines may be associated to one Software 
 
 ![Assign Software Version to Device](images/software-image-files-and-versions/ss_assign-software-version-to-device_light.png#only-light){ .on-glb }
 ![Assign Software Version to Device](images/software-image-files-and-versions/ss_assign-software-version-to-device_dark.png#only-dark){ .on-glb }
-[//]: # "`https://next.demo.nautobot.com/dcim/devices/add/`"
+[//]: # (screenshot: url=/dcim/devices/add/ region=center-panel)
 
 ### Assigning Software Image Files to Devices, Inventory Items and Virtual Machines
 
