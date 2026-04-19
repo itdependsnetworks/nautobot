@@ -1,0 +1,23 @@
+fields:
+  - name: name
+    value: "vs_live_ident_admin_web_https"
+  - name: vip
+    type: select2
+    value: "10.0.20.1"
+  - name: port
+    value: "443"
+  - name: protocol
+    type: select
+    value: "TCP"
+  - name: load_balancer_type
+    type: select
+    value: "Layer 7"
+  - name: load_balancer_pool
+    type: select2
+    value: "pool_live_ident_admin_web_http"
+  - name: health_check_monitor
+    type: select2
+    value: "http"
+  - name: certificate_profiles
+    type: select2_multi
+    value: "clientssl-fedcheck.app-strong"

@@ -167,7 +167,7 @@ In the Nautobot UI:
 
 ![F5 Simple Adding Virtual Server](./images/load-balancer/load-balancer-f5-simple-2-light.png#only-light){ .on-glb }
 ![F5 Simple Adding Virtual Server](./images/load-balancer/load-balancer-f5-simple-2-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750 form_data=lb-simple-2-virtual-server.yaml)
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height_fit='.card:nth-of-type(1)' setup_data=lb-simple-setup.yaml form_data=lb-simple-2-virtual-server.yaml)
 
 ### 5. Validation and Configuration Snippet
 
@@ -397,7 +397,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Virtual Server](./images/load-balancer/load-balancer-f5-advanced-6-light.png#only-light){ .on-glb }
 ![F5 Advanced Virtual Server](./images/load-balancer/load-balancer-f5-advanced-6-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750 setup_data=lb-advanced-setup.yaml form_data=lb-advanced-6-virtual-server.yaml)
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height_fit='.card:nth-of-type(1)' setup_data=lb-advanced-setup.yaml form_data=lb-advanced-6-virtual-server.yaml)
 
 - Navigate to **Load Balancer > Virtual Servers**.
 - Click **Add Virtual Server**.

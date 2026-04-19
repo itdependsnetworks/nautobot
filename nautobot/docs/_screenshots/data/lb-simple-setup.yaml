@@ -1,0 +1,10 @@
+setup_data:
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.0.1/32"}
+    defaults:
+      namespace: "Global"
+
+  - url: /api/load-balancers/load-balancer-pools/
+    lookup: {name: "pool1"}
+    defaults:
+      load_balancing_algorithm: "round_robin"
