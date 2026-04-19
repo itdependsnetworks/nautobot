@@ -1,0 +1,20 @@
+graphql_query: |
+  {
+    virtual_servers(name: "virtual1") {
+      name
+      port
+      protocol
+      vip {
+        address
+      }
+      load_balancer_pool {
+        name
+        load_balancer_pool_members {
+          port
+          ip_address {
+            address
+          }
+        }
+      }
+    }
+  }

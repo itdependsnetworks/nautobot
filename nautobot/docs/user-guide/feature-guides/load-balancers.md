@@ -228,7 +228,7 @@ A sample JSON response for that query would look like:
 
 ![F5 Simple GraphQL](./images/load-balancer/load-balancer-f5-simple-4-light.png#only-light){ .on-glb }
 ![F5 Simple GraphQL](./images/load-balancer/load-balancer-f5-simple-4-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/graphql/ region=full)
+[//]: # (screenshot: url=/graphql/ region=full setup_data=lb-simple-setup.yaml graphql_data=lb-simple-4-graphql.yaml)
 
 Using that JSON response, you can then build a Jinja2 template following the data model:
 
@@ -450,7 +450,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced GraphQL Response](./images/load-balancer/load-balancer-f5-advanced-7-light.png#only-light){ .on-glb }
 ![F5 Advanced GraphQL Response](./images/load-balancer/load-balancer-f5-advanced-7-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/graphql/ region=full)
+[//]: # (screenshot: url=/graphql/ region=full setup_data=lb-advanced-setup.yaml graphql_data=lb-advanced-7-graphql.yaml)
 
 ```json
 {

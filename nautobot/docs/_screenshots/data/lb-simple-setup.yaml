@@ -8,3 +8,28 @@ setup_data:
     lookup: {name: "pool1"}
     defaults:
       load_balancing_algorithm: "round_robin"
+
+  - url: /api/load-balancers/load-balancer-pool-members/
+    lookup: {port: 80}
+    defaults:
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool1"}
+      ip_address:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.0.1/32"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+
+  - url: /api/load-balancers/virtual-servers/
+    lookup: {name: "virtual1"}
+    defaults:
+      port: 80
+      protocol: "tcp"
+      vip:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.0.1/32"}
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool1"}

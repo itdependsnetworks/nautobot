@@ -1,0 +1,34 @@
+graphql_query: |
+  {
+    virtual_servers(name: "vs_live_ident_admin_web_https") {
+      name
+      port
+      protocol
+      vip {
+        address
+      }
+      certificate_profiles {
+        name
+        certificate_file_path
+        key_file_path
+        cipher
+      }
+      load_balancer_pool {
+        name
+        health_check_monitor {
+          name
+          health_check_type
+          port
+          interval
+          timeout
+          retry
+        }
+        load_balancer_pool_members {
+          port
+          ip_address {
+            address
+          }
+        }
+      }
+    }
+  }
