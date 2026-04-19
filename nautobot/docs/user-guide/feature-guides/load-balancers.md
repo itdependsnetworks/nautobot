@@ -139,7 +139,7 @@ Ensure the following IP Addresses exist in Nautobot's IPAM:
 
 ![F5 Simple Adding Load Balancer Pool](./images/load-balancer/load-balancer-f5-simple-3-light.png#only-light){ .on-glb }
 ![F5 Simple Adding Load Balancer Pool](./images/load-balancer/load-balancer-f5-simple-3-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/load-balancer-pools/add/ region=center-panel height=750 form_data=lb-simple-3-pool.yaml)
 
 ### 3. Adding a Load Balancer Pool Member
 
@@ -167,7 +167,7 @@ In the Nautobot UI:
 
 ![F5 Simple Adding Virtual Server](./images/load-balancer/load-balancer-f5-simple-2-light.png#only-light){ .on-glb }
 ![F5 Simple Adding Virtual Server](./images/load-balancer/load-balancer-f5-simple-2-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750 form_data=lb-simple-2-virtual-server.yaml)
 
 ### 5. Validation and Configuration Snippet
 
@@ -334,7 +334,7 @@ Ensure these IP Addresses are available in Nautobot's IPAM:
 
 ![F5 Advanced Health Check](./images/load-balancer/load-balancer-f5-advanced-2-light.png#only-light){ .on-glb }
 ![F5 Advanced Health Check](./images/load-balancer/load-balancer-f5-advanced-2-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/health-check-monitors/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/health-check-monitors/add/ region=center-panel height=750 form_data=lb-advanced-2-health-check.yaml)
 
 Before configuring your pools, set up your health checks:
 
@@ -351,7 +351,7 @@ Before configuring your pools, set up your health checks:
 
 ![F5 Advanced Certificate Profile](./images/load-balancer/load-balancer-f5-advanced-3-light.png#only-light){ .on-glb }
 ![F5 Advanced Certificate Profile](./images/load-balancer/load-balancer-f5-advanced-3-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/certificate-profiles/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/certificate-profiles/add/ region=center-panel height=750 form_data=lb-advanced-3-cert-profile.yaml)
 
 Define Certificate Profiles:
 
@@ -367,7 +367,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Pool Config](./images/load-balancer/load-balancer-f5-advanced-4-light.png#only-light){ .on-glb }
 ![F5 Advanced Pool Config](./images/load-balancer/load-balancer-f5-advanced-4-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/load-balancer-pools/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/load-balancer-pools/add/ region=center-panel height=750 form_data=lb-advanced-4-pool.yaml)
 
 - Navigate to **Load Balancer > Pools**.
 - Click **Add Load Balancer Pool**.
@@ -379,7 +379,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Pool Members](./images/load-balancer/load-balancer-f5-advanced-5-light.png#only-light){ .on-glb }
 ![F5 Advanced Pool Members](./images/load-balancer/load-balancer-f5-advanced-5-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/add/ region=center-panel height=750 setup_data=lb-advanced-setup.yaml form_data=lb-advanced-5-pool-member.yaml)
 
 - Navigate to **Load Balancer > Pool Members**.
 - Add each pool member individually:
@@ -397,7 +397,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Virtual Server](./images/load-balancer/load-balancer-f5-advanced-6-light.png#only-light){ .on-glb }
 ![F5 Advanced Virtual Server](./images/load-balancer/load-balancer-f5-advanced-6-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750)
+[//]: # (screenshot: url=/load-balancers/virtual-servers/add/ region=center-panel height=750 setup_data=lb-advanced-setup.yaml form_data=lb-advanced-6-virtual-server.yaml)
 
 - Navigate to **Load Balancer > Virtual Servers**.
 - Click **Add Virtual Server**.

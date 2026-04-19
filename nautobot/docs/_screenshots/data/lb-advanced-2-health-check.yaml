@@ -1,0 +1,14 @@
+fields:
+  - name: name
+    value: "http"
+  - name: health_check_type
+    type: select
+    value: "HTTP"
+  - name: port
+    value: "80"
+  - name: interval
+    value: "30"
+  - name: timeout
+    value: "5"
+  - name: retry
+    value: "3"

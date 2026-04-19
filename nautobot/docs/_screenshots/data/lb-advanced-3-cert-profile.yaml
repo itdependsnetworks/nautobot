@@ -1,0 +1,12 @@
+fields:
+  - name: name
+    value: "clientssl-fedcheck.app-strong"
+  - name: certificate_type
+    type: select
+    value: "Server"
+  - name: certificate_file_path
+    value: "fedcheck.app.crt"
+  - name: chain_file_path
+    value: "fedcheck.app-chain.crt"
+  - name: key_file_path
+    value: "fedcheck.app.key"

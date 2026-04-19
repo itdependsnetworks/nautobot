@@ -1,0 +1,9 @@
+fields:
+  - name: name
+    value: "pool_live_ident_admin_web_http"
+  - name: load_balancing_algorithm
+    type: select2
+    value: "Round Robin"
+  - name: health_check_monitor
+    type: select2
+    value: "http"

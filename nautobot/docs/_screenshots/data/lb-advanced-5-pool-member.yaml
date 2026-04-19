@@ -1,0 +1,18 @@
+fields:
+  - name: load_balancer_pool
+    type: select2
+    value: "pool_live_ident_admin_web_http"
+  - name: ip_address
+    type: select2
+    value: "10.0.10.2"
+  - name: port
+    value: "9280"
+  - name: status
+    type: select2
+    value: "Active"
+  - name: health_check_monitor
+    type: select2
+    value: "http"
+  - name: certificate_profiles
+    type: select2_multi
+    value: "clientssl-fedcheck.app-strong"

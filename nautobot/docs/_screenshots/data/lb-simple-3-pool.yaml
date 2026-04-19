@@ -1,0 +1,6 @@
+fields:
+  - name: name
+    value: "pool1"
+  - name: load_balancing_algorithm
+    type: select2
+    value: "Round Robin"

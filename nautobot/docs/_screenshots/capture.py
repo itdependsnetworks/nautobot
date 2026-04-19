@@ -154,6 +154,8 @@ def parse_markdown_file(filepath):
                 "selector": params.get("selector"),
                 "highlight": highlights,
                 "script": params.get("script"),
+                "setup_data": params.get("setup_data"),
+                "form_data": params.get("form_data"),
                 "height": params.get("height"),
                 "crop_top": params.get("crop_top"),
                 "crop_bottom": params.get("crop_bottom"),
@@ -283,37 +285,57 @@ class ScreenshotHelpers:
     def __init__(self, browser):
         self.browser = browser
 
-    def fill_select2_field(self, field_name, value):
-        """Fill a Select2 single-selection field."""
-        from selenium.webdriver.common.keys import Keys  # noqa: E402
+    def _select2_set_via_js(self, field_name, value, multiple=False):
+        """Set a select2 field's value via JS + API lookup. No dropdown interaction."""
+        # Nautobot's APISelect widget stores the API URL in data-url
+        result = self.browser.execute_script(f"""
+            var sel = document.querySelector('select#id_{field_name}');
+            if (!sel) return {{'error': 'select element not found'}};
 
-        self.browser.find_by_xpath(f"//select[@id='id_{field_name}']//following-sibling::span").click()
-        self.scroll_element_into_view(css=f"#id_{field_name}")
-        search_box = self.browser.find_by_xpath(
-            "//*[@class='select2-search select2-search--dropdown']//input",
-            wait_time=5,
-        )
-        for _ in search_box.first.type(value, slowly=True):
-            pass
-        self.browser.is_element_not_present_by_css(".loading-results", wait_time=5)
-        # Select first result
-        results = self.browser.find_by_css(".select2-results li.select2-results__option")
-        if results.first.text != "None":
-            results.first.click()
-        else:
-            results[1].click()
+            var $sel = $(sel);
+            // Nautobot APISelect uses data-url
+            var url = sel.getAttribute('data-url');
+
+            if (!url) return {{'error': 'no data-url on select', 'html': sel.outerHTML.substring(0, 200)}};
+
+            var result = {{'url': url, 'found': false}};
+            $.ajax({{
+                url: url,
+                data: {{ q: '{value}', limit: 10, format: 'json' }},
+                headers: {{ 'Accept': 'application/json; version=2.0' }},
+                async: false,
+                success: function(data) {{
+                    var items = data.results || data;
+                    if (items && items.length > 0) {{
+                        var match = items[0];
+                        var label = match.display || match.name || match.label || '{value}';
+                        var id = match.id || match.value;
+                        var option = new Option(label, id, true, true);
+                        $sel.append(option).trigger('change');
+                        result.found = true;
+                        result.label = label;
+                        result.id = id;
+                    }} else {{
+                        result.error = 'no results from API';
+                    }}
+                }},
+                error: function(xhr) {{
+                    result.error = 'API error: ' + xhr.status;
+                }}
+            }});
+            return result;
+        """)
+        if result and result.get("error"):
+            print(f"    select2 JS warning for '{field_name}': {result}", file=sys.stderr)
+        time.sleep(0.2)
+
+    def fill_select2_field(self, field_name, value):
+        """Fill a Select2 single-selection field via JS."""
+        self._select2_set_via_js(field_name, value)
 
     def fill_select2_multiselect_field(self, field_name, value):
-        """Fill a Select2 multi-selection field."""
-        from selenium.webdriver.common.keys import Keys  # noqa: E402
-
-        search_box = self.browser.find_by_xpath(
-            f"//select[@id='id_{field_name}']//following-sibling::span//input"
-        )
-        for _ in search_box.first.type(value, slowly=True):
-            pass
-        self.browser.is_element_not_present_by_css(".loading-results", wait_time=5)
-        search_box.first.type(Keys.ENTER)
+        """Fill a Select2 multi-selection field via JS."""
+        self._select2_set_via_js(field_name, value, multiple=True)
 
     def click_button(self, query_selector):
         """Click a button, scrolling it into view first."""
@@ -379,6 +401,227 @@ def load_setup_script(script_name):
         return None
 
     return module.setup
+
+
+# ---------------------------------------------------------------------------
+# Setup data: create prerequisite objects via the REST API
+# ---------------------------------------------------------------------------
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+
+def load_setup_data(yaml_name):
+    """Load a setup_data YAML file.
+
+    Returns:
+        List of dicts with keys: url, lookup, defaults. Or None if not found.
+    """
+    import yaml
+
+    yaml_path = os.path.join(DATA_DIR, yaml_name)
+    if not os.path.isfile(yaml_path):
+        print(f"WARNING: Setup data file not found: {yaml_path}", file=sys.stderr)
+        return None
+
+    with open(yaml_path, "r") as f:
+        data = yaml.safe_load(f)
+
+    return data.get("setup_data", data if isinstance(data, list) else [])
+
+
+def ensure_setup_data(base_url, username, password, items):
+    """Create prerequisite objects via the Nautobot REST API.
+
+    Each item has:
+        - url: API endpoint (e.g., /api/load-balancers/health-check-monitors/)
+        - lookup: dict of fields to search for an existing object
+        - defaults: dict of additional fields for creation (merged with lookup)
+        - status: optional status name to look up and include
+
+    Idempotent: if an object matching `lookup` already exists, it's skipped.
+    """
+    import requests
+
+    session = requests.Session()
+    # Log in to get a session cookie, or use token auth
+    api_base = base_url.rstrip("/")
+
+    # Get API token -- use the default dev token or session auth
+    token = os.getenv("NAUTOBOT_TOKEN", "0123456789abcdef0123456789abcdef01234567")
+    session.headers.update({
+        "Authorization": f"Token {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json; version=2.0",
+    })
+
+    created = 0
+    skipped = 0
+
+    for item in items:
+        api_url = api_base + item["url"]
+        lookup = item.get("lookup", {})
+        defaults = item.get("defaults", {})
+
+        # Check if object already exists
+        try:
+            resp = session.get(api_url, params={**lookup, "limit": 1})
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", data if isinstance(data, list) else [])
+            if results:
+                print(f"    Setup: {item['url']} {lookup} -- already exists")
+                skipped += 1
+                continue
+        except Exception as e:
+            print(f"    Setup WARNING: lookup failed for {item['url']}: {e}", file=sys.stderr)
+
+        # Resolve any nested lookups in defaults (e.g., status: {name: "Active"} → status UUID)
+        create_data = {**lookup, **defaults}
+        resolved_data = {}
+        for key, val in create_data.items():
+            if isinstance(val, dict) and "name" in val:
+                # This is a FK reference -- look up the UUID
+                # The API field name maps to a nested endpoint, but for simplicity
+                # we'll pass the dict as-is and let the API resolve it,
+                # or look it up if the API needs a UUID
+                resolved_data[key] = val
+            else:
+                resolved_data[key] = val
+
+        # Create the object
+        try:
+            resp = session.post(api_url, json=resolved_data)
+            if resp.status_code in (200, 201):
+                print(f"    Setup: {item['url']} -- created {lookup}")
+                created += 1
+            else:
+                print(f"    Setup ERROR: {item['url']} -- {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+        except Exception as e:
+            print(f"    Setup ERROR: {item['url']} -- {e}", file=sys.stderr)
+
+    return created, skipped
+
+
+# ---------------------------------------------------------------------------
+# Form data (YAML) loader
+# ---------------------------------------------------------------------------
+
+
+def load_form_data(yaml_name):
+    """Load a form data YAML file from the data directory.
+
+    Args:
+        yaml_name: Filename (e.g., 'lb-advanced-3-cert-profile.yaml') relative to the data dir.
+
+    Returns:
+        List of field dicts, each with keys: name, value, type (default "text").
+        Returns None if not found.
+    """
+    import yaml
+
+    yaml_path = os.path.join(DATA_DIR, yaml_name)
+    if not os.path.isfile(yaml_path):
+        print(f"WARNING: Form data file not found: {yaml_path}", file=sys.stderr)
+        return None
+
+    with open(yaml_path, "r") as f:
+        data = yaml.safe_load(f)
+
+    return data.get("fields", [])
+
+
+def _dismiss_open_select2(browser):
+    """Close any open select2 dropdown so it doesn't block the next field."""
+    from selenium.webdriver.common.keys import Keys
+
+    try:
+        # Close any open select2 by tabbing away from the active element
+        active = browser.driver.switch_to.active_element
+        active.send_keys(Keys.TAB)
+        time.sleep(0.2)
+
+        # If still open, try Escape
+        open_dropdown = browser.find_by_css(".select2-container--open")
+        if open_dropdown:
+            active = browser.driver.switch_to.active_element
+            active.send_keys(Keys.ESCAPE)
+            time.sleep(0.2)
+
+        # Final fallback: blur everything and close via JS
+        browser.execute_script("""
+            // Close all open select2 dropdowns
+            if (typeof $ !== 'undefined' && $.fn.select2) {
+                $('select').select2('close');
+            }
+            // Remove focus from everything
+            if (document.activeElement) { document.activeElement.blur(); }
+        """)
+        time.sleep(0.1)
+    except Exception:
+        pass
+
+
+def fill_form_from_yaml(browser, helpers, fields):
+    """Fill form fields on the current page from a list of field definitions.
+
+    Args:
+        browser: Splinter Browser instance.
+        helpers: ScreenshotHelpers instance.
+        fields: List of dicts with keys: name, value, type.
+            type can be: text (default), select2, select2_multi, select, checkbox.
+    """
+    for field in fields:
+        name = field["name"]
+        value = str(field["value"])
+        field_type = field.get("type", "text")
+
+        # Dismiss any lingering select2 dropdown before each field
+        _dismiss_open_select2(browser)
+
+        try:
+            if field_type == "text":
+                element = browser.find_by_name(name)
+                if not element:
+                    element = browser.find_by_id(f"id_{name}")
+                if element:
+                    element.first.clear()
+                    element.first.fill(value)
+                else:
+                    print(f"    WARNING: Field '{name}' not found on page", file=sys.stderr)
+            elif field_type == "select2":
+                helpers.fill_select2_field(name, value)
+            elif field_type == "select2_multi":
+                helpers.fill_select2_multiselect_field(name, value)
+            elif field_type == "select":
+                # Native <select> element -- select by visible text
+                browser.execute_script(f"""
+                    var sel = document.querySelector('select[name="{name}"], select#id_{name}');
+                    if (sel) {{
+                        for (var i = 0; i < sel.options.length; i++) {{
+                            if (sel.options[i].text.trim() === '{value}') {{
+                                sel.value = sel.options[i].value;
+                                sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                                break;
+                            }}
+                        }}
+                    }}
+                """)
+            elif field_type == "checkbox":
+                checkbox = browser.find_by_name(name)
+                if checkbox:
+                    if value.lower() in ("true", "1", "yes") and not checkbox.first.checked:
+                        checkbox.first.check()
+                    elif value.lower() in ("false", "0", "no") and checkbox.first.checked:
+                        checkbox.first.uncheck()
+            print(f"    Filled {name}={value} ({field_type})")
+        except Exception as e:
+            error_msg = str(e)
+            print(f"    ERROR filling field '{name}': {error_msg}", file=sys.stderr)
+            # If the session died, stop trying more fields -- re-raise so capture_one fails
+            if "InvalidSessionIdException" in error_msg or "not active" in error_msg or "marionette" in error_msg.lower() or "without establishing a connection" in error_msg:
+                raise
+
+    time.sleep(0.5)  # Allow fields to render
 
 
 # ---------------------------------------------------------------------------
@@ -451,12 +694,18 @@ def expand_sidenav(browser):
     time.sleep(0.3)
 
 
+MAX_SCREENSHOT_HEIGHT = 5000  # Cap to prevent Firefox OOM crashes
+
+
 def take_full_page_screenshot(browser):
     """Take a screenshot of the full page and return it as a PIL Image.
 
     Temporarily expands the viewport height to fit all page content so nothing
     is clipped, while keeping the width locked at VIEWPORT_WIDTH for correct
     CSS layout.  Restores the original viewport height afterward.
+
+    Height is capped at MAX_SCREENSHOT_HEIGHT to prevent Firefox crashes on
+    very tall pages (the marionette decoder fails on huge screenshots).
     """
     import io
 
@@ -465,6 +714,11 @@ def take_full_page_screenshot(browser):
         "return Math.max(document.body.scrollHeight, document.body.offsetHeight, "
         "document.documentElement.scrollHeight);"
     )
+
+    # Cap height to prevent Firefox memory issues
+    if scroll_height > MAX_SCREENSHOT_HEIGHT:
+        print(f"  (page height {scroll_height}px capped to {MAX_SCREENSHOT_HEIGHT}px)")
+        scroll_height = MAX_SCREENSHOT_HEIGHT
 
     # Expand viewport height to fit, keep width fixed
     browser.driver.set_window_size(VIEWPORT_WIDTH, scroll_height)
@@ -670,6 +924,13 @@ def capture_one(browser, spec, base_url, helpers):
         print(f"WARNING: Unknown region '{region_name}' at {spec['source_file']}:{spec['source_line']}", file=sys.stderr)
         return []
 
+    # Create prerequisite data via the API if specified
+    if spec.get("setup_data"):
+        print(f"  Ensuring prerequisite data: {spec['setup_data']}")
+        setup_items = load_setup_data(spec["setup_data"])
+        if setup_items:
+            ensure_setup_data(base_url, None, None, setup_items)
+
     # Navigate to the URL
     url = base_url.rstrip("/") + "/" + spec["url"].lstrip("/")
     browser.visit(url)
@@ -694,8 +955,28 @@ def capture_one(browser, spec, base_url, helpers):
             setup_fn(browser, helpers)
             time.sleep(0.5)  # Allow script actions to render
 
-    # Remove focus ring from any active element so it doesn't appear in screenshots
-    browser.execute_script("if (document.activeElement) { document.activeElement.blur(); }")
+    # Fill form fields from YAML if specified
+    if spec.get("form_data"):
+        print(f"  Loading form data: {spec['form_data']}")
+        fields = load_form_data(spec["form_data"])
+        if fields:
+            print(f"  Filling {len(fields)} field(s)...")
+            fill_form_from_yaml(browser, helpers, fields)
+        else:
+            print(f"  WARNING: No fields loaded from {spec['form_data']}", file=sys.stderr)
+
+    # Clean up before screenshot: dismiss dropdowns/pickers, remove focus, scroll to top
+    _dismiss_open_select2(browser)
+    browser.execute_script("""
+        // Close any open date/time pickers (flatpickr or bootstrap-datepicker)
+        document.querySelectorAll('.flatpickr-calendar.open, .datepicker, .bootstrap-datetimepicker-widget').forEach(
+            function(el) { el.remove(); }
+        );
+        // Blur and scroll
+        if (document.activeElement) { document.activeElement.blur(); }
+        window.scrollTo(0, 0);
+    """)
+    time.sleep(0.3)
 
     # Determine the crop selector and target width
     selector = spec["selector"] or region["selector"]
@@ -842,33 +1123,46 @@ def run_capture(specs, base_url, username, password, selenium_url=None):
     options = FirefoxOptions()
     options.set_preference("layout.css.devPixelsPerPx", "1.5")
 
-    print(f"Connecting to Selenium at {selenium_url}...")
-    browser = Browser("remote", command_executor=selenium_url, options=options)
+    def start_browser():
+        print(f"Connecting to Selenium at {selenium_url}...")
+        b = Browser("remote", command_executor=selenium_url, options=options)
+        b.driver.set_window_size(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
+        print(f"Logging into {base_url}...")
+        login(b, base_url, username, password)
+        return b
+
+    browser = start_browser()
+    helpers = ScreenshotHelpers(browser)
+    captured = []
+    errors = 0
 
     try:
-        # Set viewport to 1280x960 CSS pixels. With DPR 1.5, screenshots
-        # will be 1920x1440 device pixels (matching the 1920px standard).
-        browser.driver.set_window_size(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
-
-        print(f"Logging into {base_url}...")
-        login(browser, base_url, username, password)
-
-        helpers = ScreenshotHelpers(browser)
-        captured = []
-        errors = 0
-
         for i, spec in enumerate(specs, 1):
             print(f"[{i}/{len(specs)}] {spec['url']} (region={spec['region']})")
             try:
                 files = capture_one(browser, spec, base_url, helpers)
                 captured.extend(files)
             except Exception as e:
-                print(f"  ERROR: {e}", file=sys.stderr)
+                error_msg = str(e)
+                print(f"  ERROR: {error_msg}", file=sys.stderr)
                 errors += 1
+
+                # If the session died, restart the browser and continue
+                if "InvalidSessionIdException" in error_msg or "marionette" in error_msg.lower():
+                    print("  Session crashed -- restarting browser...")
+                    try:
+                        browser.quit()
+                    except Exception:
+                        pass
+                    browser = start_browser()
+                    helpers = ScreenshotHelpers(browser)
 
         return captured, errors
     finally:
-        browser.quit()
+        try:
+            browser.quit()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
