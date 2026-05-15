@@ -1,0 +1,211 @@
+setup_data:
+  # Health Check Monitor
+  - url: /api/load-balancers/health-check-monitors/
+    lookup: {name: "http"}
+    defaults:
+      health_check_type: "tcp"
+      port: 80
+      interval: 30
+      timeout: 5
+      retry: 3
+
+  # Certificate Profile
+  - url: /api/load-balancers/certificate-profiles/
+    lookup: {name: "clientssl-fedcheck.app-strong"}
+    defaults:
+      certificate_type: "server"
+      certificate_file_path: "fedcheck.app.crt"
+      chain_file_path: "fedcheck.app-chain.crt"
+      key_file_path: "fedcheck.app.key"
+
+  # Load Balancer Pool
+  - url: /api/load-balancers/load-balancer-pools/
+    lookup: {name: "pool_live_ident_admin_web_http"}
+    defaults:
+      load_balancing_algorithm: "round_robin"
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+    patch:
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+
+  # Prefix for 10.0.200.0/24
+  - url: /api/ipam/prefixes/
+    lookup: {prefix: "10.0.200.0/24"}
+    defaults:
+      namespace:
+        url: /api/ipam/namespaces/
+        lookup: {name: "Global"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+      type: "network"
+
+  # IP Addresses
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.10.2/32"}
+    defaults:
+      namespace: "Global"
+
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.10.3/32"}
+    defaults:
+      namespace: "Global"
+
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.10.4/32"}
+    defaults:
+      namespace: "Global"
+
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.200.1/32"}
+    defaults:
+      namespace:
+        url: /api/ipam/namespaces/
+        lookup: {name: "Global"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.200.2/32"}
+    defaults:
+      namespace:
+        url: /api/ipam/namespaces/
+        lookup: {name: "Global"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.200.3/32"}
+    defaults:
+      namespace:
+        url: /api/ipam/namespaces/
+        lookup: {name: "Global"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+
+  - url: /api/ipam/ip-addresses/
+    lookup: {address: "10.0.200.4/32"}
+    defaults:
+      namespace:
+        url: /api/ipam/namespaces/
+        lookup: {name: "Global"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+
+  # 4 Pool Members (matching the cert-detail STATS: 4 Load Balancer Pool Members)
+  - url: /api/load-balancers/load-balancer-pool-members/
+    lookup: {port: 9280}
+    defaults:
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool_live_ident_admin_web_http"}
+      ip_address:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.10.2/32"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+    patch:
+      certificate_profiles:
+        - url: /api/load-balancers/certificate-profiles/
+          lookup: {name: "clientssl-fedcheck.app-strong"}
+
+  - url: /api/load-balancers/load-balancer-pool-members/
+    lookup: {port: 9281}
+    defaults:
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool_live_ident_admin_web_http"}
+      ip_address:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.10.3/32"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+    patch:
+      certificate_profiles:
+        - url: /api/load-balancers/certificate-profiles/
+          lookup: {name: "clientssl-fedcheck.app-strong"}
+
+  - url: /api/load-balancers/load-balancer-pool-members/
+    lookup: {port: 9282}
+    defaults:
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool_live_ident_admin_web_http"}
+      ip_address:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.10.4/32"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+    patch:
+      certificate_profiles:
+        - url: /api/load-balancers/certificate-profiles/
+          lookup: {name: "clientssl-fedcheck.app-strong"}
+
+  - url: /api/load-balancers/load-balancer-pool-members/
+    lookup: {port: 9283}
+    defaults:
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool_live_ident_admin_web_http"}
+      ip_address:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.200.1/32"}
+      status:
+        url: /api/extras/statuses/
+        lookup: {name: "Active"}
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+    patch:
+      certificate_profiles:
+        - url: /api/load-balancers/certificate-profiles/
+          lookup: {name: "clientssl-fedcheck.app-strong"}
+
+  # Virtual Server with certificate profile
+  - url: /api/load-balancers/virtual-servers/
+    lookup: {name: "vs_live_ident_admin_web_https"}
+    defaults:
+      port: 443
+      protocol: "tcp"
+      load_balancer_type: "layer7"
+      vip:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.200.1/32"}
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool_live_ident_admin_web_http"}
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+    patch:
+      vip:
+        url: /api/ipam/ip-addresses/
+        lookup: {address: "10.0.200.1/32"}
+      load_balancer_pool:
+        url: /api/load-balancers/load-balancer-pools/
+        lookup: {name: "pool_live_ident_admin_web_http"}
+      health_check_monitor:
+        url: /api/load-balancers/health-check-monitors/
+        lookup: {name: "http"}
+      certificate_profiles:
+        - url: /api/load-balancers/certificate-profiles/
+          lookup: {name: "clientssl-fedcheck.app-strong"}

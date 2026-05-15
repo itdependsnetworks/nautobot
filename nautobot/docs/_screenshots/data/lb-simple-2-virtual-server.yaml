@@ -1,0 +1,14 @@
+fields:
+  - name: name
+    value: "virtual1"
+  - name: vip
+    type: select2
+    value: "10.0.0.1"
+  - name: port
+    value: "80"
+  - name: protocol
+    type: select
+    value: "TCP"
+  - name: load_balancer_pool
+    type: select2
+    value: "pool1"

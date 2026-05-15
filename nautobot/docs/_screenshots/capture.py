@@ -150,13 +150,16 @@ def parse_markdown_file(filepath):
 
             screenshot_specs.append({
                 "url": params["url"],
+                "url_lookup": params.get("url_lookup"),
                 "region": params.get("region", "full"),
                 "selector": params.get("selector"),
                 "highlight": highlights,
                 "script": params.get("script"),
                 "setup_data": params.get("setup_data"),
                 "form_data": params.get("form_data"),
+                "graphql_data": params.get("graphql_data"),
                 "height": params.get("height"),
+                "height_fit": params.get("height_fit"),
                 "crop_top": params.get("crop_top"),
                 "crop_bottom": params.get("crop_bottom"),
                 "light_path": light_path,
@@ -301,7 +304,7 @@ class ScreenshotHelpers:
             var result = {{'url': url, 'found': false}};
             $.ajax({{
                 url: url,
-                data: {{ q: '{value}', limit: 10, format: 'json' }},
+                data: {{ q: '{value}', limit: 1, depth: 0, format: 'json' }},
                 headers: {{ 'Accept': 'application/json; version=2.0' }},
                 async: false,
                 success: function(data) {{
@@ -469,22 +472,74 @@ def ensure_setup_data(base_url, username, password, items):
             data = resp.json()
             results = data.get("results", data if isinstance(data, list) else [])
             if results:
-                print(f"    Setup: {item['url']} {lookup} -- already exists")
+                # Apply patch to existing object if specified
+                patch_data = item.get("patch")
+                if patch_data:
+                    obj_id = results[0]["id"]
+                    resolved_patch = {}
+                    for key, val in patch_data.items():
+                        if isinstance(val, list):
+                            ids = []
+                            for ref in val:
+                                if isinstance(ref, dict) and "url" in ref and "lookup" in ref:
+                                    try:
+                                        fk_resp = session.get(api_base + ref["url"], params={**ref["lookup"], "limit": 1})
+                                        fk_resp.raise_for_status()
+                                        fk_results = fk_resp.json().get("results", [])
+                                        if fk_results:
+                                            ids.append({"id": fk_results[0]["id"]})
+                                    except Exception:
+                                        pass
+                                else:
+                                    ids.append(ref)
+                            resolved_patch[key] = ids
+                        elif isinstance(val, dict) and "url" in val and "lookup" in val:
+                            try:
+                                fk_resp = session.get(api_base + val["url"], params={**val["lookup"], "limit": 1})
+                                fk_resp.raise_for_status()
+                                fk_results = fk_resp.json().get("results", [])
+                                if fk_results:
+                                    resolved_patch[key] = {"id": fk_results[0]["id"]}
+                            except Exception:
+                                pass
+                        else:
+                            resolved_patch[key] = val
+                    try:
+                        resp = session.patch(f"{api_url}{obj_id}/", json=resolved_patch)
+                        if resp.status_code in (200, 201):
+                            print(f"    Setup: {item['url']} {lookup} -- patched {list(resolved_patch.keys())}")
+                        else:
+                            print(f"    Setup PATCH ERROR: {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"    Setup PATCH ERROR: {e}", file=sys.stderr)
+                else:
+                    print(f"    Setup: {item['url']} {lookup} -- already exists")
                 skipped += 1
                 continue
         except Exception as e:
             print(f"    Setup WARNING: lookup failed for {item['url']}: {e}", file=sys.stderr)
 
-        # Resolve any nested lookups in defaults (e.g., status: {name: "Active"} → status UUID)
+        # Resolve FK references. Values that are dicts with "url" and "lookup" keys
+        # are resolved to UUIDs by querying the API.
+        # e.g., vip: {url: "/api/ipam/ip-addresses/", lookup: {address: "10.0.0.1/32"}}
         create_data = {**lookup, **defaults}
         resolved_data = {}
         for key, val in create_data.items():
-            if isinstance(val, dict) and "name" in val:
-                # This is a FK reference -- look up the UUID
-                # The API field name maps to a nested endpoint, but for simplicity
-                # we'll pass the dict as-is and let the API resolve it,
-                # or look it up if the API needs a UUID
-                resolved_data[key] = val
+            if isinstance(val, dict) and "url" in val and "lookup" in val:
+                # FK reference -- resolve to UUID
+                fk_url = api_base + val["url"]
+                try:
+                    fk_resp = session.get(fk_url, params={**val["lookup"], "limit": 1})
+                    fk_resp.raise_for_status()
+                    fk_results = fk_resp.json().get("results", [])
+                    if fk_results:
+                        resolved_data[key] = {"id": fk_results[0]["id"]}
+                    else:
+                        print(f"    Setup WARNING: FK lookup for '{key}' found nothing at {val['url']} {val['lookup']}", file=sys.stderr)
+                        resolved_data[key] = val
+                except Exception as e:
+                    print(f"    Setup WARNING: FK lookup for '{key}' failed: {e}", file=sys.stderr)
+                    resolved_data[key] = val
             else:
                 resolved_data[key] = val
 
@@ -494,10 +549,55 @@ def ensure_setup_data(base_url, username, password, items):
             if resp.status_code in (200, 201):
                 print(f"    Setup: {item['url']} -- created {lookup}")
                 created += 1
+                obj_id = resp.json().get("id")
             else:
                 print(f"    Setup ERROR: {item['url']} -- {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+                continue
         except Exception as e:
             print(f"    Setup ERROR: {item['url']} -- {e}", file=sys.stderr)
+            continue
+
+        # Apply patch data if specified (for M2M fields on newly created objects)
+        patch_data = item.get("patch")
+        if patch_data and obj_id:
+            resolved_patch = {}
+            for key, val in patch_data.items():
+                if isinstance(val, list):
+                    # List of FK references
+                    ids = []
+                    for ref in val:
+                        if isinstance(ref, dict) and "url" in ref and "lookup" in ref:
+                            try:
+                                fk_resp = session.get(api_base + ref["url"], params={**ref["lookup"], "limit": 1})
+                                fk_resp.raise_for_status()
+                                fk_results = fk_resp.json().get("results", [])
+                                if fk_results:
+                                    ids.append(fk_results[0]["id"])
+                            except Exception:
+                                pass
+                        else:
+                            ids.append(ref)
+                    resolved_patch[key] = ids
+                elif isinstance(val, dict) and "url" in val and "lookup" in val:
+                    try:
+                        fk_resp = session.get(api_base + val["url"], params={**val["lookup"], "limit": 1})
+                        fk_resp.raise_for_status()
+                        fk_results = fk_resp.json().get("results", [])
+                        if fk_results:
+                            resolved_patch[key] = {"id": fk_results[0]["id"]}
+                    except Exception:
+                        pass
+                else:
+                    resolved_patch[key] = val
+
+            try:
+                resp = session.patch(f"{api_url}{obj_id}/", json=resolved_patch)
+                if resp.status_code in (200, 201):
+                    print(f"    Setup: {item['url']}{obj_id}/ -- patched {list(resolved_patch.keys())}")
+                else:
+                    print(f"    Setup PATCH ERROR: {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+            except Exception as e:
+                print(f"    Setup PATCH ERROR: {e}", file=sys.stderr)
 
     return created, skipped
 
@@ -528,6 +628,111 @@ def load_form_data(yaml_name):
         data = yaml.safe_load(f)
 
     return data.get("fields", [])
+
+
+def load_graphql_data(yaml_name):
+    """Load a GraphQL query YAML file from the data directory.
+
+    Returns:
+        The query string, or None if not found.
+    """
+    import yaml
+
+    yaml_path = os.path.join(DATA_DIR, yaml_name)
+    if not os.path.isfile(yaml_path):
+        print(f"WARNING: GraphQL data file not found: {yaml_path}", file=sys.stderr)
+        return None
+
+    with open(yaml_path, "r") as f:
+        data = yaml.safe_load(f)
+
+    return data.get("graphql_query")
+
+
+def fill_graphql_and_execute(browser, query, hide_variables=True):
+    """Paste a GraphQL query into the GraphiQL editor and execute it.
+
+    Args:
+        browser: Splinter Browser instance, already on the /graphql/ page.
+        query: The GraphQL query string.
+        hide_variables: If True, collapse/hide the Variables panel (default True).
+    """
+    # GraphiQL uses CodeMirror. Set the query via the CM instance.
+    browser.execute_script("""
+        var cm = document.querySelector('.CodeMirror');
+        if (cm && cm.CodeMirror) {
+            cm.CodeMirror.setValue(arguments[0]);
+        }
+    """, query)
+    time.sleep(0.5)
+
+    # Collapse the Variables/Headers section by clicking the chevron toggle button.
+    # The button is next to the "Variables" / "Headers" tabs at the bottom of the query editor.
+    if hide_variables:
+        # Find and click the chevron button to collapse
+        collapsed = browser.execute_script("""
+            // Look for the button that toggles the editor tools (Variables/Headers)
+            // It's typically a button with an SVG chevron icon
+            var buttons = document.querySelectorAll('.graphiql-editor-tools button');
+            for (var i = 0; i < buttons.length; i++) {
+                var btn = buttons[i];
+                // The toggle button usually has an SVG or aria-label
+                if (btn.querySelector('svg') || btn.getAttribute('aria-label')) {
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if collapsed:
+            time.sleep(0.3)
+
+    # Click the Execute/Play button
+    execute_btn = browser.find_by_css("button.graphiql-execute-button, button[aria-label='Execute query'], .execute-button-wrap button, .execute-button")
+    if not execute_btn:
+        execute_btn = browser.find_by_css("button.execute-button, .graphiql-toolbar button:first-child")
+    if execute_btn:
+        execute_btn.first.click()
+    else:
+        from selenium.webdriver.common.keys import Keys
+        browser.driver.find_element("css selector", ".CodeMirror").send_keys(Keys.CONTROL, Keys.ENTER)
+
+    # Wait for results to render
+    time.sleep(3)
+
+    # Size the viewport so the flexbox editor panels are tall enough to show all lines.
+    # After execution, measure the taller of query vs result line counts.
+    line_info = browser.execute_script("""
+        var cms = document.querySelectorAll('.CodeMirror');
+        var maxLines = 0;
+        var lineHeight = 20;
+        cms.forEach(function(cmEl) {
+            if (cmEl.CodeMirror) {
+                var lc = cmEl.CodeMirror.lineCount();
+                var lh = cmEl.CodeMirror.defaultTextHeight();
+                if (lc > maxLines) maxLines = lc;
+                if (lh > 0) lineHeight = lh;
+            }
+        });
+        return {maxLines: maxLines, lineHeight: lineHeight};
+    """) or {"maxLines": 30, "lineHeight": 20}
+
+    max_lines = line_info["maxLines"]
+    line_height = line_info["lineHeight"]
+    # viewport = lines * line_height + page chrome (header ~60, toolbar ~40, footer ~40, padding ~40)
+    # Add 2 extra lines of buffer so the last line isn't clipped
+    needed_css = int((max_lines + 2) * line_height + 180)
+    needed_css = max(needed_css, 500)  # minimum
+
+    browser.driver.set_window_size(VIEWPORT_WIDTH, needed_css)
+    time.sleep(0.2)
+    # Compensate for browser chrome
+    actual = browser.execute_script("return window.innerHeight;")
+    chrome_diff = needed_css - actual
+    if chrome_diff > 0:
+        browser.driver.set_window_size(VIEWPORT_WIDTH, needed_css + chrome_diff)
+        time.sleep(0.2)
+
 
 
 def _dismiss_open_select2(browser):
@@ -709,20 +914,41 @@ def take_full_page_screenshot(browser):
     """
     import io
 
-    # Get the full page scroll height
-    scroll_height = browser.execute_script(
-        "return Math.max(document.body.scrollHeight, document.body.offsetHeight, "
-        "document.documentElement.scrollHeight);"
-    )
+    # Get the full page height. Use the larger of scrollHeight and the
+    # bottom of the deepest visible element. Flexbox pages may have
+    # scrollHeight < actual content because flex containers don't overflow.
+    scroll_height = browser.execute_script("""
+        var scrollH = Math.max(
+            document.body.scrollHeight, document.body.offsetHeight,
+            document.documentElement.scrollHeight
+        );
+        // Also check the bottom of the deepest visible element
+        var allElements = document.querySelectorAll('#main-content *, #footer');
+        var maxBottom = 0;
+        allElements.forEach(function(el) {
+            var rect = el.getBoundingClientRect();
+            if (rect.height > 0) {
+                var absBottom = rect.bottom + window.scrollY;
+                if (absBottom > maxBottom) maxBottom = absBottom;
+            }
+        });
+        return Math.max(scrollH, Math.ceil(maxBottom));
+    """)
 
     # Cap height to prevent Firefox memory issues
     if scroll_height > MAX_SCREENSHOT_HEIGHT:
         print(f"  (page height {scroll_height}px capped to {MAX_SCREENSHOT_HEIGHT}px)")
         scroll_height = MAX_SCREENSHOT_HEIGHT
 
-    # Expand viewport height to fit, keep width fixed
+    # Set window size and compensate for browser chrome so the actual
+    # viewport (innerHeight) matches the target.
     browser.driver.set_window_size(VIEWPORT_WIDTH, scroll_height)
-    time.sleep(0.3)  # Allow reflow
+    time.sleep(0.2)
+    actual_viewport = browser.execute_script("return window.innerHeight;")
+    chrome_overhead = scroll_height - actual_viewport
+    if chrome_overhead > 0:
+        browser.driver.set_window_size(VIEWPORT_WIDTH, scroll_height + chrome_overhead)
+        time.sleep(0.2)
 
     png_bytes = browser.driver.get_screenshot_as_png()
 
@@ -735,14 +961,22 @@ def take_full_page_screenshot(browser):
 def take_viewport_screenshot(browser, height_css):
     """Take a screenshot at a fixed viewport height and return it as a PIL Image.
 
-    Sets the viewport to the given height (CSS pixels) and captures exactly
-    what's visible -- no expansion to fit page content.  Useful for showing
-    sticky footers (Create/Cancel buttons) without scrolling through all fields.
+    set_window_size sets the outer window size (including browser chrome),
+    not the inner viewport. We compensate by measuring the difference and
+    adjusting so the actual viewport matches the requested height.
     """
     import io
 
+    # Set initial size
     browser.driver.set_window_size(VIEWPORT_WIDTH, int(height_css))
-    time.sleep(0.3)  # Allow reflow
+    time.sleep(0.2)
+
+    # Measure actual viewport vs requested, and compensate
+    actual_viewport = browser.execute_script("return window.innerHeight;")
+    chrome_overhead = int(height_css) - actual_viewport
+    if chrome_overhead > 0:
+        browser.driver.set_window_size(VIEWPORT_WIDTH, int(height_css) + chrome_overhead)
+        time.sleep(0.2)
 
     png_bytes = browser.driver.get_screenshot_as_png()
 
@@ -781,6 +1015,22 @@ def resolve_y_boundary(browser, value, dpr, edge="bottom"):
         return int(int(value) * dpr)
     except ValueError:
         pass
+
+    # Special keyword: find the bottom-most visible .card element on the page
+    if value == "last-visible-card":
+        bottom = browser.execute_script("""
+            var cards = document.querySelectorAll('.card');
+            var maxBottom = 0;
+            cards.forEach(function(c) {
+                var rect = c.getBoundingClientRect();
+                if (rect.height > 0 && rect.bottom > maxBottom) {
+                    maxBottom = rect.bottom;
+                }
+            });
+            return maxBottom;
+        """) or 0
+        if bottom > 0:
+            return int((bottom + 40) * dpr)
 
     # Otherwise treat as a CSS selector
     elements = browser.find_by_css(value)
@@ -931,8 +1181,33 @@ def capture_one(browser, spec, base_url, helpers):
         if setup_items:
             ensure_setup_data(base_url, None, None, setup_items)
 
+    # Resolve dynamic URL if url_lookup is specified.
+    # url_lookup is an API endpoint + query filter, e.g.:
+    #   url=/load-balancers/certificate-profiles/{id}/ url_lookup='/api/load-balancers/certificate-profiles/?name=clientssl-fedcheck.app-strong'
+    # The {id} placeholder in the URL gets replaced with the looked-up object's UUID.
+    nav_url = spec["url"]
+    if spec.get("url_lookup"):
+        import requests as _requests
+        token = os.getenv("NAUTOBOT_TOKEN", "0123456789abcdef0123456789abcdef01234567")
+        lookup_url = base_url.rstrip("/") + spec["url_lookup"]
+        try:
+            resp = _requests.get(
+                lookup_url,
+                headers={"Authorization": f"Token {token}", "Accept": "application/json; version=2.0"},
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if results:
+                obj_id = results[0]["id"]
+                nav_url = nav_url.replace("{id}", str(obj_id))
+                print(f"  Resolved URL: {nav_url}")
+            else:
+                print(f"  WARNING: url_lookup returned no results: {spec['url_lookup']}", file=sys.stderr)
+        except Exception as e:
+            print(f"  WARNING: url_lookup failed: {e}", file=sys.stderr)
+
     # Navigate to the URL
-    url = base_url.rstrip("/") + "/" + spec["url"].lstrip("/")
+    url = base_url.rstrip("/") + "/" + nav_url.lstrip("/")
     browser.visit(url)
     browser.is_element_present_by_tag("body", wait_time=10)
     time.sleep(1)  # Allow dynamic content to render
@@ -964,6 +1239,16 @@ def capture_one(browser, spec, base_url, helpers):
             fill_form_from_yaml(browser, helpers, fields)
         else:
             print(f"  WARNING: No fields loaded from {spec['form_data']}", file=sys.stderr)
+
+    # Execute GraphQL query if specified
+    if spec.get("graphql_data"):
+        print(f"  Loading GraphQL query: {spec['graphql_data']}")
+        query = load_graphql_data(spec["graphql_data"])
+        if query:
+            print(f"  Executing GraphQL query...")
+            fill_graphql_and_execute(browser, query)
+        else:
+            print(f"  WARNING: No query loaded from {spec['graphql_data']}", file=sys.stderr)
 
     # Clean up before screenshot: dismiss dropdowns/pickers, remove focus, scroll to top
     _dismiss_open_select2(browser)
@@ -1010,10 +1295,48 @@ def capture_one(browser, spec, base_url, helpers):
         set_theme(browser, theme)
 
         # --- Capture the raw screenshot ---
-        # Mode 1 (height=): fixed viewport height, capture what's visible
-        # Mode 2/3 (crop_top=/crop_bottom=): full page, then crop vertically
+        # graphql_data: viewport already sized by fill_graphql_and_execute, just capture
+        # height_fit=selector: auto-calculate viewport to fit element + sticky footer
+        # height=N: fixed viewport height
+        # crop_top/crop_bottom: full page, then crop vertically
         # Default: full page
-        if spec["height"]:
+        if spec.get("graphql_data"):
+            import io
+            png_bytes = browser.driver.get_screenshot_as_png()
+            raw_image = Image.open(io.BytesIO(png_bytes))
+        elif spec.get("height_fit"):
+            # First, expand to full page so we can measure the true element position
+            scroll_height = browser.execute_script(
+                "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
+            )
+            browser.driver.set_window_size(VIEWPORT_WIDTH, scroll_height)
+            time.sleep(0.3)
+
+            debug = browser.execute_script(f"""
+                var el = document.querySelector('{spec["height_fit"]}');
+                var footer = document.querySelector('.nb-form-sticky-footer');
+                if (!el) return {{error: 'element not found'}};
+                var elRect = el.getBoundingClientRect();
+                var footerH = footer ? footer.offsetHeight : 0;
+                return {{
+                    elBottom: elRect.bottom,
+                    footerH: footerH,
+                    footerExists: !!footer,
+                    total: Math.ceil(elRect.bottom + footerH)
+                }};
+            """)
+            print(f"  height_fit debug: {debug}")
+            fit_height = debug.get("total") if debug and not debug.get("error") else None
+
+            # Restore to default, then set to calculated
+            browser.driver.set_window_size(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
+            time.sleep(0.1)
+            if fit_height:
+                raw_image = take_viewport_screenshot(browser, fit_height)
+            else:
+                print(f"  WARNING: height_fit selector '{spec['height_fit']}' not found, using full page", file=sys.stderr)
+                raw_image = take_full_page_screenshot(browser)
+        elif spec["height"]:
             raw_image = take_viewport_screenshot(browser, int(spec["height"]))
         else:
             raw_image = take_full_page_screenshot(browser)
@@ -1035,9 +1358,15 @@ def capture_one(browser, spec, base_url, helpers):
             crop_y1 = 0
 
         # --- Vertical crop (modes 2 and 3) ---
-        # Applied after horizontal crop. crop_top/crop_bottom are resolved
-        # relative to the full page, then offset by the horizontal crop origin.
-        if not spec["height"] and (spec["crop_top"] or spec["crop_bottom"]):
+        # Re-expand the viewport to full page height so getBoundingClientRect
+        # returns positions that match the full-page screenshot coordinates.
+        if not spec["height"] and not spec.get("height_fit") and (spec["crop_top"] or spec["crop_bottom"]):
+            scroll_height = browser.execute_script(
+                "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
+            )
+            browser.driver.set_window_size(VIEWPORT_WIDTH, min(scroll_height, MAX_SCREENSHOT_HEIGHT))
+            time.sleep(0.3)
+
             img_w, img_h = final_image.size
 
             if spec["crop_top"]:
@@ -1047,10 +1376,15 @@ def capture_one(browser, spec, base_url, helpers):
                 y_top = 0
 
             if spec["crop_bottom"]:
-                y_bottom = resolve_y_boundary(browser, spec["crop_bottom"], dpr, edge="bottom") - crop_y1
+                y_bottom_raw = resolve_y_boundary(browser, spec["crop_bottom"], dpr, edge="bottom")
+                y_bottom = y_bottom_raw - crop_y1
                 y_bottom = min(img_h, y_bottom)
+                print(f"  crop_bottom debug: raw={y_bottom_raw} crop_y1={crop_y1} clamped={y_bottom} img_h={img_h}")
             else:
                 y_bottom = img_h
+
+            # Restore viewport
+            browser.driver.set_window_size(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
 
             if y_top < y_bottom:
                 final_image = final_image.crop((0, y_top, img_w, y_bottom))

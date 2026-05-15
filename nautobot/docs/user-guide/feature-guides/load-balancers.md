@@ -51,13 +51,13 @@
 
 ![Virtual Servers List](./images/load-balancer/load-balancer-virtual-server-light.png#only-light){ .on-glb }
 ![Virtual Servers List](./images/load-balancer/load-balancer-virtual-server-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/ region=full)
+[//]: # (screenshot: url=/load-balancers/virtual-servers/ region=full crop_bottom=#bulk-action-buttons)
 
 A list view of all configured Virtual Servers, including name, load balancer type, protocol, and associated pools.
 
 ![Virtual Server Detail](./images/load-balancer/load_balancer-virtual-server-detail-light.png#only-light){ .on-glb }
 ![Virtual Server Detail](./images/load-balancer/load-balancer-virtual-server-detail-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/virtual-servers/19736556-378c-4a61-b3b8-aaae2f2f422c/ region=full)
+[//]: # (screenshot: url=/load-balancers/virtual-servers/{id}/ region=full crop_bottom=last-visible-card setup_data=lb-advanced-setup.yaml url_lookup='/api/load-balancers/virtual-servers/?name=vs_live_ident_admin_web_https&limit=1')
 
 Detailed view of a single Virtual Server, showing the VIP, port, protocol, associated Certificate Profile, and linked Load Balancer Pool.
 
@@ -69,7 +69,7 @@ A list view of Load Balancer Pools, showing pool names and algorithms.
 
 ![Load Balancer Pool Detail](./images/load-balancer/load-balancer-pools-detail-light.png#only-light){ .on-glb }
 ![Load Balancer Pools Detail](./images/load-balancer/load-balancer-pools-detail-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/load-balancer-pools/d5097984-9c43-4c33-a6b2-43339dfd65f4/ region=full)
+[//]: # (screenshot: url=/load-balancers/load-balancer-pools/{id}/ region=full crop_bottom=last-visible-card setup_data=lb-advanced-setup.yaml url_lookup='/api/load-balancers/load-balancer-pools/?name=pool_live_ident_admin_web_http&limit=1')
 
 Detailed view of a specific Load Balancer Pool, including load balancing algorithm, associated pool members, and associated Health Check Monitor.
 
@@ -81,7 +81,7 @@ A list view of Load Balancer Pool Members, displaying IP Addresses, ports, and s
 
 ![Load Balancer Pool Member Detail](./images/load-balancer/load-balancer-pool-member-detail-light.png#only-light){ .on-glb }
 ![Load Balancer Pool Member Detail](./images/load-balancer/load-balancer-pool-member-detail-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/132759f4-1fa9-47dd-94f3-371abb943dd7/ region=full)
+[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/{id}/ region=full crop_bottom=last-visible-card setup_data=lb-advanced-setup.yaml url_lookup='/api/load-balancers/load-balancer-pool-members/?port=9280&limit=1')
 
 Detailed view of an individual Load Balancer Pool Member, including its linked pool, port, health check monitor configuration, and certificate profile.
 
@@ -93,7 +93,7 @@ A list view of a Health Check Monitor showing health check types, port, interval
 
 ![Health Check Detail](./images/load-balancer/load-balancer-health-check-detail-light.png#only-light){ .on-glb }
 ![Health Check Detail](./images/load-balancer/load-balancer-health-check-detail-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/health-check-monitors/497deb96-e43b-4408-b3fb-2a1ae6bf7856/ region=full)
+[//]: # (screenshot: url=/load-balancers/health-check-monitors/{id}/ region=full crop_bottom=last-visible-card setup_data=lb-advanced-setup.yaml url_lookup='/api/load-balancers/health-check-monitors/?name=http&limit=1')
 
 Detailed view of a Health Check Monitor including interval, timeout, and target port.
 
@@ -105,7 +105,7 @@ A list view of available Certificate Profiles used for SSL/TLS termination, show
 
 ![Certificate Profile Detail](./images/load-balancer/load-balancer-cert-detail-light.png#only-light){ .on-glb }
 ![Certificate Profile Detail](./images/load-balancer/load-balancer-cert-detail-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/load-balancers/certificate-profiles/c80b768a-498d-4111-be42-e9462afe645e/ region=full)
+[//]: # (screenshot: url=/load-balancers/certificate-profiles/{id}/ region=full crop_bottom=last-visible-card setup_data=lb-advanced-setup.yaml url_lookup='/api/load-balancers/certificate-profiles/?name=clientssl-fedcheck.app-strong&limit=1')
 
 Detailed view for a Certificate Profile, including certificate type, certificate file path, and key file paths.
 
@@ -152,6 +152,7 @@ Ensure the following IP Addresses exist in Nautobot's IPAM:
 
 ![F5 Simple Adding Load Balancer Pool Member](./images/load-balancer/load-balancer-f5-simple-5-light.png#only-light){ .on-glb }
 ![F5 Simple Adding Load Balancer Pool Member](./images/load-balancer/load-balancer-f5-simple-5-dark.png#only-dark){ .on-glb }
+[//]: # (screenshot: url=/load-balancers/load-balancer-pool-members/add/ region=center-panel height_fit='.card:nth-of-type(1)' setup_data=lb-simple-setup.yaml form_data=lb-simple-5-pool-member.yaml)
 
 ### 4. Creating the Virtual Server
 
@@ -307,7 +308,7 @@ ltm node /Common/10.0.0.1 {
 
 ![F5 Simple Jinja2](./images/load-balancer/load-balancer-f5-simple-6-light.png#only-light){ .on-glb }
 ![F5 Simple Jinja2](./images/load-balancer/load-balancer-f5-simple-6-dark.png#only-dark){ .on-glb }
-[//] : # "`https://next.demo.nautobot.com/render-jinja-template/`"
+[//]: # (media: type=manual note="Jinja2 template render page -- requires pasting template + JSON data")
 
 ## F5 Advanced Load Balancing Use Case
 
@@ -323,12 +324,12 @@ In this advanced configuration scenario, we illustrate:
 
 ![F5 Advanced IPAM Configuration](./images/load-balancer/load-balancer-f5-advanced-1-light.png#only-light){ .on-glb }
 ![F5 Advanced IPAM Configuration](./images/load-balancer/load-balancer-f5-advanced-1-dark.png#only-dark){ .on-glb }
-[//]: # (screenshot: url=/ipam/ip-addresses/ region=full crop_bottom='#object_list_form tbody tr:nth-child(10)')
+[//]: # (screenshot: url=/ipam/ip-addresses/?q=10.0.200 region=full crop_bottom=#bulk-action-buttons)
 
 Ensure these IP Addresses are available in Nautobot's IPAM:
 
-- **Virtual IP (VIP):** `10.0.20.1`
-- **Pool Member IPs:** `10.0.20.2`, `10.0.20.3`, `10.0.20.4`
+- **Virtual IP (VIP):** `10.0.200.1`
+- **Pool Member IPs:** `10.0.200.2`, `10.0.200.3`, `10.0.200.4`
 
 ### 2. Health Check Configuration
 
@@ -402,7 +403,7 @@ Define Certificate Profiles:
 - Navigate to **Load Balancer > Virtual Servers**.
 - Click **Add Virtual Server**.
     - Name: `vs_live_ident_admin_web_https`
-    - IP Address (VIP): `10.0.20.1`
+    - IP Address (VIP): `10.0.200.1`
     - Protocol: `TCP`
     - Load Balancer Type: `Layer 7`
     - Port: `443`
@@ -461,7 +462,7 @@ Define Certificate Profiles:
         "port": 443,
         "protocol": "TCP",
         "vip": {
-          "address": "10.0.20.1/32"
+          "address": "10.0.200.1/32"
         },
         "certificate_profiles": [
           {
@@ -485,19 +486,19 @@ Define Certificate Profiles:
             {
               "port": 9280,
               "ip_address": {
-                "address": "10.0.20.2/32"
+                "address": "10.0.200.2/32"
               }
             },
             {
               "port": 9280,
               "ip_address": {
-                "address": "10.0.20.3/32"
+                "address": "10.0.200.3/32"
               }
             },
             {
               "port": 9280,
               "ip_address": {
-                "address": "10.0.20.4/32"
+                "address": "10.0.200.4/32"
               }
             }
           ]
@@ -510,7 +511,7 @@ Define Certificate Profiles:
 
 ![F5 Advanced Jinja2 Template](./images/load-balancer/load-balancer-f5-advanced-8-light.png#only-light){ .on-glb }
 ![F5 Advanced Jinja2 Template](./images/load-balancer/load-balancer-f5-advanced-8-dark.png#only-dark){ .on-glb }
-[//] : # "`https://next.demo.nautobot.com/render-jinja-template/`"
+[//]: # (media: type=manual note="Jinja2 template render page -- requires pasting template + JSON data")
 
 ```jinja2
 {% for virtual_server in data.virtual_servers %}
@@ -576,8 +577,8 @@ ltm node /Common/{{ member.ip_address.address.split('/')[0] }} {
 You can use the Jinja Renderer at the bottom of Nautobot with your JSON output and the sample Jinja2 template:
 
 ```no-highlight
-ltm virtual-address /Common/10.0.20.1 {
-    address 10.0.20.1
+ltm virtual-address /Common/10.0.200.1 {
+    address 10.0.200.1
     arp enabled
     mask 255.255.255.255
     route-advertisement selective
@@ -596,7 +597,7 @@ ltm profile client-ssl /Common/clientssl-fedcheck.app-strong {
 }
 
 ltm virtual /Common/vs_live_ident_admin_web_https {
-    destination /Common/10.0.20.1:443
+    destination /Common/10.0.200.1:443
     ip-protocol tcp
     mask 255.255.255.255
     pool /Common/pool_live_ident_admin_web_http
@@ -614,30 +615,30 @@ ltm virtual /Common/vs_live_ident_admin_web_https {
 
 ltm pool /Common/pool_live_ident_admin_web_http {
     members {
-        /Common/10.0.20.2:9280 {
-            address 10.0.20.2
+        /Common/10.0.200.2:9280 {
+            address 10.0.200.2
         }
-        /Common/10.0.20.3:9280 {
-            address 10.0.20.3
+        /Common/10.0.200.3:9280 {
+            address 10.0.200.3
         }
-        /Common/10.0.20.4:9280 {
-            address 10.0.20.4
+        /Common/10.0.200.4:9280 {
+            address 10.0.200.4
         }
     }
     monitor /Common/http
 }
 
 
-ltm node /Common/10.0.20.2 {
-    address 10.0.20.2
+ltm node /Common/10.0.200.2 {
+    address 10.0.200.2
 }
 
-ltm node /Common/10.0.20.3 {
-    address 10.0.20.3
+ltm node /Common/10.0.200.3 {
+    address 10.0.200.3
 }
 
-ltm node /Common/10.0.20.4 {
-    address 10.0.20.4
+ltm node /Common/10.0.200.4 {
+    address 10.0.200.4
 }
 ```
 

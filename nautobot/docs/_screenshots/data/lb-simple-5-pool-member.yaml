@@ -1,0 +1,12 @@
+fields:
+  - name: load_balancer_pool
+    type: select2
+    value: "pool1"
+  - name: ip_address
+    type: select2
+    value: "10.0.0.1"
+  - name: port
+    value: "80"
+  - name: status
+    type: select2
+    value: "Active"
