@@ -299,3 +299,42 @@ class ButtonsColumnTestCase(TestCase):
         """An explicit non-empty subset is passed through unchanged."""
         column = ButtonsColumn(RIR, buttons=("delete",))
         self.assertEqual(column.extra_context["buttons"], ("delete",))
+
+
+class SerializerPathsForVisibleColumnsTestCase(TestCase):
+    """Tests for BaseTable.serializer_paths_for_visible_columns() (export field-selection defaults)."""
+
+    def test_device_table_columns_map_to_serializer_paths(self):
+        from nautobot.dcim.api.serializers import DeviceSerializer
+        from nautobot.dcim.tables import DeviceTable
+
+        table = DeviceTable(Device.objects.all())
+        paths = table.serializer_paths_for_visible_columns(DeviceSerializer)
+        self.assertIn("name", paths)
+        # Non-data columns are omitted
+        self.assertNotIn("pk", paths)
+        self.assertNotIn("actions", paths)
+        # Every returned head is a serializer field or a custom-field reference
+        serializer = DeviceSerializer(context={"request": None, "depth": 0})
+        for path in paths:
+            head = path.split("__", 1)[0]
+            self.assertTrue(
+                head in serializer.fields or head.startswith("cf_"),
+                f"{path} does not correspond to a serializer field",
+            )
+
+    def test_column_override(self):
+        from nautobot.dcim.api.serializers import DeviceSerializer
+        from nautobot.dcim.tables import DeviceTable
+
+        class OverriddenDeviceTable(DeviceTable):
+            column_serializer_field_overrides = {"name": "display", "status": None}
+
+            class Meta(DeviceTable.Meta):
+                pass
+
+        table = OverriddenDeviceTable(Device.objects.all())
+        paths = table.serializer_paths_for_visible_columns(DeviceSerializer)
+        self.assertIn("display", paths)
+        self.assertNotIn("name", paths)
+        self.assertNotIn("status", paths)
