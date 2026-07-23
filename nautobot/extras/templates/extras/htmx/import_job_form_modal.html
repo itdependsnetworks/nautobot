@@ -1,0 +1,46 @@
+{% extends "extras/htmx/job_form_modal.html" %}
+{% load helpers %}
+
+{% comment %}
+Custom job-form modal for the ImportObjects system job. Renders the standard job form plus the
+field-reference table (available columns for the selected content type), ported from the full-page
+system_jobs/import_objects.html so the guidance is available in the modal too.
+{% endcomment %}
+
+{% block job_form_wrapper %}
+    {{ block.super }}
+    <div class="row justify-content-center">
+        <div class="col-md-9 offset-md-3">
+            <div id="csv-fetch-failure" class="alert alert-danger" role="alert" style="display: none;"></div>
+            <div id="csv-fields-info" class="alert alert-info" role="alert" style="display: none;">
+                <p>
+                    <span class="text-success"><span aria-hidden="true" class="mdi mdi-check-bold"></span></span>
+                    Required fields <strong>must</strong> be present in the data.
+                </p>
+                <p>
+                    <span class="text-warning"><span aria-hidden="true" class="mdi mdi-key-link"></span></span>
+                    Related objects may be identified by their UUID(s) and/or by any field(s) that uniquely identify
+                    them (e.g. a <code>status</code> field by UUID or by <code>status__name</code>). If no related
+                    object is intended for a given field, the string <code>NoObject</code> can be given.
+                </p>
+            </div>
+            <table id="csv-fields-table" class="table" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Required</th>
+                        <th>Related Object</th>
+                        <th>Choices</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody id="csv-fields-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+{% endblock job_form_wrapper %}
+
+{% block javascript %}
+    {{ block.super }}
+    {% include "system_jobs/inc/csv_fields_table_script.html" %}
+{% endblock javascript %}

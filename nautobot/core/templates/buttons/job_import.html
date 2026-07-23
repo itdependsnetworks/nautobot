@@ -1,13 +1,15 @@
 {% if import_url %}
     {% if list_element %}
         <li>
-            <a class="dropdown-item" id="import-button" href="{{ import_url }}">
-                <span class="mdi mdi-database-import text-secondary" aria-hidden="true"></span> Import from CSV
-            </a>
+            <button type="button" class="dropdown-item" id="import-button"
+                    {% if disabled %}disabled aria-disabled="true" title="{{ disabled_title }}"{% else %}data-bs-toggle="modal" data-bs-target="#nautobot-generic-modal" hx-post="{{ import_url }}" hx-target="#modal-content-container" hx-swap="innerHTML" hx-vals='{{ import_hx_vals }}'{% endif %}>
+                <span class="mdi mdi-database-import text-secondary" aria-hidden="true"></span> Import from file
+            </button>
         </li>
     {% else %}
-        <a id="import-button" href="{{ import_url }}" class="btn btn-info">
+        <button type="button" id="import-button" class="btn btn-info"
+                {% if disabled %}disabled aria-disabled="true" title="{{ disabled_title }}"{% else %}data-bs-toggle="modal" data-bs-target="#nautobot-generic-modal" hx-post="{{ import_url }}" hx-target="#modal-content-container" hx-swap="innerHTML" hx-vals='{{ import_hx_vals }}'{% endif %}>
             <span class="mdi mdi-database-import" aria-hidden="true"></span> Import
-        </a>
+        </button>
     {% endif %}
 {% endif %}
