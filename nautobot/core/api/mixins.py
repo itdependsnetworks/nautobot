@@ -9,7 +9,11 @@ from django.core.exceptions import (
 from django.db.models import AutoField, Model
 from rest_framework.exceptions import ValidationError
 
-from nautobot.core.api.utils import dict_to_filter_params
+from nautobot.core.api.utils import (
+    ambiguous_related_object_message,
+    dict_to_filter_params,
+    missing_related_object_message,
+)
 from nautobot.core.utils.data import is_url
 
 logger = logging.getLogger(__name__)
@@ -93,9 +97,11 @@ class WritableSerializerMixin:
         try:
             return queryset.get(**filter_params)
         except ObjectDoesNotExist as e:
-            raise ValidationError(f"Related object not found using the provided attributes: {filter_params}") from e
+            raise ValidationError(missing_related_object_message(queryset.model, filter_params)) from e
         except MultipleObjectsReturned as e:
-            raise ValidationError(f"Multiple objects match the provided attributes: {filter_params}") from e
+            raise ValidationError(
+                ambiguous_related_object_message(queryset.model, filter_params, queryset.filter(**filter_params).count())
+            ) from e
         except FieldError as e:
             raise ValidationError(e) from e
 

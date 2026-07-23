@@ -17,6 +17,93 @@ from nautobot.core.api import exceptions
 logger = logging.getLogger(__name__)
 
 
+#: Maximum relation-traversal depth permitted in an export field selection (e.g. a__b__c__d = depth 3).
+EXPORT_FIELD_MAX_DEPTH = 3
+
+
+def validate_field_paths(serializer_class, paths, max_depth=EXPORT_FIELD_MAX_DEPTH):
+    """
+    Validate a list of `__`-separated field-selection paths against a serializer's field graph.
+
+    A path's head must be a field of the serializer (or a `cf_<key>` custom-field reference); each
+    additional segment must traverse a single-valued related field, resolved through the related model's
+    serializer. Traversal into many-to-many fields is not supported (it would multiply rows).
+    Paths that reach a related model without a known serializer are accepted and left to the database
+    to validate.
+
+    Raises:
+        ValueError: describing every invalid path.
+    """
+    root_serializer = serializer_class(context={"request": None, "depth": 0})
+    errors = []
+    for path in paths:
+        parts = path.split("__")
+        if len(parts) - 1 > max_depth:
+            errors.append(f'"{path}" exceeds the maximum relation depth of {max_depth}')
+            continue
+        if parts[0].startswith("cf_"):
+            if len(parts) > 1:
+                errors.append(f'"{path}": custom-field references cannot be expanded')
+            continue
+        serializer = root_serializer
+        for index, part in enumerate(parts):
+            if serializer is None:
+                # Reached a model without a known serializer; defer validation to the database
+                break
+            field = serializer.fields.get(part)
+            if field is None:
+                errors.append(f'"{path}": unknown field "{part}"')
+                break
+            if index == len(parts) - 1:
+                break
+            if isinstance(field, serializers.ManyRelatedField):
+                errors.append(f'"{path}": cannot traverse into many-to-many field "{part}"')
+                break
+            if not isinstance(field, serializers.RelatedField):
+                errors.append(f'"{path}": "{part}" is not a related field and cannot be expanded')
+                break
+            related_model = getattr(field, "_related_model", None)
+            if related_model is None:
+                related_model = getattr(getattr(field, "queryset", None), "model", None)
+            if related_model is None:
+                serializer = None
+                continue
+            try:
+                serializer = get_serializer_for_model(related_model)(context={"request": None, "depth": 0})
+            except exceptions.SerializerNotFound:
+                serializer = None
+    if errors:
+        raise ValueError(f"Invalid field selection: {'; '.join(errors)}")
+
+
+def nest_flat_dict(data, null_sentinels=()):
+    """
+    Convert a dictionary with flat keys separated by '__' into a nested dictionary structure.
+
+    Args:
+        data (dict): e.g. `{"name": "Interface 4", "device__name": "Device 1", "device__tenant__name": ""}`
+        null_sentinels (iterable): leaf values to replace with None (e.g. the CSV "NoObject"/"NULL" markers).
+
+    Returns:
+        (dict): The nested equivalent, e.g. `{"name": "Interface 4", "device": {"name": "Device 1", "tenant": {"name": ""}}}`
+    """
+
+    def insert_nested_dict(keys, value, current_dict):
+        key = keys[0]
+        if len(keys) == 1:
+            current_dict[key] = None if value in null_sentinels else value
+        else:
+            current_dict[key] = current_dict.get(key, {})
+            insert_nested_dict(keys[1:], value, current_dict[key])
+
+    result_dict = {}
+    for original_key, original_value in data.items():
+        split_keys = original_key.split("__")
+        insert_nested_dict(split_keys, original_value, result_dict)
+
+    return result_dict
+
+
 def dict_to_filter_params(d, prefix=""):
     """
     Translate a dictionary of attributes to a nested set of parameters suitable for QuerySet filtering. For example:
@@ -47,6 +134,45 @@ def dict_to_filter_params(d, prefix=""):
         else:
             params[k] = val
     return params
+
+
+def _identifying_fields_hint(model):
+    """Phrase describing which fields are guaranteed to uniquely identify an instance of `model`."""
+    try:
+        natural_key = list(getattr(model, "natural_key_field_lookups", None) or [])
+    except Exception:
+        natural_key = []
+    if natural_key:
+        return f"its natural key ({', '.join(natural_key)}) or its `id` (UUID) are always unique"
+    return "its `id` (UUID) is always unique"
+
+
+def _format_filter_params(params):
+    """Render a filter-params dict as `key=value, ...` for human-readable error messages."""
+    return ", ".join(f"{key}={value}" for key, value in params.items()) or "the provided attributes"
+
+
+def ambiguous_related_object_message(model, params, count=None):
+    """Build the error message for a related-object reference that matches more than one object.
+
+    The reference is under-specified: the caller may use any field(s) unique within their own data, while
+    the model's natural key or `id` are the values guaranteed to be unique.
+    """
+    matched = f"{count} records" if count is not None else "multiple records"
+    return (
+        f"Could not resolve a single {model.__name__} — {_format_filter_params(params)} matches {matched}. "
+        f"Add field(s) that uniquely identify it: any values unique in your data work, and "
+        f"{_identifying_fields_hint(model)}. If this data came from an export, re-export the whole field so "
+        f"its full natural key is included."
+    )
+
+
+def missing_related_object_message(model, params):
+    """Build the error message for a related-object reference that matches no object."""
+    return (
+        f"No {model.__name__} matches {_format_filter_params(params)}. Reference it by field(s) unique in your "
+        f"data — {_identifying_fields_hint(model)} — and check the values are correct."
+    )
 
 
 def dynamic_import(name):

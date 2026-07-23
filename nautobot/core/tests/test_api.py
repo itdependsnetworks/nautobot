@@ -664,7 +664,7 @@ class WritableNestedSerializerTest(testing.APITestCase):
             response = self.client.post(url, data, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ipam_models.VLAN.objects.filter(name="Test VLAN 100").count(), 0)
-        self.assertTrue(response.data["vlan_group"][0].startswith("Related object not found"))
+        self.assertIn("Reference it by field(s) unique in your data", response.data["vlan_group"][0])
 
     def test_related_by_attributes(self):
         data = {
@@ -696,7 +696,7 @@ class WritableNestedSerializerTest(testing.APITestCase):
             response = self.client.post(url, data, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ipam_models.VLAN.objects.filter(name="Test VLAN 100").count(), 0)
-        self.assertTrue(response.data["vlan_group"][0].startswith("Related object not found"))
+        self.assertIn("Reference it by field(s) unique in your data", response.data["vlan_group"][0])
 
     def test_related_by_attributes_multiple_matches(self):
         data = {
@@ -716,7 +716,7 @@ class WritableNestedSerializerTest(testing.APITestCase):
             response = self.client.post(url, data, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ipam_models.VLAN.objects.filter(name="Test VLAN 100").count(), 0)
-        self.assertTrue(response.data["vlan_group"][0].startswith("Multiple objects match"))
+        self.assertIn("Could not resolve a single", response.data["vlan_group"][0])
 
     @skip("Composite keys aren't being supported at this time")
     def test_related_by_composite_key(self):
@@ -750,8 +750,8 @@ class WritableNestedSerializerTest(testing.APITestCase):
             response = self.client.post(url, data, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ipam_models.VLAN.objects.filter(name="Test VLAN 100").count(), 0)
-        self.assertTrue(response.data["status"][0].startswith("Related object not found"))
-        self.assertTrue(response.data["vlan_group"][0].startswith("Related object not found"))
+        self.assertIn("Reference it by field(s) unique in your data", response.data["status"][0])
+        self.assertIn("Reference it by field(s) unique in your data", response.data["vlan_group"][0])
 
     def test_related_by_invalid(self):
         data = {
