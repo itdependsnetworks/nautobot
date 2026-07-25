@@ -605,7 +605,9 @@ class SavedViewViewSet(ModelViewSet):
 
 
 class UserSavedViewAssociationViewSet(ModelViewSet):
-    queryset = UserSavedViewAssociation.objects.all()
+    # saved_view__owner is read by SavedView.__str__ (via this model's `display`); the automatic queryset
+    # optimization only covers first-level relations.
+    queryset = UserSavedViewAssociation.objects.select_related("saved_view__owner", "user")
     serializer_class = serializers.UserSavedViewAssociationSerializer
     filterset_class = filters.UserSavedViewAssociationFilterSet
 
@@ -767,7 +769,9 @@ class JobViewSetBase(
     ModelViewSetMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = Job.objects.all()
+    # The backward-compatibility `task_queues` serializer field always reads the job_queues relation, even
+    # when M2M fields (and thus the automatic prefetch) are excluded from the serializer via exclude_m2m.
+    queryset = Job.objects.prefetch_related("job_queues")
     serializer_class = serializers.JobSerializer
     filterset_class = filters.JobFilterSet
 

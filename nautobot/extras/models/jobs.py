@@ -374,8 +374,12 @@ class Job(PrimaryModel):
 
     @property
     def task_queues(self) -> list[str]:
-        """Deprecated backward-compatibility property for the list of queue names for this Job."""
-        return self.job_queues.values_list("name", flat=True)
+        """Deprecated backward-compatibility property for the list of queue names for this Job.
+
+        Reads `job_queues.all()` rather than `values_list()` so that a prefetched queryset is honored
+        (the REST API serializes this property for every Job in a list response).
+        """
+        return [job_queue.name for job_queue in self.job_queues.all()]
 
     @task_queues.setter
     def task_queues(self, value: Union[str, list[str]]):

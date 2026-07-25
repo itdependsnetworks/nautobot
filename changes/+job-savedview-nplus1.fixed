@@ -1,0 +1,1 @@
+Fixed N+1 queries in the Jobs and User Saved View Associations REST API list endpoints — `Job.task_queues` issued a fresh job-queue query per Job instead of honoring the prefetched relation, and each User Saved View Association fetched its saved view's owner separately when rendering the `display` field.
