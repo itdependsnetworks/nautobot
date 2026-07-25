@@ -1,6 +1,7 @@
 """Tests for API rate limiting (nautobot.core.rate_limiting)."""
 
 import hashlib
+import json
 import time
 from unittest import mock
 
@@ -455,6 +456,45 @@ class RateLimitingMiddlewareTestCase(TestCase):
     def _get(self, path="/api/", **extra):
         return self.client.get(path, HTTP_AUTHORIZATION=TOKEN_HEADER, **extra)
 
+    @override_settings(RATE_LIMITING={"MODE": "enforce", "LIMIT": 5})
+    def test_enforce_over_limit_returns_429_with_zero_sql(self):
+        budgets.charge(TOKEN_HASH, 5, window_seconds=60)
+        with self.assertNumQueries(0):
+            response = self._get()
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("Retry-After", response)
+        self.assertEqual(response["X-Nautobot-Cost"], "0")
+        self.assertEqual(response["RateLimit-Limit"], "5")
+        self.assertEqual(response["RateLimit-Remaining"], "0")
+        self.assertGreater(int(response["RateLimit-Reset"]), 0)
+        self.assertEqual(response["Retry-After"], response["RateLimit-Reset"])
+        self.assertIn("detail", json.loads(response.content))
+
+    @override_settings(RATE_LIMITING={"MODE": "enforce", "LIMIT": 5})
+    def test_429_not_added_to_budget(self):
+        budgets.charge(TOKEN_HASH, 5, window_seconds=60)
+        response = self._get()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response["X-Nautobot-Rate-Limit-Mode"], "enforce")
+        self.assertEqual(budgets.read(TOKEN_HASH).consumed, 5)
+
+    @override_settings(RATE_LIMITING={"MODE": "enforce", "LIMIT": 5})
+    def test_admitted_request_completes_even_if_cost_overshoots(self):
+        # 4 < 5: admitted, even though any cost >= 1 lands the budget at or over the limit.
+        budgets.charge(TOKEN_HASH, 4, window_seconds=60)
+        response = self._get()
+        self.assertNotEqual(response.status_code, 429)
+        self.assertGreaterEqual(budgets.read(TOKEN_HASH).consumed, 5)
+
+    def test_headers_present_in_report_and_enforce(self):
+        for mode in ("report", "enforce"):
+            with self.subTest(mode=mode), override_settings(RATE_LIMITING={"MODE": mode, "LIMIT": 1000}):
+                response = self._get()
+                self.assertNotEqual(response.status_code, 429)
+                for header in ("X-Nautobot-Cost", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"):
+                    self.assertIn(header, response, f"{header} missing in {mode} mode")
+                self.assertGreaterEqual(int(response["X-Nautobot-Cost"]), 1)
+
     @override_settings(RATE_LIMITING={"MODE": "report", "WINDOW_SECONDS": 60})
     def test_reset_header_agrees_with_ttl_within_1s(self):
         response = self._get()
@@ -482,6 +522,17 @@ class RateLimitingMiddlewareTestCase(TestCase):
         # Capability semaphore: supported by this version, not enabled.
         self.assertEqual(response["X-Nautobot-Rate-Limit-Mode"], "off")
 
+    @override_settings(RATE_LIMITING={"MODE": {"rest": "enforce", "graphql": "report"}, "LIMIT": 1000})
+    def test_mode_header_reports_the_mode_applied_to_this_request_kind(self):
+        self.assertEqual(self._get()["X-Nautobot-Rate-Limit-Mode"], "enforce")
+        response = self.client.post(
+            "/api/graphql/",
+            data={"query": "query { devices { id } }"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=TOKEN_HEADER,
+        )
+        self.assertEqual(response["X-Nautobot-Rate-Limit-Mode"], "report")
+
     @override_settings(RATE_LIMITING={"MODE": "report"})
     def test_same_token_same_hash_and_raw_token_never_stored(self):
         self._get()
@@ -497,6 +548,20 @@ class RateLimitingMiddlewareTestCase(TestCase):
         raw_token = TOKEN_HEADER.split()[1]
         for key in keys:
             self.assertNotIn(raw_token, key)
+
+    @override_settings(RATE_LIMITING={"MODE": {"rest": "enforce", "graphql": "report"}, "LIMIT": 5})
+    def test_per_kind_mode_enforces_rest_while_graphql_reports(self):
+        budgets.charge(TOKEN_HASH, 5, window_seconds=60)
+        self.assertEqual(self._get().status_code, 429)
+        response = self.client.post(
+            "/api/graphql/",
+            data={"query": "query { devices { id } }"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=TOKEN_HEADER,
+        )
+        self.assertNotEqual(response.status_code, 429)
+        self.assertIn("X-Nautobot-Cost", response)  # still charged and reported
+        self.assertGreater(budgets.read(TOKEN_HASH).consumed, 5)
 
 class RateLimitingChecksTestCase(SimpleTestCase):
     """Startup validation of RATE_LIMITING values (nautobot.core.checks.check_rate_limiting)."""

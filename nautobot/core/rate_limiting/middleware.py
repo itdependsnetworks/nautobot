@@ -24,11 +24,12 @@ import hashlib
 import logging
 import time
 
+from django.http import JsonResponse
 from django.urls import reverse
 from redis.exceptions import RedisError
 
 from nautobot.core.rate_limiting import budgets, costing
-from nautobot.core.rate_limiting.config import get_config, MODE_OFF, VALID_MODES
+from nautobot.core.rate_limiting.config import get_config, MODE_ENFORCE, MODE_OFF, VALID_MODES
 
 logger = logging.getLogger(__name__)
 calibration_logger = logging.getLogger("nautobot.core.rate_limiting.calibration")
@@ -130,9 +131,35 @@ class RateLimitingMiddleware:
         return budgets.DEFAULT_SCOPE
 
     def _maybe_deny(self, request, budget_hash, scope, mode, config):
-        """Layer 4 in one method: return a 429 response, or None to admit the request."""
-        # PLACEHOLDER: replaced in "layer 4 — budget enforcement (429 before any database work)"
+        """Layer 4 in one method: return a 429 response, or None to admit the request.
+
+        The check is against consumption that has already been recorded — a request is never
+        rejected because it *would* exceed the remaining budget. The denied request is not added
+        to the budget, so an over-limit consumer costs one Redis GET per request.
+        """
+        if mode != MODE_ENFORCE:
+            return None
+        try:
+            state = budgets.read(budget_hash, scope=scope)
+        except RedisError:
+            self._record_fail_open("budget read")
+            return None
+        limit = int(config["LIMIT"])
+        if state.consumed is not None and state.consumed >= limit and state.reset_seconds:
+            return self._deny(state, limit)
         return None
+
+    @classmethod
+    def _deny(cls, state, limit):
+        """Build the 429: DRF-style body, Retry-After from the budget's remaining TTL, all four headers."""
+        response = JsonResponse(
+            {"detail": "Request was throttled. Consumption budget exhausted for this token."},
+            status=429,
+        )
+        response["Retry-After"] = str(state.reset_seconds)
+        # The denied request is never priced or charged, so its cost is honestly zero.
+        cls._inject_headers(response, cost=0, consumed=state.consumed, limit=limit, reset_seconds=state.reset_seconds)
+        return response
 
     def _charge_and_annotate(self, response, budget_hash, scope, cost, config):
         """Layer 3 response phase in one method: record the cost and annotate the response."""
