@@ -104,7 +104,10 @@ def invalidate_max_depth_cache(sender, **kwargs):
 
 @receiver(config_updated)
 def invalidate_natural_key_field_lookups_on_config_updated(sender, key, **kwargs):
-    """Clear the cached natural_key_field_lookups when a relevant Constance config value is changed."""
+    """Clear config/natural-key caches when a relevant Constance config value is changed."""
+    from nautobot.core.utils.config import _settings_or_config_memo
+
+    _settings_or_config_memo.pop(key, None)
     if key in NATURAL_KEY_LOOKUPS_RELATED_SETTINGS:
         from nautobot.core.models import invalidate_natural_key_field_lookups_cache
 
@@ -113,7 +116,10 @@ def invalidate_natural_key_field_lookups_on_config_updated(sender, key, **kwargs
 
 @receiver(setting_changed)
 def invalidate_natural_key_field_lookups_on_setting_changed(sender, setting, **kwargs):
-    """Clear the cached natural_key_field_lookups when a relevant Django setting is changed (`override_settings`)."""
+    """Clear config/natural-key caches when a relevant Django setting is changed (`override_settings`)."""
+    from nautobot.core.utils.config import _settings_or_config_memo
+
+    _settings_or_config_memo.pop(setting, None)
     if setting in NATURAL_KEY_LOOKUPS_RELATED_SETTINGS:
         from nautobot.core.models import invalidate_natural_key_field_lookups_cache
 

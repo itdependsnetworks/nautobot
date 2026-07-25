@@ -42,6 +42,35 @@ class GetSettingsOrConfigTestCase(TestCase):
         self.assertRaises(AttributeError, config.get_settings_or_config, "FAKE_SETTING")
 
 
+class GetSettingsOrConfigMemoizedTestCase(TestCase):
+    """Test the get_settings_or_config_memoized() helper and its signal-driven invalidation."""
+
+    def setUp(self):
+        super().setUp()
+        config._settings_or_config_memo.clear()
+
+    def test_memoizes_underlying_lookup(self):
+        with mock.patch.object(
+            config, "get_settings_or_config", wraps=config.get_settings_or_config
+        ) as mock_lookup:
+            first = config.get_settings_or_config_memoized("BANNER_TOP")
+            second = config.get_settings_or_config_memoized("BANNER_TOP")
+        self.assertEqual(first, second)
+        self.assertEqual(mock_lookup.call_count, 1)
+
+    def test_invalidated_on_config_updated(self):
+        self.assertEqual(config.get_settings_or_config_memoized("BANNER_TOP"), "")
+        with override_config(BANNER_TOP="¡Hola, mundo!"):  # fires constance config_updated
+            self.assertEqual(config.get_settings_or_config_memoized("BANNER_TOP"), "¡Hola, mundo!")
+        self.assertEqual(config.get_settings_or_config_memoized("BANNER_TOP"), "")
+
+    def test_invalidated_on_setting_changed(self):
+        self.assertEqual(config.get_settings_or_config_memoized("BANNER_TOP"), "")
+        with override_settings(BANNER_TOP="Hello, world!"):  # fires django setting_changed
+            self.assertEqual(config.get_settings_or_config_memoized("BANNER_TOP"), "Hello, world!")
+        self.assertEqual(config.get_settings_or_config_memoized("BANNER_TOP"), "")
+
+
 class GetNautobotEditionTestCase(TestCase):
     """Test get_nautobot_edition(), which derives the active edition from the installed apps."""
 

@@ -10,7 +10,7 @@ from nautobot.core.models import _natural_key_field_lookups_cache
 from nautobot.core.models.fields import NaturalOrderingField
 from nautobot.core.models.generics import OrganizationalModel, PrimaryModel
 from nautobot.core.models.tree_queries import TreeManager, TreeModel, TreeQuerySet
-from nautobot.core.utils.config import get_settings_or_config
+from nautobot.core.utils.config import get_settings_or_config, get_settings_or_config_memoized
 from nautobot.dcim.fields import ASNField
 from nautobot.extras.models import StatusField
 from nautobot.extras.utils import extras_features, FeatureQuery
@@ -225,8 +225,11 @@ class Location(TreeModel, PrimaryModel):
     def display(self):
         """
         Honor LOCATION_NAME_AS_NATURAL_KEY for display value rendering, else fallback to TreeModel.display().
+
+        Uses the memoized config read — this renders once per serialized Location (including nested
+        representations), and a per-object Constance read costs a cache-backend round-trip each time.
         """
-        if get_settings_or_config("LOCATION_NAME_AS_NATURAL_KEY"):
+        if get_settings_or_config_memoized("LOCATION_NAME_AS_NATURAL_KEY"):
             return self.name
         return super().display
 

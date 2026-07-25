@@ -16,6 +16,32 @@ from nautobot.core.utils.otel import traced_span
 logger = logging.getLogger(__name__)
 
 
+# In-process memo for get_settings_or_config_memoized(), keyed by variable name. Cleared per-key by the
+# config_updated / setting_changed signal receivers in nautobot.core.signals.
+_settings_or_config_memo = {}
+
+
+def get_settings_or_config_memoized(variable_name, fallback=None):
+    """
+    In-process memoized variant of `get_settings_or_config`, for values read per-object in hot code paths.
+
+    A Constance-backed value normally costs a cache-backend (Redis) round-trip per read, which is
+    prohibitive when read once per serialized object. The memo is cleared when the variable changes via
+    Constance or `override_settings` *in this process* (see `nautobot.core.signals`); other worker
+    processes retain their memoized value until they observe a change themselves or restart.
+
+    Only use this for variables that already accept that staleness model — e.g. the natural-key-shaping
+    flags such as `LOCATION_NAME_AS_NATURAL_KEY`, whose derived values are cached with the same
+    invalidation semantics. Do not use it for values that must propagate promptly to all workers.
+    """
+    try:
+        return _settings_or_config_memo[variable_name]
+    except KeyError:
+        value = get_settings_or_config(variable_name, fallback=fallback)
+        _settings_or_config_memo[variable_name] = value
+        return value
+
+
 def get_settings_or_config(variable_name, fallback=None):
     """
     Get a value from Django settings (if specified there) or Constance configuration (otherwise).

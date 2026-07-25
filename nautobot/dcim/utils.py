@@ -11,7 +11,7 @@ from netutils.lib_mapper import NAME_TO_ALL_LIB_MAPPER, NAME_TO_LIB_MAPPER_REVER
 
 from nautobot.core.choices import ColorChoices
 from nautobot.core.templatetags.helpers import bettertitle, hyperlinked_object
-from nautobot.core.utils.config import get_settings_or_config
+from nautobot.core.utils.config import get_settings_or_config, get_settings_or_config_memoized
 from nautobot.dcim.choices import InterfaceModeChoices
 from nautobot.dcim.constants import (
     COMPATIBLE_TERMINATION_TYPES,
@@ -78,7 +78,7 @@ def get_network_driver_mapping_tool_names():
     Tool names are "ansible", "hier_config", "napalm", "netmiko", etc...
     """
     network_driver_names = set(NAME_TO_LIB_MAPPER_REVERSE.keys())
-    network_driver_names.update(get_settings_or_config("NETWORK_DRIVERS", fallback={}).keys())
+    network_driver_names.update(get_settings_or_config_memoized("NETWORK_DRIVERS", fallback={}).keys())
     return sorted(network_driver_names)
 
 
@@ -101,8 +101,9 @@ def get_all_network_driver_mappings():
     """
     network_driver_mappings = deepcopy(NAME_TO_ALL_LIB_MAPPER)
 
-    # add mappings from optional NETWORK_DRIVERS setting
-    network_drivers_config = get_settings_or_config("NETWORK_DRIVERS", fallback={})
+    # Add mappings from the optional NETWORK_DRIVERS setting. Memoized because this runs for every
+    # serialized Platform (a Constance-backed read costs a cache-backend round-trip per call otherwise).
+    network_drivers_config = get_settings_or_config_memoized("NETWORK_DRIVERS", fallback={})
     for tool_name, mappings in network_drivers_config.items():
         for normalized_name, mapped_name in mappings.items():
             network_driver_mappings.setdefault(normalized_name, {})
