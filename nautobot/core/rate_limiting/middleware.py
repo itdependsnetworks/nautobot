@@ -19,11 +19,15 @@ fairness temporarily is preferable to a Redis blip becoming an API outage.
 """
 
 import contextlib
+import dataclasses
 import functools
 import hashlib
+import json
 import logging
+import random
 import time
 
+from django.db import connections
 from django.http import JsonResponse
 from django.urls import reverse
 from redis.exceptions import RedisError
@@ -45,6 +49,24 @@ HEADER_RESET = "RateLimit-Reset"
 def _get_api_path():
     """Return the REST API root path ("/api/"), resolved once per process (needs the URLconf loaded)."""
     return reverse("api-root")
+
+
+class _QueryStats:
+    """Database query counter/timer installed via `connection.execute_wrapper` (calibration only)."""
+
+    __slots__ = ("count", "total_ms")
+
+    def __init__(self):
+        self.count = 0
+        self.total_ms = 0.0
+
+    def __call__(self, execute, sql, params, many, context):
+        started = time.monotonic()
+        try:
+            return execute(sql, params, many, context)
+        finally:
+            self.count += 1
+            self.total_ms += (time.monotonic() - started) * 1000.0
 
 
 class RateLimitingMiddleware:
@@ -177,8 +199,9 @@ class RateLimitingMiddleware:
     @staticmethod
     def _should_calibrate(config):
         """Layer 7: decide whether this request emits a calibration record (sampling)."""
-        # PLACEHOLDER: replaced in "layer 7 — calibration log (cost vs measured reality)"
-        return False
+        if not config["CALIBRATION_LOG"]:
+            return False
+        return random.random() < float(config["CALIBRATION_SAMPLE_RATE"])  # noqa: S311  # sampling, not cryptography
 
     @staticmethod
     def _inject_headers(response, cost, consumed, limit, reset_seconds):
@@ -192,14 +215,45 @@ class RateLimitingMiddleware:
     @staticmethod
     @contextlib.contextmanager
     def _measure(enabled):
-        """Layer 7: count and time database queries during the view, without needing DEBUG."""
-        # PLACEHOLDER: replaced in "layer 7 — calibration log (cost vs measured reality)"
-        yield None
+        """Layer 7: count and time database queries during the view, without needing DEBUG.
+
+        Yields zeroed stats without installing anything when calibration is disabled, so no other
+        code path pays for or depends on measurement.
+        """
+        stats = _QueryStats()
+        if not enabled:
+            yield stats
+            return
+        with contextlib.ExitStack() as stack:
+            for alias in connections:
+                stack.enter_context(connections[alias].execute_wrapper(stats))
+            yield stats
 
     @classmethod
     def _emit_calibration(cls, request, response, features, cost, start_wall, start_cpu, stats, mode):
-        """Layer 7: one structured JSON record pairing the assigned cost with measured reality."""
-        # PLACEHOLDER: replaced in "layer 7 — calibration log (cost vs measured reality)"
+        """Layer 7: one structured JSON record pairing the assigned cost with measured reality.
+
+        Measured values are never fed back into cost at runtime; they are the offline regression
+        dataset that sets the heuristic weights and gates per-kind enforcement (cost parity).
+        """
+        try:
+            record = {
+                "token_hash": cls._budget_hash(request),
+                "method": request.method,
+                "path": request.path,
+                "view": getattr(getattr(request, "resolver_match", None), "view_name", None),
+                "status": response.status_code,
+                "features": dataclasses.asdict(features),
+                "assigned_cost": cost,
+                "wall_ms": round((time.monotonic() - start_wall) * 1000.0, 2),
+                "cpu_ms": round((time.process_time() - start_cpu) * 1000.0, 2),
+                "actual_db_ms": round(stats.total_ms, 2),
+                "actual_db_queries": stats.count,
+                "mode": mode,
+            }
+            calibration_logger.info(json.dumps(record, default=str))
+        except Exception:
+            logger.exception("Rate-limiting calibration record emission failed")
 
     @staticmethod
     def _record_fail_open(operation):

@@ -11,14 +11,15 @@ from nautobot.core import checks
 from nautobot.core.rate_limiting import budgets, costing, graphql_cost, rest_cost
 
 TOKEN_HEADER = "Token 0123456789abcdef0123456789abcdef01234567"  # noqa: S105  # deliberately not a real token
-
 TOKEN_HASH = hashlib.sha256(TOKEN_HEADER.encode("utf-8")).hexdigest()
+
 
 def _clear_rate_limiting_keys():
     client = budgets.get_client()
     for key in client.scan_iter(match=f"{budgets.BUDGET_KEY_PREFIX}*"):
         client.delete(key)
     client.delete(budgets.COST_TOTAL_KEY)
+
 
 class CostEngineTestCase(SimpleTestCase):
     """REST cost calculator: classification and estimation, no Django stack involved."""
@@ -83,6 +84,7 @@ class CostEngineTestCase(SimpleTestCase):
     @override_settings(RATE_LIMITING={"HEURISTIC_WEIGHTS": {"rest_read_base": 10.0}})
     def test_weights_overridable_from_settings(self):
         self.assertEqual(self._cost("/api/dcim/devices/"), 10)
+
 
 class GraphQLCostTestCase(SimpleTestCase):
     """GraphQL cost calculator: static AST analysis only."""
@@ -156,6 +158,7 @@ class GraphQLCostTestCase(SimpleTestCase):
         )
         _, features = costing.cost(request)
         self.assertEqual(features.kind, "graphql")
+
 
 class GraphQLCostExplosionTestCase(SimpleTestCase):
     """Demonstrates, with exact numbers, how GraphQL cost scales as query features toggle.
@@ -334,6 +337,7 @@ class GraphQLCostExplosionTestCase(SimpleTestCase):
         cost, _ = costing.cost(self._request("query { devices(limit: 999999999) { interfaces { id } } }"))
         self.assertEqual(cost, 1)
 
+
 class CardinalityCombineTestCase(SimpleTestCase):
     """The layer-9 cardinality multiplier (`costing.combine`), with and without cardinality.
 
@@ -389,6 +393,7 @@ class CardinalityCombineTestCase(SimpleTestCase):
         cost, _ = costing.cost(request)
         self.assertEqual(cost, 21)  # pure heuristic, no multiplier applied
 
+
 class BudgetStoreTestCase(SimpleTestCase):
     """Redis budget operations against a live Redis."""
 
@@ -438,6 +443,7 @@ class BudgetStoreTestCase(SimpleTestCase):
     def test_scoped_budget_key_seam(self):
         self.assertEqual(budgets.budget_key("abc"), "budget:abc")
         self.assertEqual(budgets.budget_key("abc", scope="graphql"), "budget:graphql:abc")
+
 
 class RateLimitingMiddlewareTestCase(TestCase):
     """Full-stack middleware behavior via the Django test client.
@@ -591,6 +597,56 @@ class RateLimitingMiddlewareTestCase(TestCase):
             response = self._get()
         self.assertNotEqual(response.status_code, 429)
         self.assertEqual(record_error.call_count, 2)  # read (deny check) and charge both failed open
+
+
+class CalibrationLogTestCase(TestCase):
+    """Layer 7: structured calibration records."""
+
+    def setUp(self):
+        _clear_rate_limiting_keys()
+
+    def tearDown(self):
+        _clear_rate_limiting_keys()
+
+    def _get(self):
+        return self.client.get("/api/", HTTP_AUTHORIZATION=TOKEN_HEADER)
+
+    @override_settings(RATE_LIMITING={"MODE": "report", "CALIBRATION_LOG": True})
+    def test_one_structured_record_per_request_with_features_cost_wall_and_db_stats(self):
+        with self.assertLogs("nautobot.core.rate_limiting.calibration", level="INFO") as captured:
+            self._get()
+        self.assertEqual(len(captured.records), 1)
+        record = json.loads(captured.records[0].getMessage())
+        for field in (
+            "token_hash",
+            "method",
+            "path",
+            "status",
+            "features",
+            "assigned_cost",
+            "wall_ms",
+            "cpu_ms",
+            "actual_db_ms",
+            "actual_db_queries",
+            "mode",
+        ):
+            self.assertIn(field, record)
+        self.assertEqual(record["token_hash"], TOKEN_HASH)
+        self.assertEqual(record["features"]["kind"], "rest")
+        self.assertGreaterEqual(record["assigned_cost"], 1)
+        self.assertNotIn("user_id", record)
+        self.assertNotIn(TOKEN_HEADER.split()[1], json.dumps(record))
+
+    @override_settings(RATE_LIMITING={"MODE": "report", "CALIBRATION_LOG": False})
+    def test_no_record_when_disabled(self):
+        with self.assertNoLogs("nautobot.core.rate_limiting.calibration", level="INFO"):
+            self._get()
+
+    @override_settings(RATE_LIMITING={"MODE": "report", "CALIBRATION_LOG": True, "CALIBRATION_SAMPLE_RATE": 0.0})
+    def test_sample_rate_zero_emits_nothing(self):
+        with self.assertNoLogs("nautobot.core.rate_limiting.calibration", level="INFO"):
+            self._get()
+
 
 class RateLimitingChecksTestCase(SimpleTestCase):
     """Startup validation of RATE_LIMITING values (nautobot.core.checks.check_rate_limiting)."""
