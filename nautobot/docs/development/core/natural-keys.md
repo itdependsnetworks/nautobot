@@ -28,6 +28,9 @@ In many model cases, Nautobot's default implementation of these APIs will suffic
 
 There are a few special cases that will need special handling as described below.
 
+!!! note "Caching of derived natural key lookups"
+    Because deriving `natural_key_field_lookups` recurses into every related model, Nautobot caches the derived value per model class. The cache is automatically invalidated when the events that can change a derived value occur — a change to the shape of a tree model's tree (such as the `Location` tree depth changing), or a change to the `LOCATION_NAME_AS_NATURAL_KEY` or `DEVICE_UNIQUENESS` settings. A model that *overrides* the `natural_key_field_lookups` property (as `Location` does, below) is not itself cached and so is free to derive a dynamic value; but if your model's `natural_key_field_names` varies based on some *other* runtime input, you must arrange to call `nautobot.core.models.invalidate_natural_key_field_lookups_cache()` whenever that input changes.
+
 ### Self-Referential Natural Keys
 
 An example of this can be seen with the `Location` model, where a given instance is only uniquely identified by its name **in combination with its parent**, which is another `Location`. Nautobot's default implementation would fall into an infinite recursion when trying to identify the Location's natural key fields, since they would be identified as  `("name", "parent__name", "parent__parent__name", "parent__parent__parent__name", ...)`.

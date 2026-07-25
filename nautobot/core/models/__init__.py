@@ -32,7 +32,26 @@ __all__ = (
     "construct_composite_key",
     "construct_natural_slug",
     "deconstruct_composite_key",
+    "invalidate_natural_key_field_lookups_cache",
 )
+
+# Per-model-class cache of derived `natural_key_field_lookups` tuples, keyed by the (concrete) model class itself.
+# Populated lazily by `BaseModel.natural_key_field_lookups`; cleared wholesale by
+# `invalidate_natural_key_field_lookups_cache()` on the rare events that can change any model's derived lookups.
+_natural_key_field_lookups_cache = {}
+
+
+def invalidate_natural_key_field_lookups_cache():
+    """
+    Clear the cached `natural_key_field_lookups` of all model classes in this process.
+
+    The derived lookups are not pure class constants: `Location.natural_key_field_lookups` varies with the depth of
+    the Location tree and the `LOCATION_NAME_AS_NATURAL_KEY` setting, `Device.natural_key_field_names` varies with
+    the `DEVICE_UNIQUENESS` setting, and any model whose natural key embeds a Location or Device (much of DCIM)
+    inherits that dynamism transitively. Signal receivers in `nautobot.core.signals` call this whenever any of
+    those inputs may have changed.
+    """
+    _natural_key_field_lookups_cache.clear()
 
 
 class BaseModel(models.Model):
@@ -275,9 +294,21 @@ class BaseModel(models.Model):
 
         Unlike `get_natural_key_def()`, this doesn't auto-exclude all AutoField and BigAutoField fields,
         but instead explicitly discounts the `id` field (only) as a candidate.
+
+        The derived value is cached per model class (as an immutable tuple) since the derivation below recurses
+        into every related model and is therefore surprisingly expensive; see
+        `invalidate_natural_key_field_lookups_cache()` regarding when and how the cache is invalidated.
         """
         if cls != cls._meta.concrete_model:
             return cls._meta.concrete_model.natural_key_field_lookups
+
+        # Keyed by the class object itself (not a class attribute) so that a subclass never inherits its
+        # parent class's cached entry.
+        try:
+            return _natural_key_field_lookups_cache[cls]
+        except KeyError:
+            pass
+
         # First, figure out which local fields comprise the natural key:
         natural_key_field_names = []
         if hasattr(cls, "natural_key_field_names"):
@@ -307,7 +338,9 @@ class BaseModel(models.Model):
             )
 
         # Next, for any natural key fields that have related models, get the natural key for the related model if known
-        return cls._generate_field_lookups_from_natural_key_field_names(natural_key_field_names)
+        lookups = tuple(cls._generate_field_lookups_from_natural_key_field_names(natural_key_field_names))
+        _natural_key_field_lookups_cache[cls] = lookups
+        return lookups
 
     @classmethod
     def natural_key_args_to_kwargs(cls, args):

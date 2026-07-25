@@ -5,10 +5,18 @@ from functools import wraps
 import inspect
 import logging
 
+from constance.signals import config_updated
 from django.contrib.auth.signals import user_logged_in, user_logged_out
 from django.core.cache import cache
 from django.dispatch import receiver, Signal
+from django.test.signals import setting_changed
 import redis.exceptions
+
+# Settings/Constance keys that alter some model's derived `natural_key_field_lookups`, directly or transitively:
+# - LOCATION_NAME_AS_NATURAL_KEY changes Location's natural key, which is embedded in the natural keys of
+#   RackGroup, Rack, Device, PowerPanel, all Device components, etc.
+# - DEVICE_UNIQUENESS changes Device's natural key, which is embedded in the natural keys of all Device components.
+NATURAL_KEY_LOOKUPS_RELATED_SETTINGS = frozenset(["DEVICE_UNIQUENESS", "LOCATION_NAME_AS_NATURAL_KEY"])
 
 nautobot_database_ready = Signal()
 """
@@ -83,5 +91,30 @@ def invalidate_max_depth_cache(sender, **kwargs):
             # TreeNode has siblings, depth can't change
             return
 
+    # A tree-shape change may alter Location.natural_key_field_lookups (which varies with the Location tree depth),
+    # and that dynamism propagates into the derived natural_key_field_lookups of every model whose natural key
+    # embeds a Location, so clear that cache as well.
+    from nautobot.core.models import invalidate_natural_key_field_lookups_cache
+
+    invalidate_natural_key_field_lookups_cache()
+
     with contextlib.suppress(redis.exceptions.ConnectionError):
         cache.delete(sender.objects.max_depth_cache_key)
+
+
+@receiver(config_updated)
+def invalidate_natural_key_field_lookups_on_config_updated(sender, key, **kwargs):
+    """Clear the cached natural_key_field_lookups when a relevant Constance config value is changed."""
+    if key in NATURAL_KEY_LOOKUPS_RELATED_SETTINGS:
+        from nautobot.core.models import invalidate_natural_key_field_lookups_cache
+
+        invalidate_natural_key_field_lookups_cache()
+
+
+@receiver(setting_changed)
+def invalidate_natural_key_field_lookups_on_setting_changed(sender, setting, **kwargs):
+    """Clear the cached natural_key_field_lookups when a relevant Django setting is changed (`override_settings`)."""
+    if setting in NATURAL_KEY_LOOKUPS_RELATED_SETTINGS:
+        from nautobot.core.models import invalidate_natural_key_field_lookups_cache
+
+        invalidate_natural_key_field_lookups_cache()

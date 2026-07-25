@@ -3,6 +3,7 @@ from unittest import skip
 from unittest.mock import patch
 import uuid
 
+from constance.test import override_config
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -11,9 +12,11 @@ from django.core.exceptions import ValidationError
 from django.test import override_settings
 from django.test.utils import isolate_apps
 
+from nautobot.core.models import invalidate_natural_key_field_lookups_cache
 from nautobot.core.models.utils import construct_composite_key, construct_natural_slug, deconstruct_composite_key
 from nautobot.core.testing import TestCase
-from nautobot.dcim.models import DeviceType, Location, LocationType, Manufacturer
+from nautobot.dcim.choices import DeviceUniquenessChoices
+from nautobot.dcim.models import DeviceType, Interface, Location, LocationType, Manufacturer
 from nautobot.extras.models import Status, Tag
 
 User = get_user_model()
@@ -79,6 +82,8 @@ class NaturalKeyTestCase(TestCase):
                 proxy = True
 
         self.assertEqual(ProxyManufacturer.natural_key_field_lookups, Manufacturer.natural_key_field_lookups)
+        # The proxy model should share the concrete model's cached lookups rather than deriving its own:
+        self.assertIs(ProxyManufacturer.natural_key_field_lookups, Manufacturer.natural_key_field_lookups)
 
     @skip("Composite keys aren't being supported at this time")
     def test_composite_key(self):
@@ -97,8 +102,8 @@ class NaturalKeyTestCase(TestCase):
 
     def test_natural_key_field_lookups(self):
         """Test the natural_key_field_lookups default implementation with some representative models."""
-        self.assertEqual(Manufacturer.natural_key_field_lookups, ["name"])
-        self.assertEqual(DeviceType.natural_key_field_lookups, ["manufacturer__name", "model"])
+        self.assertEqual(Manufacturer.natural_key_field_lookups, ("name",))
+        self.assertEqual(DeviceType.natural_key_field_lookups, ("manufacturer__name", "model"))
 
     def test_natural_key_args_to_kwargs(self):
         """Test the natural_key_args_to_kwargs() default implementation with some representative models."""
@@ -150,6 +155,77 @@ class NaturalKeyTestCase(TestCase):
             Manufacturer._content_type_cached
             Manufacturer._content_type_cached
             Manufacturer(mock__content_type.call_count, 2)
+
+
+class NaturalKeyFieldLookupsCachingTestCase(TestCase):
+    """Tests for the per-model-class caching and invalidation of `natural_key_field_lookups`."""
+
+    def test_cached_lookups_match_fresh_derivation(self):
+        """The cached lookups must be identical to a freshly derived value, for flat and deep models alike."""
+        for model in (Tag, Interface):
+            with self.subTest(model=model.__name__):
+                first = model.natural_key_field_lookups
+                # Repeated access returns the cached tuple itself:
+                self.assertIs(first, model.natural_key_field_lookups)
+                invalidate_natural_key_field_lookups_cache()
+                second = model.natural_key_field_lookups
+                self.assertIsNot(first, second)
+                self.assertEqual(first, second)
+
+    @isolate_apps("nautobot.core.tests")
+    def test_subclass_does_not_inherit_cache_entry(self):
+        """A subclass declaring its own natural_key_field_names must not inherit its parent's cached lookups."""
+        # Populate the parent class's cache entry first:
+        self.assertEqual(Manufacturer.natural_key_field_lookups, ("name",))
+
+        class CachingTestManufacturer(Manufacturer):
+            natural_key_field_names = ["description"]
+
+        self.assertEqual(CachingTestManufacturer.natural_key_field_lookups, ("description",))
+        self.assertEqual(Manufacturer.natural_key_field_lookups, ("name",))
+
+    def test_cache_invalidated_on_tree_depth_change(self):
+        """Creating a Location deeper than the current maximum must invalidate cached Location-derived lookups."""
+        initial_depth = Location.objects.max_depth
+        before = Interface.natural_key_field_lookups
+        self.assertIn("device__location__" + "parent__" * initial_depth + "name", before)
+        self.assertNotIn("device__location__" + "parent__" * (initial_depth + 1) + "name", before)
+
+        location_type = LocationType.objects.get(name="Campus")  # root type and infinitely nestable
+        status = Status.objects.get_for_model(Location).first()
+        location = None
+        for i in range(initial_depth + 2):
+            location = Location.objects.create(
+                name=f"Caching Test Location {i}", parent=location, location_type=location_type, status=status
+            )
+
+        after = Interface.natural_key_field_lookups
+        self.assertIn("device__location__" + "parent__" * (initial_depth + 1) + "name", after)
+
+    def test_cache_invalidated_on_location_name_as_natural_key_change(self):
+        """Changing LOCATION_NAME_AS_NATURAL_KEY via Constance must invalidate cached Location-derived lookups."""
+        before = Interface.natural_key_field_lookups
+        self.assertIn("device__location__parent__name", before)
+        with override_config(LOCATION_NAME_AS_NATURAL_KEY=True):
+            collapsed = Interface.natural_key_field_lookups
+            self.assertIn("device__location__name", collapsed)
+            self.assertNotIn("device__location__parent__name", collapsed)
+        self.assertEqual(before, Interface.natural_key_field_lookups)
+
+    def test_cache_invalidated_on_device_uniqueness_change(self):
+        """Changing DEVICE_UNIQUENESS via Constance must invalidate cached Device-derived lookups."""
+        self.assertIn("device__location__name", Interface.natural_key_field_lookups)
+        with override_config(DEVICE_UNIQUENESS=DeviceUniquenessChoices.NAME):
+            self.assertNotIn("device__location__name", Interface.natural_key_field_lookups)
+            self.assertIn("device__name", Interface.natural_key_field_lookups)
+        self.assertIn("device__location__name", Interface.natural_key_field_lookups)
+
+    def test_cache_invalidated_on_override_settings(self):
+        """Overriding a relevant Django setting must invalidate cached lookups (via the setting_changed signal)."""
+        self.assertIn("device__location__parent__name", Interface.natural_key_field_lookups)
+        with override_settings(LOCATION_NAME_AS_NATURAL_KEY=True):
+            self.assertNotIn("device__location__parent__name", Interface.natural_key_field_lookups)
+        self.assertIn("device__location__parent__name", Interface.natural_key_field_lookups)
 
 
 class TreeModelTestCase(TestCase):
