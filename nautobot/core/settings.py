@@ -1,3 +1,4 @@
+import copy
 import datetime
 import json
 import os
@@ -17,6 +18,7 @@ from nautobot.core.constants import (
     MAX_PAGE_SIZE_DEFAULT as _MAX_PAGE_SIZE_DEFAULT,
     PAGINATE_COUNT_DEFAULT as _PAGINATE_COUNT_DEFAULT,
 )
+from nautobot.core.rate_limiting import config as _rate_limiting_config
 from nautobot.core.settings_funcs import ConstanceConfigItem, is_truthy, parse_redis_connection
 
 #
@@ -663,6 +665,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    # Must run before SessionMiddleware (or anything else that can touch the database) so that an
+    # over-budget API request is denied with zero SQL executed. See RATE_LIMITING.
+    "nautobot.core.rate_limiting.middleware.RateLimitingMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "silk.middleware.SilkyMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -1150,6 +1155,14 @@ CELERY_BEAT_SCHEDULER = "nautobot.core.celery.schedulers:NautobotDatabaseSchedul
 # Sets an age out timer of redis lock. This is NOT implicitly applied to locks, must be added
 # to a lock creation as `timeout=settings.REDIS_LOCK_TIMEOUT`
 REDIS_LOCK_TIMEOUT = int(os.getenv("NAUTOBOT_REDIS_LOCK_TIMEOUT", "600"))
+
+# Rate limiting (cost accounting and budget enforcement) for token-authenticated REST and GraphQL
+# requests. All knobs live in this single dict; keys omitted from an operator override fall back to
+# the shipped defaults (see nautobot.core.rate_limiting.config). See the "Rate Limiting"
+# administration guide for the full contract, the heuristic weight keys, and the recommended
+# rollout (report mode first, enforce only after calibration).
+# deepcopy so that in-place mutation of this setting can never corrupt the shipped defaults.
+RATE_LIMITING = copy.deepcopy(_rate_limiting_config.RATE_LIMITING_DEFAULTS)
 
 #
 # Custom branding (logo and title)

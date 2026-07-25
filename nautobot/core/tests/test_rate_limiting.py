@@ -4,6 +4,7 @@ from unittest import mock
 
 from django.test import override_settings, RequestFactory, SimpleTestCase
 
+from nautobot.core import checks
 from nautobot.core.rate_limiting import costing, graphql_cost, rest_cost
 
 
@@ -375,3 +376,33 @@ class CardinalityCombineTestCase(SimpleTestCase):
         )
         cost, _ = costing.cost(request)
         self.assertEqual(cost, 21)  # pure heuristic, no multiplier applied
+
+class RateLimitingChecksTestCase(SimpleTestCase):
+    """Startup validation of RATE_LIMITING values (nautobot.core.checks.check_rate_limiting)."""
+
+    def test_defaults_pass(self):
+        self.assertEqual(checks.check_rate_limiting(None), [])
+
+    @override_settings(RATE_LIMITING={"MODE": {"rest": "enforce", "graphql": "report"}})
+    def test_valid_per_kind_mode_passes(self):
+        self.assertEqual(checks.check_rate_limiting(None), [])
+
+    @override_settings(RATE_LIMITING={"LIMIT": 0})
+    def test_nonpositive_limit_is_an_error(self):
+        self.assertEqual(checks.check_rate_limiting(None), [checks.E011])
+
+    @override_settings(RATE_LIMITING={"WINDOW_SECONDS": -5})
+    def test_nonpositive_window_is_an_error(self):
+        self.assertEqual(checks.check_rate_limiting(None), [checks.E011])
+
+    @override_settings(RATE_LIMITING={"LIMIT": True})
+    def test_boolean_limit_is_an_error(self):
+        self.assertEqual(checks.check_rate_limiting(None), [checks.E011])
+
+    @override_settings(RATE_LIMITING={"MODE": "enforce-everything"})
+    def test_unrecognized_mode_warns(self):
+        self.assertEqual(checks.check_rate_limiting(None), [checks.W009])
+
+    @override_settings(RATE_LIMITING={"MODE": {"rest": "enforce", "graphgl": "report"}})
+    def test_misspelled_request_kind_warns(self):
+        self.assertEqual(checks.check_rate_limiting(None), [checks.W009])

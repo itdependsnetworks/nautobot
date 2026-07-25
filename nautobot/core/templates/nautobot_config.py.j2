@@ -571,6 +571,22 @@ INSTALLATION_METRICS_ENABLED = is_truthy(os.getenv("NAUTOBOT_INSTALLATION_METRIC
 #
 # REDIS_LOCK_TIMEOUT = int(os.getenv("NAUTOBOT_REDIS_LOCK_TIMEOUT", "600"))
 
+# Rate limiting for token-authenticated REST and GraphQL requests. Keys omitted here fall back
+# to the shipped defaults. Recommended rollout: "report" mode first (headers and metrics, never
+# denies), then "enforce" once limits are calibrated. MODE may also be a per-kind mapping, e.g.
+# {"rest": "enforce", "graphql": "report"}. For plain requests-per-window limiting, set
+# HEURISTIC_WEIGHTS to nautobot.core.rate_limiting.costing.FLAT_WEIGHTS (every request costs 1).
+# See the Rate Limiting administration guide for details.
+#
+# RATE_LIMITING = {
+#     "MODE": "off",
+#     "WINDOW_SECONDS": 60,
+#     "LIMIT": 1000,
+#     "HEURISTIC_WEIGHTS": {},
+#     "CALIBRATION_LOG": False,
+#     "CALIBRATION_SAMPLE_RATE": 1.0,
+# }
+
 # How frequently to check for a new Nautobot release on GitHub, and the URL to check for this information.
 # Defaults to disabled (no URL) and check every 24 hours when enabled
 #

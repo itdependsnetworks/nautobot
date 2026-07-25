@@ -1,0 +1,171 @@
+"""Rate-limiting middleware: per-token cost accounting and budget enforcement for API requests.
+
+Placement: immediately after `CorsMiddleware` and before `SessionMiddleware` in
+`MIDDLEWARE` — ahead of anything that can touch the database, so a denied request costs zero
+SQL. It therefore never sees `request.user`: activation and accounting key on the raw
+`Authorization` header (session-authenticated UI traffic, which carries no such header, passes
+through untouched).
+
+`__call__` is a thin orchestrator over methods each owned by exactly one delivery layer, so a
+layer can be extracted or reverted by deleting its call line and methods:
+
+- layer 3 (report):   :meth:`_charge_and_annotate` (+ the costing and budgets modules)
+- layer 4 (enforce):  :meth:`_maybe_deny` / :meth:`_deny`
+- layer 7 (calibrate): :meth:`_measure` / :meth:`_emit_calibration`
+
+Failure posture is fail-open: if Redis is unreachable, accounting and enforcement are skipped,
+the error is logged loudly, and the `nautobot_budget_errors` counter increments. Losing
+fairness temporarily is preferable to a Redis blip becoming an API outage.
+"""
+
+import contextlib
+import functools
+import hashlib
+import logging
+import time
+
+from django.urls import reverse
+
+from nautobot.core.rate_limiting import costing
+from nautobot.core.rate_limiting.config import get_config, MODE_OFF, VALID_MODES
+
+logger = logging.getLogger(__name__)
+calibration_logger = logging.getLogger("nautobot.core.rate_limiting.calibration")
+
+HEADER_MODE = "X-Nautobot-Rate-Limit-Mode"
+HEADER_COST = "X-Nautobot-Cost"
+HEADER_LIMIT = "RateLimit-Limit"
+HEADER_REMAINING = "RateLimit-Remaining"
+HEADER_RESET = "RateLimit-Reset"
+
+
+@functools.cache
+def _get_api_path():
+    """Return the REST API root path ("/api/"), resolved once per process (needs the URLconf loaded)."""
+    return reverse("api-root")
+
+
+class RateLimitingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if not self._applies_to(request):
+            return self.get_response(request)
+        mode = self._effective_mode(request)
+        if mode == MODE_OFF:
+            # Capability semaphore: the header's presence says this Nautobot version supports rate
+            # limiting; its value says it is not enabled for this request's kind. This disclosure
+            # is deliberate (clients regulate themselves, so tell them the truth), not a leak.
+            response = self.get_response(request)
+            response[HEADER_MODE] = mode
+            return response
+
+        config = get_config()
+        budget_hash = self._budget_hash(request)
+        scope = self._budget_scope(request)
+        start_wall = time.monotonic()
+        start_cpu = time.process_time()
+
+        denial = self._maybe_deny(request, budget_hash, scope, mode, config)  # layer 4
+        if denial is not None:
+            denial[HEADER_MODE] = mode
+            return denial
+
+        try:  # layer 3: cost is computed pre-execution, from the request shape alone
+            cost, features = costing.cost(request)
+        except Exception:
+            logger.exception("Rate-limiting cost computation failed; falling back to a cost of 1")
+            cost = 1
+            features = costing.features_class(costing.request_kind(request))(
+                method=request.method, classification_error=True
+            )
+
+        calibrate = self._should_calibrate(config)  # layer 7
+        with self._measure(calibrate) as stats:  # layer 7
+            response = self.get_response(request)
+
+        self._charge_and_annotate(response, budget_hash, scope, cost, config)  # layer 3
+        response[HEADER_MODE] = mode
+        if calibrate:  # layer 7
+            self._emit_calibration(request, response, features, cost, start_wall, start_cpu, stats, mode)
+        return response
+
+    @staticmethod
+    def _applies_to(request):
+        """Activate only for requests carrying an Authorization header bound for the API or GraphQL."""
+        if not request.META.get("HTTP_AUTHORIZATION"):
+            return False
+        from nautobot.core.middleware import _GRAPHQL_PATHS
+
+        return request.path_info.startswith(_get_api_path()) or request.path.rstrip("/") in _GRAPHQL_PATHS
+
+    @staticmethod
+    def _effective_mode(request):
+        """Resolve MODE for this request's kind — the only place MODE is interpreted.
+
+        A scalar applies to all kinds; a dict (e.g. `{"rest": "enforce", "graphql": "report"}`)
+        resolves by kind with unmapped kinds treated as off. Unrecognized values are off.
+        """
+        mode = get_config()["MODE"]
+        if isinstance(mode, dict):
+            mode = mode.get(costing.request_kind(request), MODE_OFF)
+        return mode if mode in VALID_MODES else MODE_OFF
+
+    @staticmethod
+    def _budget_hash(request):
+        """Lowercase hex SHA-256 of the raw Authorization header value — deterministic and one-way."""
+        return hashlib.sha256(request.META["HTTP_AUTHORIZATION"].encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _budget_scope(request):
+        """Return the budget scope for this request."""
+        # PLACEHOLDER: replaced in "05: budget store — fixed-window Redis accounting"
+        return "default"
+
+    def _maybe_deny(self, request, budget_hash, scope, mode, config):
+        """Layer 4 in one method: return a 429 response, or None to admit the request."""
+        # PLACEHOLDER: replaced in "layer 4 — budget enforcement (429 before any database work)"
+        return None
+
+    def _charge_and_annotate(self, response, budget_hash, scope, cost, config):
+        """Layer 3 response phase in one method: record the cost and annotate the response."""
+        # PLACEHOLDER: replaced in "05: budget store — fixed-window Redis accounting". Fixture
+        # accounting until then: each response reports its own cost against a full window.
+        self._inject_headers(response, cost, cost, int(config["LIMIT"]), int(config["WINDOW_SECONDS"]))
+        return None
+
+    @staticmethod
+    def _should_calibrate(config):
+        """Layer 7: decide whether this request emits a calibration record (sampling)."""
+        # PLACEHOLDER: replaced in "layer 7 — calibration log (cost vs measured reality)"
+        return False
+
+    @staticmethod
+    def _inject_headers(response, cost, consumed, limit, reset_seconds):
+        """Set the four contract headers; None for consumed/reset means accounting is unavailable
+        (Redis fail-open) and is reported as the documented -1 sentinel."""
+        response[HEADER_COST] = str(cost)
+        response[HEADER_LIMIT] = str(limit)
+        response[HEADER_REMAINING] = str(max(0, limit - consumed)) if consumed is not None else "-1"
+        response[HEADER_RESET] = str(reset_seconds) if reset_seconds is not None else "-1"
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _measure(enabled):
+        """Layer 7: count and time database queries during the view, without needing DEBUG."""
+        # PLACEHOLDER: replaced in "layer 7 — calibration log (cost vs measured reality)"
+        yield None
+
+    @classmethod
+    def _emit_calibration(cls, request, response, features, cost, start_wall, start_cpu, stats, mode):
+        """Layer 7: one structured JSON record pairing the assigned cost with measured reality."""
+        # PLACEHOLDER: replaced in "layer 7 — calibration log (cost vs measured reality)"
+
+    @staticmethod
+    def _record_fail_open(operation):
+        logger.exception(
+            "Redis unavailable during rate-limiting %s; failing open (no accounting or enforcement for this request)",
+            operation,
+        )
+        # PLACEHOLDER: replaced in "07: prometheus metrics — fail-open error counter"

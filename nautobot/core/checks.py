@@ -71,6 +71,20 @@ W007 = Warning(
 
 # W008 was removed in v3.1.
 
+E011 = Error(
+    "RATE_LIMITING['LIMIT'] and RATE_LIMITING['WINDOW_SECONDS'] must be positive integers.",
+    hint="A LIMIT below 1 denies every request once a bucket exists; a WINDOW_SECONDS below 1 "
+    "expires buckets immediately so consumption never accumulates.",
+    id="nautobot.core.E011",
+)
+
+W009 = Warning(
+    "RATE_LIMITING['MODE'] contains an unrecognized value or request kind; unrecognized modes are treated as 'off'.",
+    hint="Valid modes are 'off', 'report', and 'enforce' — either a single string, or a per-kind "
+    "mapping such as {'rest': 'enforce', 'graphql': 'report'}.",
+    id="nautobot.core.W009",
+)
+
 MIN_POSTGRESQL_MAJOR_VERSION = 14
 MIN_POSTGRESQL_MINOR_VERSION = 0
 
@@ -235,5 +249,29 @@ def check_for_removed_storage_settings(app_configs, **kwargs):
                     id="nautobot.core.E010",
                 )
             )
+
+    return errors
+
+
+@register(Tags.compatibility)
+def check_rate_limiting(app_configs, **kwargs):
+    """Catch RATE_LIMITING foot-guns at startup rather than as surprising runtime behavior."""
+    from nautobot.core.rate_limiting.config import get_config, KIND_GRAPHQL, KIND_REST, VALID_MODES
+
+    errors = []
+    config = get_config()
+
+    for key in ("LIMIT", "WINDOW_SECONDS"):
+        value = config.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            errors.append(E011)
+            break
+
+    mode = config.get("MODE")
+    if isinstance(mode, dict):
+        if not set(mode).issubset({KIND_REST, KIND_GRAPHQL}) or not set(mode.values()).issubset(VALID_MODES):
+            errors.append(W009)
+    elif mode not in VALID_MODES:
+        errors.append(W009)
 
     return errors
