@@ -16,7 +16,7 @@ begs to be shadowed by the local variable holding its result.
 
 import math
 
-from nautobot.core.rate_limiting import rest_cost
+from nautobot.core.rate_limiting import graphql_cost, rest_cost
 from nautobot.core.rate_limiting.config import get_config, KIND_GRAPHQL, KIND_REST
 
 # Cardinality combining weights (layer 9). Only consumed by `combine()` below, which is not yet
@@ -28,7 +28,7 @@ CARDINALITY_DEFAULT_WEIGHTS = {
 
 DEFAULT_WEIGHTS = {
     **rest_cost.REST_DEFAULT_WEIGHTS,
-    # PLACEHOLDER: GRAPHQL_DEFAULT_WEIGHTS merge added in "03: GraphQL costing"
+    **graphql_cost.GRAPHQL_DEFAULT_WEIGHTS,
     **CARDINALITY_DEFAULT_WEIGHTS,
 }
 
@@ -49,13 +49,15 @@ FLAT_WEIGHTS = {
     "rest_depth_multiplier_per_level": 0.0,
     "rest_computed_fields_multiplier": 1.0,
     "rest_csv_multiplier": 1.0,
-    # PLACEHOLDER: graphql_* flat entries added in "03: GraphQL costing"
+    "graphql_default_page": 1,
+    "graphql_node_divisor": float("inf"),
+    "graphql_floor": 1.0,
 }
 
 # The REST/GraphQL seam: each calculator is a (classify, estimate) pair with identical signatures.
 CALCULATORS = {
     KIND_REST: (rest_cost.classify, rest_cost.estimate),
-    # PLACEHOLDER: KIND_GRAPHQL calculator registered in "03: GraphQL costing"
+    KIND_GRAPHQL: (graphql_cost.classify, graphql_cost.estimate),
 }
 
 
@@ -68,8 +70,7 @@ def request_kind(request):
 
 def features_class(kind):
     """Return the feature schema (dataclass) for a request kind."""
-    # PLACEHOLDER: GraphQLFeatures dispatch added in "03: GraphQL costing"
-    return rest_cost.RestFeatures
+    return graphql_cost.GraphQLFeatures if kind == KIND_GRAPHQL else rest_cost.RestFeatures
 
 
 def get_weights():
