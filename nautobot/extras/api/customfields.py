@@ -38,9 +38,17 @@ class CustomFieldDefaultValues:
 
 @extend_schema_field(OpenApiTypes.OBJECT)
 class CustomFieldsDataField(Field):
+    _custom_field_keys = None
+
     @property
     def custom_field_keys(self):
-        return CustomField.objects.keys_for_model(self.parent.Meta.model)
+        # Memoized on the field instance (one per serializer instantiation, i.e. request-scoped — with
+        # many=True DRF reuses a single child field for every object in the page) so that a list response
+        # performs one cache-backend round-trip instead of one per object. Cross-request invalidation is
+        # unchanged: it is handled by the cache backing CustomField.objects.keys_for_model itself.
+        if self._custom_field_keys is None:
+            self._custom_field_keys = CustomField.objects.keys_for_model(self.parent.Meta.model)
+        return self._custom_field_keys
 
     def to_representation(self, value):
         return {key: value.get(key) for key in self.custom_field_keys}

@@ -1441,6 +1441,23 @@ class CustomFieldDataAPITest(APITestCase):
 
 
 @tag("example_app")
+class CustomFieldsDataFieldTest(TestCase):
+    """Tests for the CustomFieldsDataField serializer field."""
+
+    def test_custom_field_keys_lookup_memoized_per_field_instance(self):
+        """Serializing a list must look up the model's custom field keys once, not once per object."""
+        from nautobot.dcim.api.serializers import LocationSerializer
+
+        locations = Location.objects.all()[:5]
+        self.assertEqual(len(locations), 5)
+        serializer = LocationSerializer(locations, many=True, context={"request": None})
+        with mock.patch.object(
+            CustomField.objects, "keys_for_model", wraps=CustomField.objects.keys_for_model
+        ) as mock_keys:
+            serializer.data
+        self.assertEqual(mock_keys.call_count, 1)
+
+
 class CustomFieldImportTest(TestCase):
     """
     Test importing object custom field data along with the object itself.

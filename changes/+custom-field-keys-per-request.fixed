@@ -1,0 +1,1 @@
+Improved REST API list performance by memoizing the custom-field key lookup on the serializer field instance, so each list response performs one cache-backend round-trip for the model's custom field keys instead of one per serialized object.
