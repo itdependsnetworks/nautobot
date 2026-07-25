@@ -563,6 +563,35 @@ class RateLimitingMiddlewareTestCase(TestCase):
         self.assertIn("X-Nautobot-Cost", response)  # still charged and reported
         self.assertGreater(budgets.read(TOKEN_HASH).consumed, 5)
 
+    @override_settings(RATE_LIMITING={"MODE": "report", "LIMIT": 1000})
+    def test_fail_open_charge_reports_sentinel_headers(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        with (
+            mock.patch.object(budgets, "charge", side_effect=RedisConnectionError("redis down")),
+            mock.patch("nautobot.core.rate_limiting.metrics.record_budget_error"),
+        ):
+            response = self._get()
+        # The contract degrades rather than vanishing: Redis-independent values stay accurate,
+        # accounting-derived values report the documented -1 sentinel.
+        self.assertGreaterEqual(int(response["X-Nautobot-Cost"]), 1)
+        self.assertEqual(response["RateLimit-Limit"], "1000")
+        self.assertEqual(response["RateLimit-Remaining"], "-1")
+        self.assertEqual(response["RateLimit-Reset"], "-1")
+
+    @override_settings(RATE_LIMITING={"MODE": "enforce", "LIMIT": 5})
+    def test_fail_open_when_redis_down(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        with (
+            mock.patch.object(budgets, "read", side_effect=RedisConnectionError("redis down")),
+            mock.patch.object(budgets, "charge", side_effect=RedisConnectionError("redis down")),
+            mock.patch("nautobot.core.rate_limiting.metrics.record_budget_error") as record_error,
+        ):
+            response = self._get()
+        self.assertNotEqual(response.status_code, 429)
+        self.assertEqual(record_error.call_count, 2)  # read (deny check) and charge both failed open
+
 class RateLimitingChecksTestCase(SimpleTestCase):
     """Startup validation of RATE_LIMITING values (nautobot.core.checks.check_rate_limiting)."""
 

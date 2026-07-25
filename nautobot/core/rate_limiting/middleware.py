@@ -28,7 +28,7 @@ from django.http import JsonResponse
 from django.urls import reverse
 from redis.exceptions import RedisError
 
-from nautobot.core.rate_limiting import budgets, costing
+from nautobot.core.rate_limiting import budgets, costing, metrics
 from nautobot.core.rate_limiting.config import get_config, MODE_ENFORCE, MODE_OFF, VALID_MODES
 
 logger = logging.getLogger(__name__)
@@ -207,4 +207,4 @@ class RateLimitingMiddleware:
             "Redis unavailable during rate-limiting %s; failing open (no accounting or enforcement for this request)",
             operation,
         )
-        # PLACEHOLDER: replaced in "07: prometheus metrics — fail-open error counter"
+        metrics.record_budget_error()
