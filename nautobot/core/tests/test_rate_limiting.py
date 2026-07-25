@@ -1,12 +1,23 @@
 """Tests for API rate limiting (nautobot.core.rate_limiting)."""
 
+import hashlib
+import time
 from unittest import mock
 
-from django.test import override_settings, RequestFactory, SimpleTestCase
+from django.test import override_settings, RequestFactory, SimpleTestCase, TestCase
 
 from nautobot.core import checks
-from nautobot.core.rate_limiting import costing, graphql_cost, rest_cost
+from nautobot.core.rate_limiting import budgets, costing, graphql_cost, rest_cost
 
+TOKEN_HEADER = "Token 0123456789abcdef0123456789abcdef01234567"  # noqa: S105  # deliberately not a real token
+
+TOKEN_HASH = hashlib.sha256(TOKEN_HEADER.encode("utf-8")).hexdigest()
+
+def _clear_rate_limiting_keys():
+    client = budgets.get_client()
+    for key in client.scan_iter(match=f"{budgets.BUDGET_KEY_PREFIX}*"):
+        client.delete(key)
+    client.delete(budgets.COST_TOTAL_KEY)
 
 class CostEngineTestCase(SimpleTestCase):
     """REST cost calculator: classification and estimation, no Django stack involved."""
@@ -376,6 +387,116 @@ class CardinalityCombineTestCase(SimpleTestCase):
         )
         cost, _ = costing.cost(request)
         self.assertEqual(cost, 21)  # pure heuristic, no multiplier applied
+
+class BudgetStoreTestCase(SimpleTestCase):
+    """Redis budget operations against a live Redis."""
+
+    def setUp(self):
+        _clear_rate_limiting_keys()
+
+    def tearDown(self):
+        _clear_rate_limiting_keys()
+
+    def test_charge_sets_ttl_on_first_increment_only(self):
+        state = budgets.charge(TOKEN_HASH, 5, window_seconds=60)
+        self.assertEqual(state.consumed, 5)
+        self.assertEqual(state.reset_seconds, 60)
+        time.sleep(1.1)
+        state = budgets.charge(TOKEN_HASH, 3, window_seconds=60)
+        self.assertEqual(state.consumed, 8)
+        # Increments never refresh the TTL: the window stays anchored to the first request.
+        self.assertLess(state.reset_seconds, 60)
+
+    def test_recreated_key_always_has_ttl(self):
+        # Simulate a key that somehow lost its TTL — the charge must repair it.
+        client = budgets.get_client()
+        client.set(budgets.budget_key(TOKEN_HASH), 5)
+        state = budgets.charge(TOKEN_HASH, 1, window_seconds=60)
+        self.assertEqual(state.consumed, 6)
+        self.assertEqual(state.reset_seconds, 60)
+        self.assertEqual(client.ttl(budgets.budget_key(TOKEN_HASH)), 60)
+
+    def test_cost_total_incremented_atomically(self):
+        budgets.charge(TOKEN_HASH, 5, window_seconds=60)
+        budgets.charge("other" + TOKEN_HASH[5:], 7, window_seconds=60)
+        self.assertEqual(int(budgets.get_client().get(budgets.COST_TOTAL_KEY)), 12)
+
+    def test_window_expiry_resets_budget(self):
+        budgets.charge(TOKEN_HASH, 5, window_seconds=1)
+        time.sleep(1.2)
+        state = budgets.read(TOKEN_HASH)
+        self.assertIsNone(state.consumed)
+        state = budgets.charge(TOKEN_HASH, 2, window_seconds=1)
+        self.assertEqual(state.consumed, 2)
+
+    def test_read_missing_budget(self):
+        state = budgets.read(TOKEN_HASH)
+        self.assertIsNone(state.consumed)
+        self.assertIsNone(state.reset_seconds)
+
+    def test_scoped_budget_key_seam(self):
+        self.assertEqual(budgets.budget_key("abc"), "budget:abc")
+        self.assertEqual(budgets.budget_key("abc", scope="graphql"), "budget:graphql:abc")
+
+class RateLimitingMiddlewareTestCase(TestCase):
+    """Full-stack middleware behavior via the Django test client.
+
+    The Authorization header value is deliberately not a valid token: the middleware accounts for
+    any Authorization-carrying API request (headers are injected on error responses too), and an
+    invalid token exercises that without any fixture setup.
+    """
+
+    def setUp(self):
+        _clear_rate_limiting_keys()
+
+    def tearDown(self):
+        _clear_rate_limiting_keys()
+
+    def _get(self, path="/api/", **extra):
+        return self.client.get(path, HTTP_AUTHORIZATION=TOKEN_HEADER, **extra)
+
+    @override_settings(RATE_LIMITING={"MODE": "report", "WINDOW_SECONDS": 60})
+    def test_reset_header_agrees_with_ttl_within_1s(self):
+        response = self._get()
+        ttl = budgets.get_client().ttl(budgets.budget_key(TOKEN_HASH))
+        self.assertLessEqual(abs(int(response["RateLimit-Reset"]) - ttl), 1)
+
+    @override_settings(RATE_LIMITING={"MODE": "report"})
+    def test_unauthenticated_request_bypassed(self):
+        response = self.client.get("/api/")
+        self.assertNotIn("X-Nautobot-Cost", response)
+        self.assertNotIn("X-Nautobot-Rate-Limit-Mode", response)  # middleware not applicable at all
+        self.assertIsNone(budgets.get_client().get(budgets.COST_TOTAL_KEY))
+
+    @override_settings(RATE_LIMITING={"MODE": "report"})
+    def test_non_api_request_bypassed(self):
+        response = self.client.get("/login/", HTTP_AUTHORIZATION=TOKEN_HEADER)
+        self.assertNotIn("X-Nautobot-Cost", response)
+        self.assertIsNone(budgets.get_client().get(budgets.COST_TOTAL_KEY))
+
+    @override_settings(RATE_LIMITING={"MODE": "off"})
+    def test_mode_off_is_noop(self):
+        response = self._get()
+        self.assertNotIn("X-Nautobot-Cost", response)
+        self.assertIsNone(budgets.get_client().get(budgets.COST_TOTAL_KEY))
+        # Capability semaphore: supported by this version, not enabled.
+        self.assertEqual(response["X-Nautobot-Rate-Limit-Mode"], "off")
+
+    @override_settings(RATE_LIMITING={"MODE": "report"})
+    def test_same_token_same_hash_and_raw_token_never_stored(self):
+        self._get()
+        self._get()
+        keys = [
+            key.decode()
+            for key in budgets.get_client().scan_iter(match=f"{budgets.BUDGET_KEY_PREFIX}*")
+            # The global counter shares the namespace; per-token scans must exclude it
+            # (same rule the metrics collector will follow).
+            if key.decode() != budgets.COST_TOTAL_KEY
+        ]
+        self.assertEqual(keys, [budgets.budget_key(TOKEN_HASH)])
+        raw_token = TOKEN_HEADER.split()[1]
+        for key in keys:
+            self.assertNotIn(raw_token, key)
 
 class RateLimitingChecksTestCase(SimpleTestCase):
     """Startup validation of RATE_LIMITING values (nautobot.core.checks.check_rate_limiting)."""

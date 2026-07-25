@@ -25,8 +25,9 @@ import logging
 import time
 
 from django.urls import reverse
+from redis.exceptions import RedisError
 
-from nautobot.core.rate_limiting import costing
+from nautobot.core.rate_limiting import budgets, costing
 from nautobot.core.rate_limiting.config import get_config, MODE_OFF, VALID_MODES
 
 logger = logging.getLogger(__name__)
@@ -118,10 +119,15 @@ class RateLimitingMiddleware:
         return hashlib.sha256(request.META["HTTP_AUTHORIZATION"].encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _budget_scope(request):
-        """Return the budget scope for this request."""
-        # PLACEHOLDER: replaced in "05: budget store — fixed-window Redis accounting"
-        return "default"
+    def _budget_scope(request):  # pylint: disable=unused-argument  # the request drives scope selection when a split is enabled
+        """Return the budget scope for this request.
+
+        v1 uses a single shared budget for all request kinds (a database second is a database
+        second regardless of which API consumed it), so this is a constant. It exists as the seam
+        for a future per-kind budget split, which would return the request kind here and read a
+        per-scope limit — and change nothing else.
+        """
+        return budgets.DEFAULT_SCOPE
 
     def _maybe_deny(self, request, budget_hash, scope, mode, config):
         """Layer 4 in one method: return a 429 response, or None to admit the request."""
@@ -130,10 +136,16 @@ class RateLimitingMiddleware:
 
     def _charge_and_annotate(self, response, budget_hash, scope, cost, config):
         """Layer 3 response phase in one method: record the cost and annotate the response."""
-        # PLACEHOLDER: replaced in "05: budget store — fixed-window Redis accounting". Fixture
-        # accounting until then: each response reports its own cost against a full window.
-        self._inject_headers(response, cost, cost, int(config["LIMIT"]), int(config["WINDOW_SECONDS"]))
-        return None
+        try:
+            state = budgets.charge(budget_hash, cost, int(config["WINDOW_SECONDS"]), scope=scope)
+        except RedisError:
+            self._record_fail_open("budget charge")
+            # Degrade the contract rather than dropping it: cost and limit don't need Redis;
+            # the two accounting-derived headers report the documented -1 sentinel.
+            self._inject_headers(response, cost, None, int(config["LIMIT"]), None)
+            return None
+        self._inject_headers(response, cost, state.consumed, int(config["LIMIT"]), state.reset_seconds)
+        return state
 
     @staticmethod
     def _should_calibrate(config):
