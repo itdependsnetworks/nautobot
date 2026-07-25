@@ -3,6 +3,7 @@ from io import BytesIO, StringIO
 import json
 import os
 from unittest import skip
+from unittest.mock import patch
 import uuid
 
 from constance import config
@@ -26,6 +27,7 @@ from nautobot.core.api.utils import get_serializer_for_model, get_view_name
 from nautobot.core.api.versioning import NautobotAPIVersioning
 from nautobot.core.api.views import ModelViewSet
 from nautobot.core.constants import COMPOSITE_KEY_SEPARATOR
+from nautobot.core.models.utils import construct_natural_slug
 from nautobot.core.templatetags.helpers import humanize_speed
 from nautobot.core.utils.lookup import get_route_for_model
 from nautobot.dcim import models as dcim_models
@@ -518,6 +520,34 @@ class NautobotCSVRendererTest(TestCase):
         self.assertEqual(read_data["nestable"], str(location_type.nestable))
         self.assertIn("parent__name", read_data)
         self.assertEqual(read_data["parent__name"], location_type.parent.name)
+
+
+class BaseModelSerializerTest(TestCase):
+    """Unit tests for BaseModelSerializer methods."""
+
+    def test_get_natural_slug_computes_natural_key_once(self):
+        """The natural slug must be derived exactly once per object.
+
+        Regression test: the fallback was previously passed as an (eagerly evaluated) `getattr` default,
+        so every object computed its natural key and slugified it twice.
+        """
+        manufacturer = dcim_models.Manufacturer.objects.first()
+        serializer = dcim_serializers.ManufacturerSerializer()
+        with patch.object(
+            dcim_models.Manufacturer, "natural_key", autospec=True, side_effect=dcim_models.Manufacturer.natural_key
+        ) as mock_natural_key:
+            value = serializer.get_natural_slug(manufacturer)
+        self.assertEqual(value, manufacturer.natural_slug)
+        self.assertEqual(mock_natural_key.call_count, 1)
+
+    def test_get_natural_slug_without_natural_slug_property(self):
+        """Models lacking a `natural_slug` property (e.g. ContentType) fall back to direct construction."""
+        content_type = ContentType.objects.get_for_model(dcim_models.Manufacturer)
+        serializer = dcim_serializers.ManufacturerSerializer()
+        self.assertEqual(
+            serializer.get_natural_slug(content_type),
+            construct_natural_slug(content_type.natural_key(), pk=content_type.pk),
+        )
 
 
 class ModelViewSetMixinTest(testing.APITestCase):

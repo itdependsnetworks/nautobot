@@ -368,7 +368,11 @@ class BaseModelSerializer(OptInFieldsMixin, serializers.HyperlinkedModelSerializ
     )
     def get_natural_slug(self, instance):
         try:
-            return getattr(instance, "natural_slug", construct_natural_slug(instance.natural_key(), pk=instance.pk))
+            # Check the class, not the instance, so that the property is not invoked twice; as a `getattr` default,
+            # the construct_natural_slug() fallback would be eagerly evaluated even when the property exists.
+            if hasattr(type(instance), "natural_slug"):
+                return instance.natural_slug
+            return construct_natural_slug(instance.natural_key(), pk=instance.pk)
         except (AttributeError, NotImplementedError):
             return "unknown"
 

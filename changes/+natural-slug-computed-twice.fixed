@@ -1,0 +1,1 @@
+Fixed the REST API `natural_slug` field being computed twice for every serialized object — the fallback slug construction was passed as an eagerly-evaluated `getattr` default, so the natural key derivation and slugification ran once for the fallback and again for the returned property value.
