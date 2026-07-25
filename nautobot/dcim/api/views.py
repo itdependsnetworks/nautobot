@@ -427,6 +427,8 @@ class PlatformViewSet(NautobotModelViewSet):
 class DeviceViewSet(ConfigContextQuerySetMixin, NautobotModelViewSet):
     queryset = Device.objects.select_related(
         "device_type__manufacturer",
+        # parent_bay is a reverse OneToOne, which the automatic queryset optimization doesn't cover
+        "parent_bay",
         "virtual_chassis__master",
     ).prefetch_related("primary_ip4__nat_outside_list", "primary_ip6__nat_outside_list")
     serializer_class = serializers.DeviceSerializer

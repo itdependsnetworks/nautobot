@@ -1,0 +1,1 @@
+Fixed an N+1 query in the Devices REST API list endpoint — the `parent_bay` field (a reverse one-to-one relation, not covered by the automatic queryset optimization) was fetched with a separate query for every device in the response.
