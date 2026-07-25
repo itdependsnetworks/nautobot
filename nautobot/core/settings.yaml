@@ -1839,6 +1839,46 @@ properties:
     is_constance_config: true
     type: "boolean"
     version_added: "2.2.1"
+  RATE_LIMITING:
+    additionalProperties: true
+    default:
+      CALIBRATION_LOG: false
+      CALIBRATION_SAMPLE_RATE: 1.0
+      HEURISTIC_WEIGHTS: {}
+      LIMIT: 1000
+      MODE: "off"
+      WINDOW_SECONDS: 60
+    description: >-
+      Configuration for rate limiting (cost accounting and budget enforcement) of token-authenticated REST and
+      GraphQL requests. Session-authenticated (UI) traffic is exempt.
+    details: |-
+      Every token-authenticated API request is assigned a cost computed from the request shape alone, drawn down
+      from a per-token budget stored in Redis. Keys omitted from an override fall back to the shipped defaults.
+
+      Every token-authenticated API response carries an `X-Nautobot-Rate-Limit-Mode` header (in all modes,
+      including `"off"`) as a capability/status semaphore.
+
+      - `MODE` — `"off"` (default), `"report"` (compute costs and emit the `X-Nautobot-Cost` and `RateLimit-*`
+        response headers, never deny), or `"enforce"` (additionally return `429` with `Retry-After` once a token's
+        recorded consumption reaches `LIMIT`). May also be a per-kind mapping such as
+        `{"rest": "enforce", "graphql": "report"}`; unmapped kinds are treated as `"off"`.
+      - `WINDOW_SECONDS` — budget window length, anchored to each token's first request; expiry is the reset.
+      - `LIMIT` — budget per token per window, in cost points.
+      - `HEURISTIC_WEIGHTS` — overrides merged over the shipped cost-heuristic weight defaults; see the
+        Rate Limiting administration guide for the available keys. For plain requests-per-window limiting, set
+        this to `nautobot.core.rate_limiting.costing.FLAT_WEIGHTS` (every request costs exactly 1).
+      - `CALIBRATION_LOG` / `CALIBRATION_SAMPLE_RATE` — when enabled, emit one structured JSON record per
+        (sampled) request to the `nautobot.core.consumption.calibration` logger, pairing assigned cost with
+        measured wall-clock/CPU/database time for offline weight calibration.
+
+      Failure posture is fail-open: if Redis is unreachable, accounting and enforcement are skipped, the
+      `nautobot_budget_errors` metric increments, and the `RateLimit-Remaining`/`RateLimit-Reset` headers report
+      the `-1` "unknown" sentinel. See the Rate Limiting administration guide for the full contract and
+      recommended rollout.
+    see_also:
+      "Rate Limiting administration guide": "../guides/rate-limiting.md"
+    type: "object"
+    version_added: "3.2.0"
   REDIS_LOCK_TIMEOUT:
     default: 600
     description: >-
