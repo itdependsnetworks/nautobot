@@ -6,6 +6,7 @@ from django.utils.functional import classproperty
 from timezone_field import TimeZoneField
 
 from nautobot.core.constants import CHARFIELD_MAX_LENGTH
+from nautobot.core.models import _natural_key_field_lookups_cache
 from nautobot.core.models.fields import NaturalOrderingField
 from nautobot.core.models.generics import OrganizationalModel, PrimaryModel
 from nautobot.core.models.tree_queries import TreeManager, TreeModel, TreeQuerySet
@@ -241,16 +242,29 @@ class Location(TreeModel, PrimaryModel):
         For example if the tree is 2 layers deep, it will return ["name", "parent__name", "parent__parent__name"].
 
         Without this custom implementation, the generic `natural_key_field_lookups` would recurse infinitely.
+
+        The result is cached alongside the generic implementation's cache; this is safe because that cache is
+        already invalidated on both of this implementation's dynamic inputs — any Location tree-shape change
+        (`nautobot.core.signals.invalidate_max_depth_cache`) and any change to `LOCATION_NAME_AS_NATURAL_KEY`.
+        Deriving this otherwise costs a config lookup (and on a miss, a tree-depth lookup) per access — a
+        cache-backend round-trip for every serialized object whose natural key embeds a Location.
         """
+        try:
+            return _natural_key_field_lookups_cache[cls]
+        except KeyError:
+            pass
+
         if get_settings_or_config("LOCATION_NAME_AS_NATURAL_KEY"):
             # opt-in simplified "pseudo-natural-key"
-            return ["name"]
-
-        lookups = []
-        name = "name"
-        for _ in range(cls.objects.max_depth + 1):
-            lookups.append(name)
-            name = f"parent__{name}"
+            lookups = ("name",)
+        else:
+            lookups = []
+            name = "name"
+            for _ in range(cls.objects.max_depth + 1):
+                lookups.append(name)
+                name = f"parent__{name}"
+            lookups = tuple(lookups)
+        _natural_key_field_lookups_cache[cls] = lookups
         return lookups
 
     @classmethod

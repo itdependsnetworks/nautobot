@@ -1451,7 +1451,7 @@ class LocationTestCase(ModelTestCases.BaseModelTestCase):
             "parent__parent__parent__parent__parent__parent__parent__name",
         ][: Location.objects.max_depth + 1]
         self.assertEqual(len(expected), Location.objects.max_depth + 1, "Not enough expected entries, fix the test!")
-        self.assertEqual(expected, Location.natural_key_field_lookups)
+        self.assertEqual(tuple(expected), Location.natural_key_field_lookups)
         # Grab an arbitrary leaf node
         location = Location.objects.filter(parent__isnull=False, children__isnull=True).first()
         # Since we trim trailing None from the natural key, it may not be as many as `expected`, but since it's a leaf
@@ -1463,7 +1463,7 @@ class LocationTestCase(ModelTestCases.BaseModelTestCase):
     @override_config(LOCATION_NAME_AS_NATURAL_KEY=True)
     def test_custom_natural_key_field_lookups_override(self):
         """Test that just name is used as the natural key when LOCATION_NAME_AS_NATURAL_KEY is set."""
-        self.assertEqual(["name"], Location.natural_key_field_lookups)
+        self.assertEqual(("name",), Location.natural_key_field_lookups)
         # Grab an arbitrary leaf node
         location = Location.objects.filter(parent__isnull=False, children__isnull=True).first()
         self.assertEqual([location.name], location.natural_key())
