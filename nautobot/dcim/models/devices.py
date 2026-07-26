@@ -389,6 +389,9 @@ class DeviceType(PrimaryModel):
         if self.rear_image:
             self.rear_image.delete(save=False)
 
+    # Relations that `display` reads; consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("manufacturer",)
+
     @property
     def display(self):
         return f"{self.manufacturer.name} {self.model}"
@@ -1952,6 +1955,9 @@ class ModuleType(PrimaryModel):
 
         return yaml.dump(dict(data), sort_keys=False, allow_unicode=True)
 
+    # Relations that `display` reads; consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("manufacturer",)
+
     @property
     def display(self):
         return f"{self.manufacturer.name} {self.model}"
@@ -2044,6 +2050,13 @@ class Module(PrimaryModel):
         serial = f" (Serial: {self.serial})" if self.serial else ""
         asset_tag = f" (Asset Tag: {self.asset_tag})" if self.asset_tag else ""
         return str(self.module_type) + serial + asset_tag
+
+    display_prefetch_related = (
+        "location",
+        "module_type__manufacturer",
+        "parent_module_bay__parent_device",
+        "parent_module_bay__parent_module",
+    )
 
     @property
     def display(self):

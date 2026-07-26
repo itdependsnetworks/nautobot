@@ -237,6 +237,9 @@ class BaseTable(django_tables2.Table):
             prefetch_fields = []
             count_fields = []
             relationship_peer_lookups = None  # computed lazily, at most once, below
+            # Relations that this model's own display/__str__ reads per row (rendered by the linkified
+            # name/id column on effectively every table).
+            prefetch_fields.extend(getattr(model, "display_prefetch_related", ()))
             for column in self.columns:
                 if not column.visible:
                     continue
@@ -341,6 +344,16 @@ class BaseTable(django_tables2.Table):
                     select_fields.append("__".join(select_path))
                 if prefetch_path:
                     prefetch_fields.append("__".join(prefetch_path))
+                # If the accessor walk landed on a related model whose display/__str__ reads further
+                # relations (declared via `display_prefetch_related` on the model), prefetch those too.
+                # When both paths exist, the prefetch path is the deeper one (it includes the select
+                # prefix), so it locates the model the accessor actually landed on.
+                related_path = prefetch_path or select_path
+                if related_path and column_model is not model:
+                    for display_lookup in getattr(column_model, "display_prefetch_related", ()):
+                        entry = "__".join([*related_path, display_lookup])
+                        if entry not in prefetch_fields:
+                            prefetch_fields.append(entry)
 
             if select_fields:
                 queryset = maybe_select_related(queryset, select_fields)
