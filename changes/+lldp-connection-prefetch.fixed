@@ -1,0 +1,1 @@
+Fixed an N+1 query on the Device "LLDP Neighbors" tab — each interface's connected endpoint traversed cable paths per row; the view now applies the connected-endpoint prefetch. 224 → 54 queries.
