@@ -295,6 +295,9 @@ class VRF(PrimaryModel):
     def __str__(self):
         return self.display or super().__str__()
 
+    # Relations that `display` reads; consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("namespace",)
+
     @property
     def display(self):
         if self.namespace:
@@ -489,6 +492,11 @@ class VRFDeviceAssignment(BaseModel):
             # ["virtual_machine", "rd", "name"],
             # ["virtual_device_context", "rd", "name"],
         ]
+
+    # Relations that `__str__` reads (VRF's own display also reads its namespace); consumed by
+    # BaseTable to prefetch when rendered in tables. The same FKs are read by the assignment
+    # table's related-object columns.
+    display_prefetch_related = ("vrf__namespace", "device", "virtual_machine", "virtual_device_context")
 
     def __str__(self):
         obj = self.device or self.virtual_machine or self.virtual_device_context
@@ -789,6 +797,9 @@ class Prefix(PrimaryModel):
 
     def __str__(self):
         return str(self.prefix)
+
+    # Relations that `display` reads; consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("namespace",)
 
     @property
     def display(self):

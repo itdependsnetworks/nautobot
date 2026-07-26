@@ -249,6 +249,9 @@ class LoadBalancerPoolMember(PrimaryModel):  # pylint: disable=too-many-ancestor
         """Stringify instance."""
         return f"{self.ip_address.host}:{self.port}"
 
+    # Relations that `display` reads; consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("ip_address",)
+
     @property
     def display(self):
         """Return a string display of the object."""

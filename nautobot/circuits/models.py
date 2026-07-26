@@ -230,6 +230,10 @@ class CircuitTermination(PrimaryModel, PathEndpoint, CableTermination):
         ordering = ["circuit", "term_side"]
         unique_together = ["circuit", "term_side"]
 
+    # Relations that `__str__` reads (ProviderNetwork's own display also reads its provider);
+    # consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("location", "provider_network__provider", "cloud_network")
+
     def __str__(self):
         return f"Termination {self.term_side}: {self.location or self.provider_network or self.cloud_network}"
 

@@ -1523,6 +1523,9 @@ class SoftwareVersion(PrimaryModel):
             "version",
         )
 
+    # Relations that `__str__` reads; consumed by BaseTable to prefetch when rendered in tables.
+    display_prefetch_related = ("platform",)
+
     def __str__(self):
         if self.alias:
             return self.alias
