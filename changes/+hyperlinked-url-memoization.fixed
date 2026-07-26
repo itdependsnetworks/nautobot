@@ -1,0 +1,1 @@
+Improved REST API list performance by memoizing the URL route shape of hyperlinked serializer fields (`url`, all foreign-key hyperlinks, and `notes_url`), so `django.urls.reverse()` runs once per view per request instead of several times per serialized object. Routes with non-pk or non-UUID lookups automatically fall back to the previous per-object behavior.

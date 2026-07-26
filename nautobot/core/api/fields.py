@@ -1,9 +1,11 @@
 from collections import OrderedDict
 import logging
+import uuid
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.validators import URLValidator
 from django.db.models import Model
+from django.urls import NoReverseMatch
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -187,7 +189,53 @@ class LaxURLField(URLField):
         },
     }
 )
-class NautobotHyperlinkedRelatedField(WritableSerializerMixin, serializers.HyperlinkedRelatedField):
+class HyperlinkedURLMemoMixin:
+    """
+    Memoize the route shape of hyperlinked URLs so that `django.urls.reverse()` runs once per view per field instance.
+
+    `reverse()` plus its entourage (urlconf thread-local reads, active-translation lookups,
+    `build_absolute_uri`) is one of the largest per-object costs when serializing list responses; the route
+    shape it produces is constant for a given view within a request. Field instances are created per
+    serializer instantiation (i.e. per request — with `many=True` DRF reuses a single child field for every
+    object in the page), so memoizing on the instance is bounded to a single request and host.
+    """
+
+    _url_memo = None
+
+    def get_url(self, obj, view_name, request, format):
+        # Unsaved objects will not yet have a valid URL (same short-circuit as the DRF implementation).
+        if hasattr(obj, "pk") and obj.pk in (None, ""):
+            return None
+        # Only the plain pk-based lookup with no format suffix has a constant route shape we can memoize.
+        if format is not None or self.lookup_field != "pk" or self.lookup_url_kwarg != "pk":
+            return super().get_url(obj, view_name, request, format)
+
+        if self._url_memo is None:
+            self._url_memo = {}
+        entry = self._url_memo.get(view_name)
+        if entry is None:
+            # Reverse once with a sentinel pk that cannot occur in the static parts of the URL, then split
+            # around it. Django's resolver still decides the full layout (FORCE_SCRIPT_NAME, API root, etc.).
+            sentinel = uuid.uuid4()
+            try:
+                url = self.reverse(view_name, kwargs={"pk": sentinel}, request=request)
+                prefix, found, suffix = url.partition(str(sentinel))
+                entry = (prefix, suffix) if found else False
+            except NoReverseMatch:
+                # The route doesn't accept a UUID pk (e.g. int-pk models such as ContentType/Group).
+                entry = False
+            self._url_memo[view_name] = entry
+        if entry is False:
+            return super().get_url(obj, view_name, request, format)
+        prefix, suffix = entry
+        return f"{prefix}{obj.pk}{suffix}"
+
+
+class NautobotHyperlinkedIdentityField(HyperlinkedURLMemoMixin, serializers.HyperlinkedIdentityField):
+    """HyperlinkedIdentityField (the `url` field of every serializer) with per-request URL memoization."""
+
+
+class NautobotHyperlinkedRelatedField(HyperlinkedURLMemoMixin, WritableSerializerMixin, serializers.HyperlinkedRelatedField):
     """
     Extend HyperlinkedRelatedField to include URL namespace-awareness, add 'object_type' field, and read composite-keys.
     """

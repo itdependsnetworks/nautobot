@@ -16,11 +16,13 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.exceptions import ParseError
 from rest_framework.settings import api_settings
+from rest_framework.reverse import reverse as drf_reverse
 from rest_framework.test import APIRequestFactory, force_authenticate
 import yaml
 
 from nautobot.circuits.models import Provider
 from nautobot.core import testing
+from nautobot.core.api.fields import NautobotHyperlinkedIdentityField
 from nautobot.core.api.parsers import NautobotCSVParser
 from nautobot.core.api.renderers import NautobotCSVRenderer
 from nautobot.core.api.utils import get_serializer_for_model, get_view_name
@@ -548,6 +550,53 @@ class BaseModelSerializerTest(TestCase):
         self.assertEqual(
             serializer.get_natural_slug(content_type),
             construct_natural_slug(content_type.natural_key(), pk=content_type.pk),
+        )
+
+
+@override_settings(ALLOWED_HOSTS=["*"])  # building absolute URLs requires a permitted host header
+class HyperlinkedURLMemoTest(TestCase):
+    """Tests for the URL route-shape memoization on Nautobot's hyperlinked serializer fields."""
+
+    def test_memoized_urls_match_default_reverse(self):
+        """Memoized URLs must be identical to what per-object reverse() would produce."""
+        request = APIRequestFactory().get("/api/dcim/locations/")
+        field = NautobotHyperlinkedIdentityField(view_name="dcim-api:location-detail")
+        locations = list(dcim_models.Location.objects.all()[:3])
+        self.assertEqual(len(locations), 3)
+        urls = [field.get_url(location, "dcim-api:location-detail", request, None) for location in locations]
+        expected = [
+            drf_reverse("dcim-api:location-detail", kwargs={"pk": location.pk}, request=request)
+            for location in locations
+        ]
+        self.assertEqual(urls, expected)
+
+    def test_reverse_called_once_per_view(self):
+        """reverse() must run once per view per field instance, not once per object."""
+        request = APIRequestFactory().get("/api/dcim/locations/")
+        field = NautobotHyperlinkedIdentityField(view_name="dcim-api:location-detail")
+        with patch.object(field, "reverse", wraps=field.reverse) as mock_reverse:
+            for location in dcim_models.Location.objects.all()[:5]:
+                field.get_url(location, "dcim-api:location-detail", request, None)
+        self.assertEqual(mock_reverse.call_count, 1)
+
+    def test_notes_url_memoized_and_correct(self):
+        """The memoized notes_url must be identical to what per-object reverse() would produce."""
+        request = APIRequestFactory().get("/api/dcim/locations/")
+        serializer = dcim_serializers.LocationSerializer(context={"request": request})
+        locations = list(dcim_models.Location.objects.all()[:3])
+        expected = [
+            drf_reverse("dcim-api:location-notes", args=[location.id], request=request) for location in locations
+        ]
+        self.assertEqual([serializer.get_notes_url(location) for location in locations], expected)
+
+    def test_non_uuid_pk_route_falls_back(self):
+        """Routes that can't reverse the UUID sentinel (int-pk models) must fall back to per-object reverse()."""
+        request = APIRequestFactory().get("/api/extras/content-types/")
+        field = NautobotHyperlinkedIdentityField(view_name="extras-api:contenttype-detail")
+        content_type = ContentType.objects.first()
+        self.assertEqual(
+            field.get_url(content_type, "extras-api:contenttype-detail", request, None),
+            drf_reverse("extras-api:contenttype-detail", kwargs={"pk": content_type.pk}, request=request),
         )
 
 

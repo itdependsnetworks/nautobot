@@ -25,7 +25,12 @@ from rest_framework.serializers import SerializerMethodField
 from rest_framework.utils.model_meta import _get_to_field, RelationInfo
 
 from nautobot.core import constants
-from nautobot.core.api.fields import LaxURLField, NautobotHyperlinkedRelatedField, ObjectTypeField
+from nautobot.core.api.fields import (
+    LaxURLField,
+    NautobotHyperlinkedIdentityField,
+    NautobotHyperlinkedRelatedField,
+    ObjectTypeField,
+)
 from nautobot.core.api.utils import (
     dict_to_filter_params,
     nested_serializer_factory,
@@ -152,6 +157,7 @@ class BaseModelSerializer(OptInFieldsMixin, serializers.HyperlinkedModelSerializ
     }
 
     serializer_related_field = NautobotHyperlinkedRelatedField
+    serializer_url_field = NautobotHyperlinkedIdentityField
 
     id = serializers.UUIDField(read_only=False, default=serializers.CreateOnlyDefault(uuid.uuid4))
     display = serializers.SerializerMethodField(read_only=True, help_text="Human friendly display value")
@@ -941,9 +947,25 @@ class NotesSerializerMixin(BaseModelSerializer):
             self.extend_field_names(fields, "notes_url")
         return fields
 
+    _notes_url_memo = None
+
     @extend_schema_field(serializers.URLField())
     def get_notes_url(self, instance):
         try:
+            # Memoize the route shape on the serializer instance (request-scoped) so that reverse() runs
+            # once per request rather than once per object; same pattern as HyperlinkedURLMemoMixin.
+            if self._notes_url_memo is None:
+                sentinel = uuid.uuid4()
+                url = reverse(
+                    get_route_for_model(instance, "notes", api=True),
+                    args=[sentinel],
+                    request=self.context["request"],
+                )
+                prefix, found, suffix = url.partition(str(sentinel))
+                self._notes_url_memo = (prefix, suffix) if found else False
+            if self._notes_url_memo is not False:
+                prefix, suffix = self._notes_url_memo
+                return f"{prefix}{instance.id}{suffix}"
             notes_url = get_route_for_model(instance, "notes", api=True)
             return reverse(notes_url, args=[instance.id], request=self.context["request"])
         except NoReverseMatch:
