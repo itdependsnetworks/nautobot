@@ -1,0 +1,1 @@
+Fixed per-row N+1 queries against the cable-termination join table when rendering console/power/interface/front/rear-port and other cable-termination tables whose queryset was not pre-optimized by the view, by having `CableTerminationTable` apply the model's cable-column `select_related`/`prefetch_related` optimizations itself.

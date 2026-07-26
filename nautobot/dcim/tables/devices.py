@@ -1,3 +1,4 @@
+from django.db.models import QuerySet
 from django.utils.html import format_html, format_html_join
 import django_tables2 as tables
 from django_tables2.utils import Accessor
@@ -430,9 +431,31 @@ class CableTerminationTable(BaseTable):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # The `cable` column and the cable-status row coloring (`cable_status_color_css`, applied
+        # via `row_attrs`) resolve each row's cable through the CableToCableTermination join row
+        # for every row, regardless of which columns are visible. Apply the model's cable-column
+        # optimizations here so the table renders query-efficiently even when the view didn't
+        # pre-optimize its queryset via `optimize_queryset_for_cable_columns`.
+        model = self.Meta.model  # pylint: disable=no-member
+        if isinstance(self.data.data, QuerySet):
+            queryset = self.data.data.select_related(*model.cable_columns_select_related_fields())
+            # Views may have already applied `optimize_queryset_for_cable_columns`; re-adding a
+            # `Prefetch` for an already-prefetched path raises ValueError at evaluation, so skip those.
+            already_prefetched = {
+                lookup if isinstance(lookup, str) else lookup.prefetch_to
+                for lookup in queryset._prefetch_related_lookups
+            }
+            unconditional_prefetches = [
+                prefetch
+                for prefetch in model.cable_columns_prefetch_related_fields()
+                if (prefetch if isinstance(prefetch, str) else prefetch.prefetch_to) not in already_prefetched
+            ]
+            if unconditional_prefetches:
+                queryset = queryset.prefetch_related(*unconditional_prefetches)
+            self.replace_queryset(queryset)
         # The `cable_peer` column's prefetch is expensive (it walks the cable's terminations), so
         # only apply it when that column is actually visible for this table/user.
-        for prefetch in self.Meta.model.cable_peer_prefetch_related_fields():  # pylint: disable=no-member
+        for prefetch in model.cable_peer_prefetch_related_fields():
             self.add_conditional_prefetch("cable_peer", prefetch=prefetch)
 
 
