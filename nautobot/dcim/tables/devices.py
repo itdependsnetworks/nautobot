@@ -177,6 +177,13 @@ class VirtualChassisMembersTable(BaseTable):
 
 
 class DeviceTable(StatusTableMixin, RoleTableMixin, BaseTable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # `primary_ip` is a property choosing between the two FKs, so the automatic accessor-based
+        # optimization can't see it; prefetch both when the column is visible.
+        self.add_conditional_prefetch("primary_ip", db_column="primary_ip4")
+        self.add_conditional_prefetch("primary_ip", db_column="primary_ip6")
+
     pk = ToggleColumn()
     name = tables.TemplateColumn(order_by=("_name",), template_code=DEVICE_LINK)
     tenant = TenantColumn()
