@@ -465,6 +465,16 @@ class BaseTable(django_tables2.Table):
         # Resume base class implementation
         self.data.order_by(self._order_by)
 
+    def replace_queryset(self, queryset):
+        """Replace the table's underlying QuerySet, rebinding the table data and rows.
+
+        Intended for subclass `__init__` implementations (after `super().__init__()`) that need to
+        apply further `select_related`/`prefetch_related` optimizations to the auto-optimized queryset.
+        """
+        self.data = TableData.from_data(queryset)
+        self.data.set_table(self)
+        self.rows = BoundRows(data=self.data, table=self, pinned_data=self.pinned_data)
+
     def add_conditional_prefetch(self, table_field, db_column=None, prefetch=None):
         """Conditionally prefetch the specified database column if the related table field is visible.
 
@@ -481,12 +491,7 @@ class BaseTable(django_tables2.Table):
         if not db_column:
             db_column = table_field
         if table_field in self.columns and self.columns[table_field].visible and isinstance(self.data.data, QuerySet):
-            if prefetch:
-                self.data = TableData.from_data(self.data.data.prefetch_related(prefetch))
-            else:
-                self.data = TableData.from_data(self.data.data.prefetch_related(db_column))
-            self.data.set_table(self)
-            self.rows = BoundRows(data=self.data, table=self, pinned_data=self.pinned_data)
+            self.replace_queryset(self.data.data.prefetch_related(prefetch if prefetch else db_column))
 
 
 #
