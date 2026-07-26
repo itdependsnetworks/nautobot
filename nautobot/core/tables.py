@@ -4,8 +4,9 @@ import logging
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, FieldError
-from django.db.models import Prefetch, QuerySet
+from django.db.models import Prefetch, Q, QuerySet
 from django.db.models.fields.related import ForeignKey, RelatedField
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.urls import reverse
@@ -235,6 +236,7 @@ class BaseTable(django_tables2.Table):
             select_fields = []
             prefetch_fields = []
             count_fields = []
+            relationship_peer_lookups = None  # computed lazily, at most once, below
             for column in self.columns:
                 if not column.visible:
                     continue
@@ -276,7 +278,30 @@ class BaseTable(django_tables2.Table):
                 if isinstance(column.column, RelationshipColumn):
                     # RelationshipColumn reads the `associations` property, which queries both generic
                     # relations per row; prefetch them once, shared by all visible relationship columns.
-                    for lookup in ("source_for_associations", "destination_for_associations"):
+                    # `RelationshipAssociation.get_peer()` then dereferences both the `source` and
+                    # `destination` GenericForeignKeys of each association, so prefetch those too
+                    # (a nested lookup implicitly prefetches its parent generic relation) -- unless a
+                    # relationship involving this model references a stale ContentType (uninstalled
+                    # App), in which case the GFK prefetch would raise; fall back to per-row
+                    # resolution then, which renders such peers as "(unknown)".
+                    if relationship_peer_lookups is None:
+                        model_ct = ContentType.objects.get_for_model(model)
+                        if all(
+                            ContentType.objects.get_for_id(ct_id).model_class() is not None
+                            for relationship in models.Relationship.objects.filter(
+                                Q(source_type=model_ct) | Q(destination_type=model_ct)
+                            )
+                            for ct_id in (relationship.source_type_id, relationship.destination_type_id)
+                        ):
+                            relationship_peer_lookups = (
+                                "source_for_associations__source",
+                                "source_for_associations__destination",
+                                "destination_for_associations__source",
+                                "destination_for_associations__destination",
+                            )
+                        else:
+                            relationship_peer_lookups = ("source_for_associations", "destination_for_associations")
+                    for lookup in relationship_peer_lookups:
                         if lookup not in prefetch_fields:
                             prefetch_fields.append(lookup)
                     continue
@@ -924,7 +949,8 @@ class RelationshipColumn(django_tables2.Column):
     def render(self, *, record, value):  # pylint: disable=arguments-differ  # tables2 varies its kwargs
         # Filter the relationship associations by the relationship instance.
         # Since associations accessor returns all the relationship associations regardless of the relationship.
-        value = [v for v in value if v.relationship == self.relationship]
+        # Compare by ID to avoid fetching each association's `relationship` from the database per row.
+        value = [v for v in value if v.relationship_id == self.relationship.pk]
         if not self.relationship.symmetric:
             if self.side == choices.RelationshipSideChoices.SIDE_SOURCE:
                 value = [v for v in value if v.source_id == record.id]
