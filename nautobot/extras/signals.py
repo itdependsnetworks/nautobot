@@ -196,6 +196,11 @@ def invalidate_models_cache(sender, **kwargs):
             cache_key = construct_cache_key(manager, method_name="keys_for_model", branch_aware=True)
             cache.delete_pattern(f"{cache_key}(*)")
 
+    if hasattr(manager, "keys_for_model"):
+        from nautobot.extras.models.customfields import _keys_for_model_memo
+
+        _keys_for_model_memo.clear()
+
 
 @receiver(post_delete, sender=CustomField)
 @receiver(post_delete, sender=CustomFieldChoice)

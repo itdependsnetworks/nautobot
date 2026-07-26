@@ -17,6 +17,7 @@ from rest_framework.test import APIClient, APIRequestFactory
 from nautobot.core.models import fields as core_fields
 from nautobot.core.testing import utils
 from nautobot.core.utils import deprecation, permissions
+from nautobot.core.utils.cache import ProcessTTLCache
 from nautobot.extras import management, models as extras_models
 from nautobot.extras.choices import JobResultStatusChoices, RelationshipSideChoices
 from nautobot.ipam.models import default_namespace_pk
@@ -53,6 +54,9 @@ class NautobotTestCaseMixin:
 
     def setUpNautobot(self, client=True, populate_status=False):
         """Setup shared testuser, statuses and client."""
+        # Clear in-process TTL memos so query counts stay deterministic regardless of test ordering/timing.
+        ProcessTTLCache.clear_all()
+
         # Re-populate status choices after database truncation by TransactionTestCase
         if populate_status:
             management.populate_status_choices(apps, None)

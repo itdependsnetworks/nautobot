@@ -15,6 +15,7 @@ from nautobot.extras.choices import JobQueueTypeChoices
 from nautobot.extras.exceptions import KubernetesJobManifestError
 from nautobot.extras.models import JobQueue, JobResult
 from nautobot.extras.registry import registry
+from nautobot.extras import utils as utils_module
 from nautobot.extras.utils import (
     get_base_template,
     get_celery_queues,
@@ -46,16 +47,19 @@ class UtilsTestCase(TestCase):
     def test_get_celery_queues(self, mock_active_queues):
         with self.subTest("No queues"):
             cache.clear()
+            utils_module._celery_queues_memo.clear()
             mock_active_queues.return_value = None
             self.assertDictEqual(get_celery_queues(), {})
 
         with self.subTest("1 worker 1 queue"):
             cache.clear()
+            utils_module._celery_queues_memo.clear()
             mock_active_queues.return_value = {"celery@worker": [{"name": "queue1"}]}
             self.assertDictEqual(get_celery_queues(), {"queue1": 1})
 
         with self.subTest("2 workers 2 shared queues"):
             cache.clear()
+            utils_module._celery_queues_memo.clear()
             mock_active_queues.return_value = {
                 "celery@worker1": [{"name": "queue1"}, {"name": "queue2"}],
                 "celery@worker2": [{"name": "queue1"}, {"name": "queue2"}],
@@ -64,6 +68,7 @@ class UtilsTestCase(TestCase):
 
         with self.subTest("2 workers 2 individual queues"):
             cache.clear()
+            utils_module._celery_queues_memo.clear()
             mock_active_queues.return_value = {
                 "celery@worker1": [{"name": "queue1"}],
                 "celery@worker2": [{"name": "queue2"}],
@@ -72,6 +77,7 @@ class UtilsTestCase(TestCase):
 
         with self.subTest("2 workers 3 queues"):
             cache.clear()
+            utils_module._celery_queues_memo.clear()
             mock_active_queues.return_value = {
                 "celery@worker1": [{"name": "queue1"}, {"name": "queue3"}],
                 "celery@worker2": [{"name": "queue2"}],

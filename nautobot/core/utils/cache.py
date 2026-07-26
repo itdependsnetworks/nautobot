@@ -1,11 +1,62 @@
 """Utilities for conveniently working with the Django/Redis cache."""
 
 import logging
+import time
 
 from django.conf import settings
 from django.db import models
 
 logger = logging.getLogger(__name__)
+
+
+class ProcessTTLCache:
+    """
+    A small in-process TTL cache for values that are read once per serialized object in hot code paths.
+
+    A Django-cache-backed value costs a cache-backend (Redis) round-trip per read; when a REST API list
+    response reads the same value for every row, those round-trips dominate. This wraps such reads with a
+    short-lived process-local memo: staleness is bounded by `ttl` seconds (choose it to match — or be
+    stricter than — the staleness the underlying value already tolerates), and correctness across worker
+    processes is unchanged because each process re-reads at most `ttl` seconds later.
+
+    Entries beyond `maxsize` trigger a purge of expired entries (and a full clear as a last resort), so
+    per-instance keys can't grow the memo without bound.
+    """
+
+    # All instances, so the test harness can clear them between tests (a memo surviving into the next
+    # test would make query-count assertions timing-dependent).
+    instances = []
+
+    def __init__(self, ttl, maxsize=4096):
+        self.ttl = ttl
+        self.maxsize = maxsize
+        self._data = {}
+        ProcessTTLCache.instances.append(self)
+
+    @classmethod
+    def clear_all(cls):
+        for instance in cls.instances:
+            instance.clear()
+
+    def get_or_set(self, key, compute):
+        """Return the memoized value for `key`, calling `compute()` (and storing its result) on miss/expiry."""
+        now = time.monotonic()
+        entry = self._data.get(key)
+        if entry is not None and entry[1] > now:
+            return entry[0]
+        value = compute()
+        if len(self._data) >= self.maxsize:
+            self._data = {k: v for k, v in self._data.items() if v[1] > now}
+            if len(self._data) >= self.maxsize:
+                self._data.clear()
+        self._data[key] = (value, now + self.ttl)
+        return value
+
+    def pop(self, key):
+        self._data.pop(key, None)
+
+    def clear(self):
+        self._data.clear()
 
 
 def construct_cache_key(obj, *, method_name=None, branch_aware=True, **params):

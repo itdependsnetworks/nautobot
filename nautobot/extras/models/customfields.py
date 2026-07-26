@@ -38,7 +38,7 @@ from nautobot.core.models.querysets import RestrictedQuerySet
 from nautobot.core.models.validators import validate_regex
 from nautobot.core.settings_funcs import is_truthy
 from nautobot.core.templatetags.helpers import render_markdown
-from nautobot.core.utils.cache import construct_cache_key
+from nautobot.core.utils.cache import construct_cache_key, ProcessTTLCache
 from nautobot.core.utils.data import render_jinja2, validate_jinja2
 from nautobot.core.utils.filtering import build_filter_dict_from_filterset
 from nautobot.core.utils.lookup import get_filterset_for_model
@@ -49,6 +49,10 @@ from nautobot.extras.models.mixins import ContactMixin, DynamicGroupsModelMixin,
 from nautobot.extras.utils import check_if_key_is_graphql_safe, extras_features, FeatureQuery
 
 logger = logging.getLogger(__name__)
+
+# In-process memo for CustomFieldManager.keys_for_model(); cleared by
+# nautobot.extras.signals.invalidate_models_cache and bounded by a short TTL for other processes.
+_keys_for_model_memo = ProcessTTLCache(ttl=5)
 
 
 class ComputedFieldManager(BaseManager.from_queryset(RestrictedQuerySet)):
@@ -517,7 +521,18 @@ class CustomFieldManager(BaseManager.from_queryset(RestrictedQuerySet)):
             return queryset
 
     def keys_for_model(self, model):
-        """Return list of all keys for CustomFields assigned to the given model."""
+        """Return list of all keys for CustomFields assigned to the given model.
+
+        Read once per serialized object (including nested representations), so the shared-cache lookup is
+        additionally memoized in-process for a few seconds; `nautobot.extras.signals.invalidate_models_cache`
+        clears the memo immediately when custom field definitions change in this process.
+        """
+        concrete_model = model._meta.concrete_model
+        return _keys_for_model_memo.get_or_set(
+            concrete_model._meta.label_lower, lambda: self._keys_for_model_uncached(model)
+        )
+
+    def _keys_for_model_uncached(self, model):
         concrete_model = model._meta.concrete_model
         cache_key = construct_cache_key(
             self, method_name="keys_for_model", branch_aware=True, model=concrete_model._meta.label_lower

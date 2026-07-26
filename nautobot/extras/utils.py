@@ -31,7 +31,7 @@ from nautobot.core.exceptions import FilterSetFieldNotFound
 from nautobot.core.models import BaseModel
 from nautobot.core.models.managers import TagsManager
 from nautobot.core.models.utils import find_models_with_matching_fields
-from nautobot.core.utils.cache import construct_cache_key
+from nautobot.core.utils.cache import construct_cache_key, ProcessTTLCache
 from nautobot.core.utils.data import is_uuid
 from nautobot.core.utils.lookup import get_filterset_for_model, get_model_for_view_name
 from nautobot.core.utils.requests import is_single_choice_field
@@ -401,11 +401,20 @@ def generate_signature(request_body, secret):
     return hmac_prep.hexdigest()
 
 
+# In-process memo for get_celery_queues() — read once per serialized JobQueue (via its `display`), and the
+# shared-cache miss path performs a Celery broker inspection inline. TTL matches the shared cache's timeout.
+_celery_queues_memo = ProcessTTLCache(ttl=5)
+
+
 def get_celery_queues():
     """
     Return a dictionary of celery queues and the number of workers active on the queue in
     the form {queue_name: num_workers}
     """
+    return _celery_queues_memo.get_or_set("celery_queues", _get_celery_queues_uncached)
+
+
+def _get_celery_queues_uncached():
     from nautobot.core.celery import app  # prevent circular import
 
     celery_queues = None

@@ -10,7 +10,7 @@ from tree_queries.query import TreeManager as TreeManager_, TreeQuerySet as Tree
 
 from nautobot.core.models import BaseManager, querysets
 from nautobot.core.signals import invalidate_max_depth_cache
-from nautobot.core.utils.cache import construct_cache_key
+from nautobot.core.utils.cache import construct_cache_key, ProcessTTLCache
 
 
 class TreeQuerySet(TreeQuerySet_, querysets.RestrictedQuerySet):
@@ -113,6 +113,11 @@ class TreeManager(TreeManager_, BaseManager.from_queryset(TreeQuerySet)):
         return max_depth
 
 
+# In-process memo for TreeModel.display, keyed per instance; same 5-second staleness bound as the
+# shared display cache below, without a cache-backend round-trip per rendered row.
+_display_memo = ProcessTTLCache(ttl=5)
+
+
 class TreeModel(TreeNode):
     """
     Nautobot-specific base class for models that exist in a self-referential tree.
@@ -150,10 +155,15 @@ class TreeModel(TreeNode):
         By default, TreeModels display their full ancestry for clarity.
 
         As this is an expensive thing to calculate, we cache it for a few seconds in the case of repeated lookups.
+        The shared-cache read itself is one cache-backend round-trip per instance, which adds up when rendered
+        once per row of a REST API list response, so it is additionally memoized in-process for the same TTL.
         """
         if not hasattr(self, "name"):
             raise NotImplementedError("default TreeModel.display implementation requires a `name` attribute!")
         cache_key = construct_cache_key(self, method_name="display", branch_aware=True)
+        return _display_memo.get_or_set(cache_key, lambda: self._display_uncached(cache_key))
+
+    def _display_uncached(self, cache_key):
         display_str = cache.get(cache_key, "")
         if display_str:
             return display_str
