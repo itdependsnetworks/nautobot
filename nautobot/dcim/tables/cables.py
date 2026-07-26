@@ -1,3 +1,4 @@
+from django.db.models import QuerySet
 import django_tables2 as tables
 from django_tables2.utils import Accessor
 
@@ -118,6 +119,24 @@ class CableTable(StatusTableMixin, BaseTable):
     color = ColorColumn()
     tags = TagColumn(url_name="dcim:cable_list")
     actions = ButtonsColumn(Cable)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The termination columns resolve each cable's terminations through the
+        # CableToCableTermination join table via properties the accessor walk can't see. Apply the
+        # model's cable-column optimizations here so the table renders query-efficiently even when
+        # the view didn't pre-optimize its queryset (mirrors CableTerminationTable). Re-adding a
+        # Prefetch for an already-prefetched path raises ValueError at evaluation, so skip if the
+        # view already prefetched `terminations`.
+        if isinstance(self.data.data, QuerySet):
+            already_prefetched = {
+                lookup if isinstance(lookup, str) else lookup.prefetch_to
+                for lookup in self.data.data._prefetch_related_lookups
+            }
+            if "terminations" not in already_prefetched:
+                self.replace_queryset(Cable.optimize_queryset_for_cable_columns(self.data.data))
+            else:
+                self.replace_queryset(self.data.data.select_related("cable_type"))
 
     class Meta(BaseTable.Meta):
         model = Cable

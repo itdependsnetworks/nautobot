@@ -609,6 +609,30 @@ class Cable(PrimaryModel):
 
     # ─── Termination properties (read from CableToCableTermination join table) ───
 
+    @classmethod
+    def optimize_queryset_for_cable_columns(cls, queryset):
+        """
+        Apply the `select_related`/`prefetch_related` needed to render the termination columns of
+        `CableTable` (`termination_a`/`termination_b`, their `*_parent` variants, and the multi-lane
+        `terminations_a`/`terminations_b`) without a query per row.
+
+        The termination properties walk `terminations.all()` and each join row's per-type FK, its
+        parent, and the FKs its display string needs; `get_connections()` additionally reads
+        `cable_type`. Applied by `CableTable` itself when the view didn't pre-optimize.
+
+        Usage on a list view's `queryset`:
+
+            queryset = Cable.optimize_queryset_for_cable_columns(Cable.objects.all())
+        """
+        from nautobot.dcim.constants import TERMINATION_CABLE_COLUMN_FK_FIELDS
+
+        return queryset.select_related("cable_type").prefetch_related(
+            models.Prefetch(
+                "terminations",
+                queryset=CableToCableTermination.objects.select_related(*TERMINATION_CABLE_COLUMN_FK_FIELDS),
+            )
+        )
+
     def _get_termination_attr(self, side, endpoint_attr, fallback_attr):
         """Get an attribute from the connector=1 endpoint on the given side, or fall back to an _initial_* attr.
 

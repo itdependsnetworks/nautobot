@@ -1,0 +1,1 @@
+Fixed per-row N+1 queries against the cable-termination join table when rendering the Cables list table anywhere its queryset was not pre-optimized by the view (for example the Cable Type "Cables" tab), by adding `Cable.optimize_queryset_for_cable_columns` and having `CableTable` apply it itself; the Cables list view now relies on the same mechanism.

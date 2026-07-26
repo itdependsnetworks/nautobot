@@ -85,7 +85,7 @@ from nautobot.core.views.utils import (
 )
 from nautobot.core.views.viewsets import NautobotUIViewSet
 from nautobot.dcim.choices import LocationDataToContactActionChoices
-from nautobot.dcim.constants import DEVICE_COMPONENT_ICONS, TERMINATION_CABLE_COLUMN_FK_FIELDS
+from nautobot.dcim.constants import DEVICE_COMPONENT_ICONS
 from nautobot.dcim.forms import LocationMigrateDataToContactForm
 from nautobot.dcim.utils import (
     generate_cable_breakout_mapping,
@@ -123,7 +123,6 @@ from .constants import DEVICE_RECURSION_DEPTH_LIMIT, NONCONNECTABLE_IFACE_TYPES
 from .models import (
     Cable,
     CablePath,
-    CableToCableTermination,
     CableType,
     ConsolePort,
     ConsolePortTemplate,
@@ -5632,15 +5631,9 @@ class CableUIViewSet(NautobotUIViewSet):
     form_class = forms.CableForm
     serializer_class = serializers.CableSerializer
     table_class = tables.CableTable
-    queryset = Cable.objects.select_related("cable_type").prefetch_related(
-        Prefetch(
-            "terminations",
-            # `select_related`-ing the per-type FK columns (plus each termination's parent and the
-            # FKs its display string needs) lets the table's `terminations_a` / `terminations_b` and
-            # `*_parent` columns render every FK without an extra query per row.
-            queryset=CableToCableTermination.objects.select_related(*TERMINATION_CABLE_COLUMN_FK_FIELDS),
-        ),
-    )
+    # The termination-column optimizations (join-table prefetch etc.) are applied by CableTable
+    # itself; see Cable.optimize_queryset_for_cable_columns.
+    queryset = Cable.objects.all()
     action_buttons = ("add", "import", "export")
 
     def get_queryset(self):
