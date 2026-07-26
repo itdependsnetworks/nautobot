@@ -1,3 +1,4 @@
+from django.db.models import Prefetch
 import django_tables2 as tables
 from django_tables2.utils import Accessor
 
@@ -8,7 +9,7 @@ from nautobot.core.tables import (
     TagColumn,
     ToggleColumn,
 )
-from nautobot.dcim.models import Rack, RackGroup, RackReservation
+from nautobot.dcim.models import Device, Rack, RackGroup, RackReservation
 from nautobot.extras.tables import RoleTableMixin, StatusTableMixin
 from nautobot.tenancy.tables import TenantColumn
 
@@ -98,6 +99,16 @@ class RackDetailTable(RackTable):
         template_code=UTILIZATION_GRAPH, orderable=False, verbose_name="Power"
     )
     tags = TagColumn(url_name="dcim:rack_list")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Rack.get_utilization() reads each rack's positioned devices (and their device types) and
+        # reservations per row; prefetch both when the Space column is visible.
+        self.add_conditional_prefetch(
+            "get_utilization",
+            prefetch=Prefetch("devices", queryset=Device.objects.select_related("device_type").order_by()),
+        )
+        self.add_conditional_prefetch("get_utilization", db_column="rack_reservations")
 
     class Meta(RackTable.Meta):
         fields = (

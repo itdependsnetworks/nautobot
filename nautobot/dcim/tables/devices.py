@@ -1409,9 +1409,7 @@ class InterfaceRedundancyGroupAssociationTable(BaseTable):
         super().__init__(*args, **kwargs)
         # The column template renders each IP's parent prefix's namespace; the automatic
         # optimization only prefetches `interface__ip_addresses` itself.
-        self.add_conditional_prefetch(
-            "interface__ip_addresses", db_column="interface__ip_addresses__parent__namespace"
-        )
+        self.add_conditional_prefetch("interface__ip_addresses", db_column="interface__ip_addresses__parent__namespace")
 
     class Meta(BaseTable.Meta):
         """Meta attributes."""

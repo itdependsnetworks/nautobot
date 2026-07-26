@@ -578,6 +578,8 @@ class PrefixDetailTable(PrefixTable):
                 "children", queryset=Prefix.objects.only("network", "prefix_length", "parent_id").order_by()
             ),
         )
+        # get_utilization() also counts each prefix's count_as_utilized IP ranges per row.
+        self.add_conditional_prefetch("utilization", db_column="ip_address_ranges")
 
     class Meta(PrefixTable.Meta):
         fields = (

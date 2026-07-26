@@ -1659,8 +1659,14 @@ class Prefix(PrimaryModel):
 
         numerator_set = child_ips | child_prefixes
 
-        # Add count_as_utilized IP Ranges to the numerator (each range counts as fully utilized)
-        for ip_range in self.ip_address_ranges.filter(count_as_utilized=True):
+        # Add count_as_utilized IP Ranges to the numerator (each range counts as fully utilized).
+        # Honor a prefetched `ip_address_ranges` cache (see PrefixDetailTable) rather than
+        # `.filter()`, which would issue a fresh query per row.
+        if "ip_address_ranges" in getattr(self, "_prefetched_objects_cache", {}):
+            utilized_ranges = [ip_range for ip_range in self.ip_address_ranges.all() if ip_range.count_as_utilized]
+        else:
+            utilized_ranges = self.ip_address_ranges.filter(count_as_utilized=True)
+        for ip_range in utilized_ranges:
             start = netaddr.IPAddress(ip_range.start_address)
             end = netaddr.IPAddress(ip_range.end_address)
             numerator_set |= netaddr.IPSet(netaddr.IPRange(start, end))
