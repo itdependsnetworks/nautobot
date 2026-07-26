@@ -1,0 +1,1 @@
+Fixed a per-row query issued by the always-rendered row action buttons in the Rack Groups and VLAN Groups list views: the "View elevations" button now uses `location_id` instead of dereferencing the location, and the "Add VLAN" button's next-available-VID computation now uses a prefetched set of the group's VLAN IDs instead of querying per row.

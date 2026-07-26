@@ -2328,7 +2328,9 @@ class VLANGroup(PrimaryModel):
         """
         Return all available VLAN IDs within this VLANGroup as a list.
         """
-        used_ids = self.vlans.all().values_list("vid", flat=True)
+        # Iterate `.all()` (honoring any prefetch cache, e.g. from VLANGroupTable) rather than
+        # `.values_list()`, which would clone the queryset and issue a fresh query per call.
+        used_ids = {vlan.vid for vlan in self.vlans.all()}
         available = sorted([vid for vid in self.expanded_range if vid not in used_ids])
 
         return available

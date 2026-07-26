@@ -965,6 +965,14 @@ class VLANGroupTable(BaseTable):
     vlan_count = LinkedCountColumn(viewname="ipam:vlan_list", url_params={"vlan_group": "name"}, verbose_name="VLANs")
     actions = ButtonsColumn(model=VLANGroup, prepend_template=VLANGROUP_ADD_VLAN)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The always-rendered `actions` buttons (VLANGROUP_ADD_VLAN) read `get_next_available_vid`
+        # per row, which needs each group's used VLAN IDs; prefetch them (VIDs only).
+        self.add_conditional_prefetch(
+            "actions", prefetch=Prefetch("vlans", queryset=VLAN.objects.only("id", "vid", "vlan_group").order_by())
+        )
+
     class Meta(BaseTable.Meta):
         model = VLANGroup
         fields = ("pk", "name", "location", "range", "vlan_count", "description", "actions")
