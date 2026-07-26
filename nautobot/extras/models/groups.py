@@ -930,7 +930,9 @@ class DynamicGroup(PrimaryModel):
             group = self
 
         ancestors = []
-        for parent_group in group.parents.all():
+        # select_related("content_type"): the ancestors table's `members` column resolves each
+        # group's member model via content_type per row.
+        for parent_group in group.parents.select_related("content_type"):
             logger.debug("Processing group %s...", parent_group)
             ancestors.append(parent_group)
             if parent_group.parents.exists():
@@ -1070,7 +1072,9 @@ class DynamicGroup(PrimaryModel):
         """
 
         tree = []
-        memberships = DynamicGroupMembership.objects.filter(parent_group=self)
+        # select_related: the descendants table reads `group` (name/description columns) and
+        # `group.content_type` (members column) for every row of the tree.
+        memberships = DynamicGroupMembership.objects.filter(parent_group=self).select_related("group__content_type")
         for membership in memberships:
             membership.depth = depth
             tree.append(membership)

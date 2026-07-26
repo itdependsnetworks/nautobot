@@ -3,6 +3,7 @@ import re
 from textwrap import dedent
 
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import QuerySet
 from django.utils.html import format_html, format_html_join
 import django_tables2 as tables
 from django_tables2.utils import Accessor
@@ -814,6 +815,14 @@ class DynamicGroupTable(BaseTable):
             "actions",
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The `members` column reads the `count` property, which needs `content_type` to resolve
+        # the member model per row (the member count query itself is inherently per-row).
+        # Subclasses (e.g. DynamicGroupMembershipTable) have a different model, so guard by model.
+        if self._meta.model is DynamicGroup and isinstance(self.data.data, QuerySet):
+            self.replace_queryset(self.data.data.select_related("content_type"))
+
     def render_members(self, value, record):
         """Provide a filtered URL to the group members (if any)."""
         # Only linkify if there are members.
@@ -827,6 +836,14 @@ class DynamicGroupMembershipTable(DynamicGroupTable):
 
     description = tables.Column(accessor="group__description")
     members = tables.Column(accessor="group__count", verbose_name="Group Members", orderable=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The `name` property and the `members`/`description` columns all read the `group` FK, and
+        # `group.count` needs `group.content_type`; the `name` accessor isn't a field so the
+        # accessor walk derives nothing.
+        if isinstance(self.data.data, QuerySet):
+            self.replace_queryset(self.data.data.select_related("group__content_type"))
 
     class Meta(BaseTable.Meta):
         model = DynamicGroupMembership
@@ -1512,6 +1529,14 @@ class ObjectMetadataTable(BaseTable):
             "actions",
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # `render_value` delegates to `get_value_display()`, which reads the `metadata_type` FK per
+        # row (and the `contact`/`team` FKs for contact/team metadata); the `value` accessor maps to
+        # the `_value` field, so the accessor walk can't derive these.
+        if isinstance(self.data.data, QuerySet):
+            self.replace_queryset(self.data.data.select_related("metadata_type", "contact", "team"))
+
     def render_scoped_fields(self, value):
         if not value:
             return "(all fields)"
@@ -1563,6 +1588,13 @@ class ScheduledJobTable(BaseTable):
     total_run_count = tables.Column(verbose_name="Total Run Count")
     actions = ButtonsColumn(ScheduledJob, buttons=("delete",), prepend_template=SCHEDULED_JOB_BUTTONS)
     approval_state = tables.Column(empty_values=[], orderable=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # `render_approval_state` reads `associated_approval_workflows.first()` per row; the
+        # prefetched queryset is ordered (ApprovalWorkflow.Meta.ordering), so `first()` uses the
+        # prefetch cache.
+        self.add_conditional_prefetch("approval_state", db_column="associated_approval_workflows")
 
     def render_approval_state(self, record):
         workflow = record.associated_approval_workflows.first()
@@ -1700,6 +1732,19 @@ class RelationshipAssociationTable(BaseTable):
 
     destination_type = tables.Column()
     destination = tables.Column(linkify=True, orderable=False, accessor="get_destination", default="unknown")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # `get_source()`/`get_destination()` dereference the GenericForeignKeys per row; prefetch
+        # them when the columns are visible. A stale ContentType (uninstalled App) would make the
+        # GFK prefetch raise, so only guard against the ContentTypes associations actually use.
+        association_ct_ids = set(
+            RelationshipAssociation.objects.values_list("source_type", flat=True).distinct()
+        ) | set(RelationshipAssociation.objects.values_list("destination_type", flat=True).distinct())
+        referenced_cts = ContentType.objects.filter(pk__in=list(association_ct_ids))
+        if all(ct.model_class() is not None for ct in referenced_cts):
+            self.add_conditional_prefetch("source")
+            self.add_conditional_prefetch("destination")
 
     class Meta(BaseTable.Meta):
         model = RelationshipAssociation
@@ -1943,6 +1988,13 @@ class AssociatedContactsTable(StatusTableMixin, RoleTableMixin, BaseTable):
     contact_or_team_phone = tables.TemplateColumn(PHONE, accessor="contact_or_team__phone", verbose_name="Phone")
     contact_or_team_email = tables.TemplateColumn(EMAIL, accessor="contact_or_team__email", verbose_name="E-Mail")
     actions = ButtonsColumn(model=ContactAssociation, buttons=("edit", "delete"))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Effectively every column reads the `contact_or_team` property, which dereferences the
+        # `contact` and `team` FKs per row; the accessor walk can't see into the property.
+        if isinstance(self.data.data, QuerySet):
+            self.replace_queryset(self.data.data.select_related("contact", "team"))
 
     class Meta(BaseTable.Meta):
         model = ContactAssociation
