@@ -258,3 +258,8 @@ KUBERNETES_JOB_POD_NAMESPACE = "default"
 
 # Host of the kubernetes pod created in the kubernetes cluster
 KUBERNETES_DEFAULT_SERVICE_ADDRESS = "https://kubernetes.default.svc"
+
+# Pin for the test environment only, regardless of the developer's NAUTOBOT_NATURAL_SLUG_ENABLED
+# environment variable — natural-slug rendering affects query-count assertions (e.g. the tree-CTE
+# counts in test_get_object_with_permission). The running application is unaffected by this file.
+NATURAL_SLUG_ENABLED = True

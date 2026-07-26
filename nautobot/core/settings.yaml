@@ -1579,6 +1579,18 @@ properties:
           over these default values.
     environment_variable: "NAUTOBOT_NAPALM_USERNAME"
     type: "string"
+  NATURAL_SLUG_ENABLED:
+    default: true
+    description: >-
+      Whether to compute and populate the `natural_slug` value in REST API responses and the UI.
+    details: >-
+      Deriving `natural_slug` walks each object's natural key and slugifies each component, which is a
+      measurable per-object cost on large REST API list responses, CSV exports, and webhook payloads.
+      Set this to `False` to skip that work entirely; the `natural_slug` REST API field remains present
+      for schema compatibility but is always empty, and the UI "Advanced" panel omits the value.
+    environment_variable: "NAUTOBOT_NATURAL_SLUG_ENABLED"
+    type: "boolean"
+    version_added: "3.2.0"
   NAUTOBOT_OTEL_EXTRA_INSTRUMENTORS:
     type: "array"
     items:

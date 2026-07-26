@@ -172,6 +172,9 @@ MAINTENANCE_MODE = is_truthy(os.getenv("NAUTOBOT_MAINTENANCE_MODE", "False"))
 if "NAUTOBOT_MAX_PAGE_SIZE" in os.environ and os.environ["NAUTOBOT_MAX_PAGE_SIZE"] != "":
     MAX_PAGE_SIZE = int(os.environ["NAUTOBOT_MAX_PAGE_SIZE"])
 
+# Natural keys - skip natural_slug derivation entirely when disabled (REST API field renders empty)
+NATURAL_SLUG_ENABLED = is_truthy(os.getenv("NAUTOBOT_NATURAL_SLUG_ENABLED", "True"))
+
 # Metrics
 METRICS_ENABLED = is_truthy(os.getenv("NAUTOBOT_METRICS_ENABLED", "False"))
 METRICS_AUTHENTICATED = is_truthy(os.getenv("NAUTOBOT_METRICS_AUTHENTICATED", "False"))

@@ -236,14 +236,16 @@ def _nested_serializer_prefetches(nested_serializer, related_model, source=None,
                 add(f"{source}__{sub_field.source}")
 
     # The nested object's natural key (e.g. for its natural_slug) walks its related models.
-    try:
-        natural_key_field_lookups = related_model.natural_key_field_lookups
-    except AttributeError:
-        natural_key_field_lookups = []
-    for lookup in natural_key_field_lookups:
-        if "__" in lookup:
-            prefix, _ = lookup.rsplit("__", 1)
-            add(f"{source}__{prefix}")
+    # When natural_slug is disabled, nothing in the serializer walks the natural key, so skip these.
+    if settings.NATURAL_SLUG_ENABLED:
+        try:
+            natural_key_field_lookups = related_model.natural_key_field_lookups
+        except AttributeError:
+            natural_key_field_lookups = []
+        for lookup in natural_key_field_lookups:
+            if "__" in lookup:
+                prefix, _ = lookup.rsplit("__", 1)
+                add(f"{source}__{prefix}")
 
     # Traversal prefetches declared by the model itself (cable terminations / path endpoints).
     for declared in ("connection_prefetch_related_fields", "cable_peer_prefetch_related_fields"):
@@ -397,11 +399,14 @@ class ModelViewSetMixin:
             if isinstance(private_field, GenericForeignKey) and private_field.name not in prefetch_fields:
                 prefetch_fields.append(private_field.name)
 
-        # Prefetch deeper relations needed for this object's natural key (e.g. for `natural_slug`) to avoid N+1 queries.
-        try:
-            natural_key_field_lookups = model.natural_key_field_lookups
-        except AttributeError:
-            natural_key_field_lookups = []
+        # Prefetch deeper relations needed for this object's natural key (e.g. for `natural_slug`) to avoid N+1
+        # queries. When natural_slug is disabled, nothing in the serializer walks the natural key, so skip these.
+        natural_key_field_lookups = []
+        if settings.NATURAL_SLUG_ENABLED:
+            try:
+                natural_key_field_lookups = model.natural_key_field_lookups
+            except AttributeError:
+                pass
         natural_key_prefetch_fields = set()
         for lookup in natural_key_field_lookups:
             if "__" in lookup:

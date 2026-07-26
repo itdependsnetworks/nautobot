@@ -231,7 +231,13 @@ class BaseModel(models.Model):
         This value is not guaranteed to be
         unique although a best effort is made by appending a fragment of the primary key to the
         natural slug value.
+
+        Returns an empty string when the `NATURAL_SLUG_ENABLED` setting is False — deriving the value
+        walks the natural key and slugifies each component, a measurable per-object cost on large REST
+        API responses and exports that some deployments prefer to opt out of.
         """
+        if not settings.NATURAL_SLUG_ENABLED:
+            return ""
         return construct_natural_slug(self.natural_key(), pk=self.pk)
 
     @classmethod

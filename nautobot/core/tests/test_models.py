@@ -100,6 +100,14 @@ class NaturalKeyTestCase(TestCase):
         dt = DeviceType.objects.first()
         self.assertEqual(dt.natural_slug, construct_natural_slug(dt.natural_key(), pk=dt.pk))
 
+    @override_settings(NATURAL_SLUG_ENABLED=False)
+    def test_natural_slug_disabled(self):
+        """With NATURAL_SLUG_ENABLED=False, natural_slug is an empty string and the natural key is never walked."""
+        mfr = Manufacturer.objects.first()
+        with patch.object(Manufacturer, "natural_key", autospec=True) as mock_natural_key:
+            self.assertEqual(mfr.natural_slug, "")
+        mock_natural_key.assert_not_called()
+
     def test_natural_key_field_lookups(self):
         """Test the natural_key_field_lookups default implementation with some representative models."""
         self.assertEqual(Manufacturer.natural_key_field_lookups, ("name",))

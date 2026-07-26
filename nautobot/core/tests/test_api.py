@@ -543,6 +543,21 @@ class BaseModelSerializerTest(TestCase):
         self.assertEqual(value, manufacturer.natural_slug)
         self.assertEqual(mock_natural_key.call_count, 1)
 
+    @override_settings(NATURAL_SLUG_ENABLED=False)
+    def test_get_natural_slug_disabled(self):
+        """With NATURAL_SLUG_ENABLED=False the field renders empty and the natural key is never walked."""
+        manufacturer = dcim_models.Manufacturer.objects.first()
+        serializer = dcim_serializers.ManufacturerSerializer()
+        with patch.object(dcim_models.Manufacturer, "natural_key", autospec=True) as mock_natural_key:
+            self.assertEqual(serializer.get_natural_slug(manufacturer), "")
+        mock_natural_key.assert_not_called()
+        # The field itself must remain in the serialized output for schema compatibility:
+        data = dcim_serializers.ManufacturerSerializer(
+            manufacturer, context={"request": None, "depth": 0}
+        ).data
+        self.assertIn("natural_slug", data)
+        self.assertEqual(data["natural_slug"], "")
+
     def test_get_natural_slug_without_natural_slug_property(self):
         """Models lacking a `natural_slug` property (e.g. ContentType) fall back to direct construction."""
         content_type = ContentType.objects.get_for_model(dcim_models.Manufacturer)

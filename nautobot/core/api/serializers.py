@@ -2,6 +2,7 @@ import contextlib
 import logging
 import uuid
 
+from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRel
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import (
@@ -373,6 +374,9 @@ class BaseModelSerializer(OptInFieldsMixin, serializers.HyperlinkedModelSerializ
         }
     )
     def get_natural_slug(self, instance):
+        if not settings.NATURAL_SLUG_ENABLED:
+            # The field remains present for schema compatibility; only the (expensive) value derivation is skipped.
+            return ""
         try:
             # Check the class, not the instance, so that the property is not invoked twice; as a `getattr` default,
             # the construct_natural_slug() fallback would be eagerly evaluated even when the property exists.
