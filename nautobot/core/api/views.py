@@ -252,7 +252,11 @@ def _nested_serializer_prefetches(nested_serializer, related_model, source=None,
         declared_fn = getattr(related_model, declared, None)
         if declared_fn is None:
             continue
-        for entry in declared_fn():
+        try:
+            declared_entries = declared_fn(for_nested_serialization=True)
+        except TypeError:  # an app model implementing the convention without the newer kwarg
+            declared_entries = declared_fn()
+        for entry in declared_entries:
             if isinstance(entry, str):
                 add(f"{source}__{entry}")
             else:
@@ -416,6 +420,30 @@ class ModelViewSetMixin:
                     natural_key_prefetch_fields.add(prefix)
         # Add to prefetch_fields rather than select_fields to prevent unnecessary query expansion.
         prefetch_fields.extend(sorted(natural_key_prefetch_fields))
+
+        # At depth >= 1, cable/path method fields render each peer as a full nested representation, which
+        # needs deeper prefetches than the lean (table-oriented) flavor that viewset querysets declare
+        # statically. Swap the model-declared entries for the enriched flavor.
+        if self.get_serializer_context().get("depth", 0) >= 1:
+            enriched = []
+            for declared in ("connection_prefetch_related_fields", "cable_peer_prefetch_related_fields"):
+                declared_fn = getattr(model, declared, None)
+                if declared_fn is None:
+                    continue
+                try:
+                    enriched.extend(declared_fn(for_nested_serialization=True))
+                except TypeError:
+                    enriched.extend(declared_fn())
+            if enriched:
+
+                def _through(entry):
+                    return getattr(entry, "prefetch_through", entry)
+
+                enriched_throughs = {_through(entry) for entry in enriched}
+                kept = [
+                    entry for entry in queryset._prefetch_related_lookups if _through(entry) not in enriched_throughs
+                ]
+                queryset = queryset.prefetch_related(None).prefetch_related(*kept, *enriched)
 
         if select_fields:
             queryset = maybe_select_related(queryset, select_fields)

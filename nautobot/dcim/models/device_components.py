@@ -41,6 +41,7 @@ from nautobot.dcim.constants import (
     REARPORT_POSITIONS_MAX,
     REARPORT_POSITIONS_MIN,
     TERMINATION_CABLE_COLUMN_FK_FIELDS,
+    TERMINATION_FK_FIELDS,
     VIRTUAL_IFACE_TYPES,
     WIRELESS_IFACE_TYPES,
 )
@@ -318,6 +319,34 @@ class CableTerminationQuerySet(RestrictedQuerySet):
 # Manager class wired to the translation queryset; concrete CableTermination subclasses set this
 # as their default `objects` manager.
 CableTerminationManager = BaseManager.from_queryset(CableTerminationQuerySet)
+
+
+def _natural_key_prefixes(model, prefix=None):
+    """The relation paths behind `model`'s natural key (optionally prefixed) for use with prefetch_related()."""
+    try:
+        natural_key_field_lookups = model.natural_key_field_lookups
+    except AttributeError:
+        return []
+    prefixes = []
+    for lookup in natural_key_field_lookups:
+        if "__" in lookup:
+            head, _ = lookup.rsplit("__", 1)
+            prefixes.append(f"{prefix}__{head}" if prefix else head)
+    return prefixes
+
+
+def _termination_natural_key_prefetches():
+    """
+    Relation paths so that each mapped termination's natural key resolves query-free when the REST API
+    nested-serializes cable peers (`?depth>=1`) — e.g. `interface__device__location__parent` chains.
+    """
+    from nautobot.dcim.models.cables import CableToCableTermination
+
+    prefetches = []
+    for termination_fk in TERMINATION_FK_FIELDS:
+        termination_model = CableToCableTermination._meta.get_field(termination_fk).related_model
+        prefetches.extend(_natural_key_prefixes(termination_model, prefix=termination_fk))
+    return prefetches
 
 
 class CableTermination(models.Model):
@@ -623,26 +652,30 @@ class CableTermination(models.Model):
         return []
 
     @classmethod
-    def cable_peer_prefetch_related_fields(cls):
+    def cable_peer_prefetch_related_fields(cls, for_nested_serialization=False):
         """Return the `prefetch_related` arguments (strings and/or `Prefetch` objects) needed to render
         the `cable_peer` column query-free.
 
         Applied conditionally by `CableTerminationTable` only when the `cable_peer` column is visible
         (see `BaseTable.add_conditional_prefetch`), so a table that hides it pays nothing.
+
+        With `for_nested_serialization=True` (REST API at `?depth>=1`, where each peer is rendered as a
+        full nested representation rather than a table cell), the inner queryset additionally prefetches
+        every termination type's natural-key chains so the peers' `natural_slug` resolves query-free.
         """
         from nautobot.dcim.models.cables import CableToCableTermination
 
+        inner_queryset = CableToCableTermination.objects.select_related(*TERMINATION_CABLE_COLUMN_FK_FIELDS)
+        if for_nested_serialization:
+            inner_queryset = inner_queryset.prefetch_related(*_termination_natural_key_prefetches())
         return [
-            Prefetch(
-                "cable_termination__cable__terminations",
-                queryset=CableToCableTermination.objects.select_related(*TERMINATION_CABLE_COLUMN_FK_FIELDS),
-            ),
+            Prefetch("cable_termination__cable__terminations", queryset=inner_queryset),
             # The breakout child-interface annotation resolves the trunk peer's child interfaces.
             "cable_termination__cable__terminations__interface__child_interfaces",
         ]
 
     @classmethod
-    def connection_prefetch_related_fields(cls):
+    def connection_prefetch_related_fields(cls, for_nested_serialization=False):
         """Return the `prefetch_related` arguments needed to render the `connection` column query-free.
 
         Empty for non-`PathEndpoint` terminations (which have no `connection` column). Applied
@@ -650,10 +683,10 @@ class CableTermination(models.Model):
         """
         if not issubclass(cls, PathEndpoint):
             return []
-        return [cls._connected_endpoint_destination_prefetch("cable_paths__destination")]
+        return [cls._connected_endpoint_destination_prefetch("cable_paths__destination", for_nested_serialization)]
 
     @classmethod
-    def _connected_endpoint_destination_prefetch(cls, lookup):
+    def _connected_endpoint_destination_prefetch(cls, lookup, for_nested_serialization=False):
         """A `GenericPrefetch` of `lookup` (a `..._cable_paths__destination` path) tuned for the
         `connection` column so rendering each connected endpoint and its `parent` is query-free.
 
@@ -667,18 +700,31 @@ class CableTermination(models.Model):
         from nautobot.circuits.models import CircuitTermination
         from nautobot.dcim.models.cables import CableToCableTermination
 
+        interface_queryset = Interface.objects.select_related(
+            "cable_termination__cable__cable_type", "device"
+        ).prefetch_related(
+            Prefetch(
+                "cable_termination__cable__terminations",
+                queryset=CableToCableTermination.objects.select_related(*TERMINATION_CABLE_COLUMN_FK_FIELDS),
+            ),
+            "cable_paths__destination",
+            "child_interfaces",
+        )
+        circuit_termination_queryset = CircuitTermination.objects.select_related(
+            "circuit", "location", "provider_network", "cloud_network"
+        )
+        if for_nested_serialization:
+            # Each destination is rendered as a full nested representation at ?depth>=1; prefetch its
+            # natural-key chains so its natural_slug resolves query-free.
+            interface_queryset = interface_queryset.prefetch_related(*_natural_key_prefixes(Interface))
+            circuit_termination_queryset = circuit_termination_queryset.prefetch_related(
+                *_natural_key_prefixes(CircuitTermination)
+            )
         return GenericPrefetch(
             lookup,
             [
-                Interface.objects.select_related("cable_termination__cable__cable_type", "device").prefetch_related(
-                    Prefetch(
-                        "cable_termination__cable__terminations",
-                        queryset=CableToCableTermination.objects.select_related(*TERMINATION_CABLE_COLUMN_FK_FIELDS),
-                    ),
-                    "cable_paths__destination",
-                    "child_interfaces",
-                ),
-                CircuitTermination.objects.select_related("circuit", "location", "provider_network", "cloud_network"),
+                interface_queryset,
+                circuit_termination_queryset,
             ],
         )
 
