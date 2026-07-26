@@ -350,3 +350,17 @@ class ComputedFieldColumnRenderTestCase(TestCase):
         column = ComputedFieldColumn(self.markdown_field)
         record = Location(name="Bold")
         self.assertEqual(column.render(record=record), helpers.render_markdown("**Bold**"))
+
+
+class ExplicitColumnsKwargTestCase(TestCase):
+    """The `columns` kwarg forces exact column visibility, overriding stored configuration."""
+
+    def test_explicit_columns_control_visibility(self):
+        from nautobot.dcim.models import Location
+        from nautobot.dcim.tables import LocationTable
+
+        table = LocationTable(Location.objects.all(), columns=["name"])
+        visible = {column.name for column in table.columns if column.visible}
+        self.assertIn("name", visible)
+        self.assertNotIn("status", visible)
+        self.assertNotIn("tenant", visible)
