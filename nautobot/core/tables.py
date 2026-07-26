@@ -273,6 +273,14 @@ class BaseTable(django_tables2.Table):
                         )
                     continue
 
+                if isinstance(column.column, RelationshipColumn):
+                    # RelationshipColumn reads the `associations` property, which queries both generic
+                    # relations per row; prefetch them once, shared by all visible relationship columns.
+                    for lookup in ("source_for_associations", "destination_for_associations"):
+                        if lookup not in prefetch_fields:
+                            prefetch_fields.append(lookup)
+                    continue
+
                 column_model = model
                 accessor = column.accessor
                 select_path = []

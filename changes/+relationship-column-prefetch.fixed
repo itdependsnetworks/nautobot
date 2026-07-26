@@ -1,0 +1,1 @@
+Fixed N+1 queries when rendering UI tables with relationship columns visible — the `associations` accessor queried both relationship-association generic relations for every row; `BaseTable` now prefetches them once when any relationship column is visible. Namespace IP Addresses tab: 240 → 42 queries; Cluster detail: 122 → 60.
