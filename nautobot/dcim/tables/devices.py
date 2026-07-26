@@ -183,6 +183,9 @@ class DeviceTable(StatusTableMixin, RoleTableMixin, BaseTable):
         # optimization can't see it; prefetch both when the column is visible.
         self.add_conditional_prefetch("primary_ip", db_column="primary_ip4")
         self.add_conditional_prefetch("primary_ip", db_column="primary_ip6")
+        # The PARENT_DEVICE template reads `parent_bay.device` per row; `parent_device` isn't a
+        # field, so the accessor walk derives nothing.
+        self.add_conditional_prefetch("parent_device", db_column="parent_bay__device")
 
     pk = ToggleColumn()
     name = tables.TemplateColumn(order_by=("_name",), template_code=DEVICE_LINK)
@@ -1084,6 +1087,14 @@ class ModuleBayTable(BaseTable):
     tags = TagColumn(url_name="dcim:devicebay_list")
     module_family = tables.Column(linkify=True, verbose_name="Family")
     actions = ButtonsColumn(model=ModuleBay, prepend_template=MODULEBAY_BUTTONS)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Both the `name` column's tree link (MODULEBAY_TREE_LINK) and the always-rendered
+        # `actions` buttons (MODULEBAY_BUTTONS) read `installed_module` for every row, regardless
+        # of column configuration; join it in unconditionally.
+        if isinstance(self.data.data, QuerySet):
+            self.replace_queryset(self.data.data.select_related("installed_module"))
 
     class Meta(BaseTable.Meta):
         model = ModuleBay

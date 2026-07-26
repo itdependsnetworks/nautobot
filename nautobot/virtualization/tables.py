@@ -154,6 +154,14 @@ class VirtualMachineDetailTable(VirtualMachineTable):
     primary_ip = tables.Column(linkify=True, verbose_name="IP Address", order_by=("primary_ip6", "primary_ip4"))
     tags = TagColumn(url_name="virtualization:virtualmachine_list")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # `primary_ip` is a property choosing between the primary_ip4/primary_ip6 FKs, so the
+        # accessor-based optimization can't see it; prefetch both when the column is visible.
+        # (Same pattern as DeviceTable.)
+        self.add_conditional_prefetch("primary_ip", db_column="primary_ip4")
+        self.add_conditional_prefetch("primary_ip", db_column="primary_ip6")
+
     class Meta(BaseTable.Meta):
         model = VirtualMachine
         fields = (
