@@ -277,8 +277,13 @@ class BaseTable(django_tables2.Table):
                         # Follow ForeignKeys to the related model via select_related
                         select_path.append(field_name)
                         column_model = field.remote_field.model
-                    elif isinstance(field, (RelatedField, ManyToOneRel)) and not select_path:
-                        # Follow O2M and M2M relations to the related model via prefetch_related
+                    elif isinstance(field, (RelatedField, ManyToOneRel)):
+                        # Follow O2M and M2M relations to the related model via prefetch_related.
+                        # If ForeignKey segments were already walked (e.g. `interface__ip_addresses`),
+                        # they become the prefix of the prefetch path; they remain in select_fields
+                        # as well, and the prefetch traversal reuses the joined-in objects.
+                        if select_path and not prefetch_path:
+                            prefetch_path = [*select_path]
                         prefetch_path.append(field_name)
                         column_model = field.remote_field.model
                     elif isinstance(field, GenericForeignKey) and not select_path:
@@ -292,7 +297,7 @@ class BaseTable(django_tables2.Table):
                         break
                 if select_path:
                     select_fields.append("__".join(select_path))
-                elif prefetch_path:
+                if prefetch_path:
                     prefetch_fields.append("__".join(prefetch_path))
 
             if select_fields:

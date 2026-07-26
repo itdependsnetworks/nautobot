@@ -1,0 +1,1 @@
+Fixed a per-row query in list-view table columns whose accessor crosses a ForeignKey and then a to-many relation (for example the Interface Redundancy Group Association table's `interface__ip_addresses` column); the automatic table queryset optimization now prefetches such mixed paths instead of stopping at the ForeignKey.
