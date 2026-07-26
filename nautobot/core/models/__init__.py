@@ -6,7 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from django.urls import NoReverseMatch, reverse
+from django.urls import get_urlconf, NoReverseMatch, reverse
 from django.utils.encoding import is_protected_type
 from django.utils.functional import classproperty
 
@@ -34,6 +34,10 @@ __all__ = (
     "deconstruct_composite_key",
     "invalidate_natural_key_field_lookups_cache",
 )
+
+# Route shapes for BaseModel.get_absolute_url(), keyed by (concrete model class, api, urlconf):
+# (prefix, suffix) around the pk, or None when the model has no resolvable detail route.
+_absolute_url_shape_memo = {}
 
 # Per-model-class cache of derived `natural_key_field_lookups` tuples, keyed by the (concrete) model class itself.
 # Populated lazily by `BaseModel.natural_key_field_lookups`; cleared wholesale by
@@ -101,23 +105,32 @@ class BaseModel(models.Model):
     def get_absolute_url(self, api=False):
         """
         Return the canonical URL for this object in either the UI or the REST API.
+
+        The route shape is memoized per model class (resolved once with a sentinel pk, then reused as a
+        string template) since `reverse()` is expensive to repeat for every row of a list rendering.
         """
-
-        # Iterate the pk-like fields and try to get a URL, or return None.
-        fields = ["pk"]
-        actions = ["retrieve", "detail", ""]  # TODO: Eventually all retrieve
-
-        for field in fields:
-            if not hasattr(self, field):
-                continue
-
-            for action in actions:
+        # The urlconf is part of the key so that (test-time) ROOT_URLCONF overrides resolve correctly.
+        memo_key = (self._meta.concrete_model, api, get_urlconf() or settings.ROOT_URLCONF)
+        shape = _absolute_url_shape_memo.get(memo_key, "")
+        if shape == "":
+            shape = None
+            # Resolve with a sentinel pk that cannot occur in the static parts of the URL, then split around
+            # it. BaseModel pks are always UUIDs, so a route that reverses the sentinel reverses any real pk.
+            sentinel = uuid.uuid4()
+            for action in ("retrieve", "detail", ""):  # TODO: Eventually all retrieve
                 route = get_route_for_model(self, action, api=api)
-
                 try:
-                    return reverse(route, kwargs={field: getattr(self, field)})
+                    url = reverse(route, kwargs={"pk": sentinel})
                 except NoReverseMatch:
                     continue
+                prefix, found, suffix = url.partition(str(sentinel))
+                if found:
+                    shape = (prefix, suffix)
+                break
+            _absolute_url_shape_memo[memo_key] = shape
+        if shape is not None:
+            prefix, suffix = shape
+            return f"{prefix}{self.pk}{suffix}"
 
         raise AttributeError(f"Cannot find a URL for {self} ({self._meta.app_label}.{self._meta.model_name})")
 

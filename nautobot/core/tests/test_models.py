@@ -157,6 +157,40 @@ class NaturalKeyTestCase(TestCase):
             Manufacturer(mock__content_type.call_count, 2)
 
 
+class GetAbsoluteURLMemoTestCase(TestCase):
+    """Tests for the route-shape memoization in BaseModel.get_absolute_url()."""
+
+    @staticmethod
+    def _unmemoized_get_absolute_url(instance, api):
+        """Replica of the pre-memoization implementation: per-call reverse(), AttributeError when no route."""
+        from django.urls import NoReverseMatch, reverse as django_reverse
+
+        from nautobot.core.utils.lookup import get_route_for_model
+
+        for action in ("retrieve", "detail", ""):
+            route = get_route_for_model(instance, action, api=api)
+            try:
+                return django_reverse(route, kwargs={"pk": instance.pk})
+            except NoReverseMatch:
+                continue
+        raise AttributeError
+
+    def test_memoized_urls_match_unmemoized_behavior(self):
+        """Memoized URLs (and no-route AttributeErrors) must be identical to per-object reverse() behavior."""
+        instances = [Manufacturer.objects.first(), Location.objects.first(), Tag.objects.first()]
+        for instance in instances:
+            for api in (False, True):
+                for attempt in ("cold", "memoized"):
+                    with self.subTest(model=type(instance).__name__, api=api, attempt=attempt):
+                        try:
+                            expected = self._unmemoized_get_absolute_url(instance, api)
+                        except AttributeError:
+                            with self.assertRaises(AttributeError):
+                                instance.get_absolute_url(api=api)
+                        else:
+                            self.assertEqual(instance.get_absolute_url(api=api), expected)
+
+
 class NaturalKeyFieldLookupsCachingTestCase(TestCase):
     """Tests for the per-model-class caching and invalidation of `natural_key_field_lookups`."""
 
