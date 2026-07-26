@@ -717,6 +717,12 @@ class DeviceModulePowerOutletTable(PowerOutletTable):
 
 
 class BaseInterfaceTable(StatusTableMixin, RoleTableMixin, BaseTable):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The INTERFACE_IPADDRESSES template renders each IP's parent prefix's namespace; the
+        # automatic optimization only prefetches `ip_addresses` itself.
+        self.add_conditional_prefetch("ip_addresses", db_column="ip_addresses__parent__namespace")
+
     enabled = BooleanColumn()
     ip_addresses = tables.TemplateColumn(
         template_code=INTERFACE_IPADDRESSES,
@@ -1387,6 +1393,14 @@ class InterfaceRedundancyGroupAssociationTable(BaseTable):
         verbose_name="IP Addresses",
     )
     actions = ButtonsColumn(model=InterfaceRedundancyGroupAssociation, buttons=["edit", "delete"])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The column template renders each IP's parent prefix's namespace; the automatic
+        # optimization only prefetches `interface__ip_addresses` itself.
+        self.add_conditional_prefetch(
+            "interface__ip_addresses", db_column="interface__ip_addresses__parent__namespace"
+        )
 
     class Meta(BaseTable.Meta):
         """Meta attributes."""

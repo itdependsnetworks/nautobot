@@ -1,0 +1,1 @@
+Fixed per-row queries in the `IP Addresses` column of Interface, VM Interface, and Interface Redundancy Group Association tables, which renders each IP address's parent prefix's namespace; the parent prefix and namespace are now prefetched whenever the column is visible.
