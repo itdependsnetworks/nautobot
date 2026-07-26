@@ -32,7 +32,8 @@ from nautobot.core.templatetags.helpers import humanize_speed
 from nautobot.core.utils.lookup import get_route_for_model
 from nautobot.dcim import models as dcim_models
 from nautobot.dcim.api import serializers as dcim_serializers
-from nautobot.extras import choices, models as extras_models
+from nautobot.extras import choices, filters as extras_filters, models as extras_models
+from nautobot.extras.api import serializers as extras_serializers, views as extras_api_views
 from nautobot.ipam import filters as ipam_filters, models as ipam_models
 from nautobot.ipam.api import serializers as ipam_serializers, views as ipam_api_views
 from nautobot.tenancy import models as tenancy_models
@@ -558,6 +559,11 @@ class ModelViewSetMixinTest(testing.APITestCase):
         serializer_class = ipam_serializers.IPAddressSerializer
         filterset_class = ipam_filters.IPAddressFilterSet
 
+    class SimpleNoteViewSet(ModelViewSet):
+        queryset = extras_models.Note.objects.all()  # no explicit optimizations
+        serializer_class = extras_serializers.NoteSerializer
+        filterset_class = extras_filters.NoteFilterSet
+
     @override_settings(ALLOWED_HOSTS=["*"])  # serializing hyperlinked fields builds absolute URLs
     def test_get_queryset_optimizations(self):
         """Test that the queryset is appropriately optimized based on request parameters."""
@@ -681,6 +687,55 @@ class ModelViewSetMixinTest(testing.APITestCase):
             list(instance.vm_interfaces.all())
         with self.assertNumQueries(1):
             list(instance.tags.all())
+
+    @override_settings(ALLOWED_HOSTS=["*"])
+    def test_get_queryset_generic_foreign_key_prefetch(self):
+        """GenericForeignKey model fields are auto-prefetched.
+
+        A GFK can never be `select_related`, and the serializer reads it per row whether it appears as a
+        declared method field (e.g. Note.assigned_object) or only through `display`/`__str__`
+        (e.g. RelationshipAssociation.source/destination), so every GFK on the model gets prefetched.
+        """
+        self.user.is_superuser = True
+        self.user.save()
+
+        # Notes across two different content types, so the prefetch has to group per model.
+        location = dcim_models.Location.objects.first()
+        manufacturer = dcim_models.Manufacturer.objects.first()
+        for assigned in (location, manufacturer):
+            extras_models.Note.objects.create(
+                note=f"GFK prefetch test for {assigned}", user=self.user, assigned_object=assigned
+            )
+
+        view = self.SimpleNoteViewSet()
+        view.action_map = {"get": "list"}
+        request = APIRequestFactory().get(reverse("extras-api:note-list"), headers=self.header)
+        force_authenticate(request, user=self.user)
+        request = view.initialize_request(request)
+        view.setup(request)
+        view.initial(request)
+
+        queryset = view.get_queryset()
+        self.assertIn("assigned_object", queryset._prefetch_related_lookups)
+        instances = list(queryset)
+        self.assertGreaterEqual(len(instances), 2)
+        # The assigned objects were fetched by the prefetch (grouped per content type), not per row.
+        with self.assertNumQueries(0):
+            assigned_objects = [instance.assigned_object for instance in instances]
+        self.assertIn(location, assigned_objects)
+        self.assertIn(manufacturer, assigned_objects)
+
+        # GFKs read only by display/__str__ (never declared as serializer fields) are prefetched too.
+        view = extras_api_views.RelationshipAssociationViewSet()
+        view.action_map = {"get": "list"}
+        request = APIRequestFactory().get(reverse("extras-api:relationshipassociation-list"), headers=self.header)
+        force_authenticate(request, user=self.user)
+        request = view.initialize_request(request)
+        view.setup(request)
+        view.initial(request)
+        lookups = view.get_queryset()._prefetch_related_lookups
+        self.assertIn("source", lookups)
+        self.assertIn("destination", lookups)
 
 
 class WritableNestedSerializerTest(testing.APITestCase):

@@ -7,6 +7,7 @@ import platform
 from django import __version__ as DJANGO_VERSION, forms
 from django.apps import apps
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
@@ -387,6 +388,14 @@ class ModelViewSetMixin:
                     continue
                 if isinstance(model_field, ForeignKey) and field_instance.source not in already_joined:
                     prefetch_fields.append(field_instance.source)
+
+        # GenericForeignKeys can never be JOINed, and the serializer reads them per row whether they appear
+        # as a declared field (SerializerMethodField named after the model field, e.g. Note.assigned_object)
+        # or only through `display`/`__str__` (e.g. ContactAssociation, RelationshipAssociation). Prefetch
+        # them all — one grouped query per target content type instead of one query per row.
+        for private_field in model._meta.private_fields:
+            if isinstance(private_field, GenericForeignKey) and private_field.name not in prefetch_fields:
+                prefetch_fields.append(private_field.name)
 
         # Prefetch deeper relations needed for this object's natural key (e.g. for `natural_slug`) to avoid N+1 queries.
         try:
