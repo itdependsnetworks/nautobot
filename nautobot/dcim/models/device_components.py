@@ -696,9 +696,12 @@ class CableTermination(models.Model):
         `child_interfaces` — so it stays query-free even when the breakout cable is several hops away
         behind front/rear pass-through ports. CircuitTermination destinations join their parent
         `circuit` and the location / provider-network / cloud-network their `__str__` renders.
+        Console/power destinations join the `parent` the connection column renders (their `device`,
+        or `power_panel` for a PowerFeed).
         """
         from nautobot.circuits.models import CircuitTermination
         from nautobot.dcim.models.cables import CableToCableTermination
+        from nautobot.dcim.models.power import PowerFeed
 
         interface_queryset = Interface.objects.select_related(
             "cable_termination__cable__cable_type", "device"
@@ -720,12 +723,25 @@ class CableTermination(models.Model):
             circuit_termination_queryset = circuit_termination_queryset.prefetch_related(
                 *_natural_key_prefixes(CircuitTermination)
             )
+        # Provide querysets only for the far-end types this endpoint type can actually connect to
+        # (any other type falls back to the default manager). Each provided queryset costs a
+        # ContentType lookup at prefetch time, so keep the list tight.
+        interface_or_circuit = [interface_queryset, circuit_termination_queryset]
+        destination_querysets_by_model_name = {
+            "consoleport": [ConsoleServerPort.objects.select_related("device")],
+            "consoleserverport": [ConsolePort.objects.select_related("device")],
+            "powerport": [
+                PowerOutlet.objects.select_related("device"),
+                PowerFeed.objects.select_related("power_panel"),
+            ],
+            "poweroutlet": [PowerPort.objects.select_related("device")],
+            "powerfeed": [PowerPort.objects.select_related("device")],
+            "interface": interface_or_circuit,
+            "circuittermination": interface_or_circuit,
+        }
         return GenericPrefetch(
             lookup,
-            [
-                interface_queryset,
-                circuit_termination_queryset,
-            ],
+            destination_querysets_by_model_name.get(cls._meta.model_name, interface_or_circuit),
         )
 
     @classmethod

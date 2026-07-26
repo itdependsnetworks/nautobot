@@ -1508,6 +1508,13 @@ class CablePath(BaseModel):
         Interface Connections list view and the REST API `InterfaceConnectionViewSet` so they stay
         consistent.
         """
+        from django.contrib.contenttypes.prefetch import GenericPrefetch
+
+        from nautobot.dcim.models.device_components import Interface
+
+        # Both ends are guaranteed to be Interfaces by the filter below; the connections table
+        # renders each endpoint's parent device, so join it into the endpoint prefetch.
+        interface_queryset = Interface.objects.select_related("device")
         return (
             cls.objects.filter(
                 origin_type__app_label="dcim",
@@ -1520,7 +1527,10 @@ class CablePath(BaseModel):
                 | (models.Q(destination_fans_out=False) & models.Q(origin_id__lt=models.F("destination_id")))
             )
             .order_by("origin_type", "origin_id", "peer_connector")
-            .prefetch_related("origin", "destination")
+            .prefetch_related(
+                GenericPrefetch("origin", [interface_queryset]),
+                GenericPrefetch("destination", [interface_queryset]),
+            )
         )
 
     @classmethod

@@ -1,8 +1,10 @@
+from django.contrib.contenttypes.prefetch import GenericPrefetch
+from django.db.models import QuerySet
 import django_tables2 as tables
 from django_tables2.utils import Accessor
 
 from nautobot.core.tables import BaseTable, BooleanColumn
-from nautobot.dcim.models import CablePath, ConsolePort, PowerPort
+from nautobot.dcim.models import CablePath, ConsolePort, Interface, PowerPort
 
 from .cables import CableTable, CableTypeTable
 from .devices import (
@@ -156,6 +158,12 @@ class ConsoleConnectionTable(BaseTable):
     name = tables.Column(linkify=True, verbose_name="Console Port")
     reachable = BooleanColumn(accessor=Accessor("cable_paths__is_active"), verbose_name="Reachable")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The `device` column reads the `parent` property (-> `self.device`); the accessor walk
+        # can't see into the property.
+        self.add_conditional_prefetch("device", db_column="device")
+
     class Meta(BaseTable.Meta):
         model = ConsolePort
         fields = (
@@ -184,6 +192,12 @@ class PowerConnectionTable(BaseTable):
     name = tables.Column(linkify=True, verbose_name="Power Port")
     reachable = BooleanColumn(accessor=Accessor("cable_paths__is_active"), verbose_name="Reachable")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The `device` column reads the `parent` property (-> `self.device`); the accessor walk
+        # can't see into the property.
+        self.add_conditional_prefetch("device", db_column="device")
+
     class Meta(BaseTable.Meta):
         model = PowerPort
         fields = ("device", "name", "pdu", "outlet", "reachable")
@@ -210,6 +224,32 @@ class InterfaceConnectionTable(BaseTable):
         accessor=Accessor("destination"), orderable=False, linkify=True, verbose_name="Interface B"
     )
     reachable = BooleanColumn(accessor=Accessor("is_active"), verbose_name="Reachable")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The device/interface columns render each endpoint and its parent device through the
+        # `origin`/`destination` GenericForeignKeys. The canonical view queryset
+        # (`CablePath.interface_connections()`) already applies a tuned `GenericPrefetch`; when the
+        # table is built over a plain CablePath queryset, apply the same optimization here,
+        # replacing the accessor-derived plain GFK prefetch (which can't join the parent device).
+        if isinstance(self.data.data, QuerySet):
+            queryset = self.data.data
+            has_custom_gfk_prefetch = any(
+                not isinstance(lookup, str) and lookup.prefetch_to in ("origin", "destination")
+                for lookup in queryset._prefetch_related_lookups
+            )
+            if not has_custom_gfk_prefetch:
+                other_lookups = [
+                    lookup for lookup in queryset._prefetch_related_lookups if lookup not in ("origin", "destination")
+                ]
+                interface_queryset = Interface.objects.select_related("device")
+                self.replace_queryset(
+                    queryset.prefetch_related(None).prefetch_related(
+                        *other_lookups,
+                        GenericPrefetch("origin", [interface_queryset]),
+                        GenericPrefetch("destination", [interface_queryset]),
+                    )
+                )
 
     class Meta(BaseTable.Meta):
         model = CablePath
