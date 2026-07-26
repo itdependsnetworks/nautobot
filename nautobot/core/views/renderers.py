@@ -117,7 +117,8 @@ class NautobotHTMLRenderer(renderers.BrowsableAPIRenderer):
                 content_type = kwargs.get("content_type")
                 objectchanges = (
                     ObjectChange.objects.restrict(request.user, "view")
-                    .prefetch_related("user", "changed_object_type")
+                    # changed_object is a GenericForeignKey rendered per row by the table
+                    .prefetch_related("user", "changed_object_type", "changed_object")
                     .filter(
                         Q(changed_object_type=content_type, changed_object_id=obj.pk)
                         | Q(related_object_type=content_type, related_object_id=obj.pk)

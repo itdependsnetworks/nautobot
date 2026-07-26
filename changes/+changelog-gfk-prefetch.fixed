@@ -1,0 +1,1 @@
+Fixed an N+1 query on object changelog tabs and views — each ObjectChange row fetched its changed object (a generic foreign key) individually when rendering the table; it is now prefetched in bulk per content type. Device changelog tab: 98 → 52 queries.
