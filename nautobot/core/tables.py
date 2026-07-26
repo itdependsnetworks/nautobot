@@ -819,9 +819,14 @@ class ContentTypesColumn(django_tables2.ManyToManyColumn):
         self.truncate_words = truncate_words
 
     def filter(self, qs):
-        """Overload filter to optionally sort items."""
+        """Overload filter to optionally sort items.
+
+        Sorting is done in Python rather than via `qs.order_by()`, because `order_by()` clones the
+        queryset and discards the prefetch cache that `BaseTable` sets up for the `content_types`
+        relation, reintroducing one query per rendered row.
+        """
         if self.sort_items:
-            qs = qs.order_by("app_label", "model")
+            return sorted(qs.all(), key=lambda content_type: (content_type.app_label, content_type.model))
         return qs.all()
 
     def render(self, value):

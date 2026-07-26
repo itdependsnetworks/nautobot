@@ -1,0 +1,1 @@
+Fixed a per-row query when rendering the `content_types` column of list views such as Statuses, Roles, Tags, Custom Fields, and Location Types, by sorting the (already prefetched) content types in Python instead of via `order_by()`, which discarded the prefetch cache.
