@@ -1,0 +1,1 @@
+Fixed a per-row query in list-view count columns (`LinkedCountColumn`) when the single related record displayed in place of a count has a `display` that reads further relations (declared via `display_prefetch_related` on its model, for example a Device Type's manufacturer); those relations are now prefetched together with the sample record.

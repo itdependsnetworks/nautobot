@@ -273,6 +273,22 @@ class BaseTable(django_tables2.Table):
                             # Follow the trailing chain (e.g. `device`) via select_related so the render-time
                             # attribute walk is free.
                             related_qs = related_qs.select_related(remainder)
+                        # The displayed sample record's display/__str__ may itself read further relations
+                        # (declared via `display_prefetch_related` on its model); prefetch those too.
+                        display_model = intermediate_model
+                        for part in filter(None, remainder.split("__")):
+                            try:
+                                display_model = display_model._meta.get_field(part).related_model
+                            except FieldDoesNotExist:
+                                display_model = None
+                            if display_model is None:
+                                break
+                        display_lookups = getattr(display_model, "display_prefetch_related", ())
+                        if display_lookups:
+                            prefix = f"{remainder}__" if remainder else ""
+                            related_qs = related_qs.prefetch_related(
+                                *(f"{prefix}{display_lookup}" for display_lookup in display_lookups)
+                            )
                         prefetch_fields.append(
                             Prefetch(first_relation, related_qs[:1], to_attr=_linked_count_to_attr(lookup))
                         )
