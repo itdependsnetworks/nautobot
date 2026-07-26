@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import copy
 import logging
 import os
 import platform
@@ -12,7 +13,7 @@ from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, Valida
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.db.models.fields.related import ForeignKey, ManyToManyField, RelatedField
-from django.db.models.fields.reverse_related import ManyToManyRel, ManyToOneRel
+from django.db.models.fields.reverse_related import ManyToManyRel, ManyToOneRel, OneToOneRel
 from django.http.response import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.decorators import method_decorator
@@ -177,6 +178,89 @@ class BulkDestroyModelMixin:
 #
 
 
+# Upper bound on the prefetch entries generated for one request's nested serialization tree. Each entry
+# costs one constant query per page, so this caps the fixed overhead if a deeply-nested serializer tree
+# would otherwise generate a pathological number of lookups.
+NESTED_PREFETCH_BUDGET = 150
+
+
+def _nested_serializer_prefetches(nested_serializer, related_model, source=None, _budget=None):
+    """
+    Build prefixed `prefetch_related()` entries covering nested serialization (`?depth>=1`).
+
+    A nested serializer renders the related object's *own* relations — its foreign keys, its natural key
+    walk, and traversal method fields such as cable peers / connected endpoints — each of which would
+    otherwise issue a query per rendered row. Returns lookup strings (and copies of model-declared
+    `Prefetch` objects) prefixed with the nested field's source path. Recurses through nested-of-nested
+    serializer fields; the recursion is bounded by the requested depth (which bounds the serializer field
+    tree itself) and by NESTED_PREFETCH_BUDGET.
+    """
+    source = source if source is not None else nested_serializer.source
+    budget = _budget if _budget is not None else [NESTED_PREFETCH_BUDGET]
+    prefetches = []
+
+    def add(entry):
+        if budget[0] > 0:
+            budget[0] -= 1
+            prefetches.append(entry)
+        return budget[0] > 0
+
+    # Relations rendered by the nested serializer's own fields.
+    for sub_field in nested_serializer.fields.values():
+        if sub_field.write_only or sub_field.source == "*" or "." in sub_field.source:
+            continue
+        try:
+            sub_model_field = related_model._meta.get_field(sub_field.source)
+        except FieldDoesNotExist:
+            continue
+        if isinstance(sub_field, (drf_serializers.ManyRelatedField, drf_serializers.ListSerializer)):
+            if isinstance(sub_model_field, (ManyToManyField, ManyToManyRel, RelatedField, ManyToOneRel, TagsField)):
+                add(f"{source}__{sub_field.source}")
+        elif isinstance(sub_field, drf_serializers.Serializer):
+            # Nested-of-nested (depth >= 2): prefetch the relation, then recurse into its serializer.
+            if isinstance(sub_model_field, (ForeignKey, OneToOneRel)):
+                if not add(f"{source}__{sub_field.source}"):
+                    break
+                prefetches.extend(
+                    _nested_serializer_prefetches(
+                        sub_field,
+                        sub_model_field.related_model,
+                        source=f"{source}__{sub_field.source}",
+                        _budget=budget,
+                    )
+                )
+        elif isinstance(sub_field, drf_serializers.RelatedField):
+            # Reverse one-to-ones (e.g. Device.parent_bay) are rendered as related fields too.
+            if isinstance(sub_model_field, (ForeignKey, OneToOneRel)):
+                add(f"{source}__{sub_field.source}")
+
+    # The nested object's natural key (e.g. for its natural_slug) walks its related models.
+    try:
+        natural_key_field_lookups = related_model.natural_key_field_lookups
+    except AttributeError:
+        natural_key_field_lookups = []
+    for lookup in natural_key_field_lookups:
+        if "__" in lookup:
+            prefix, _ = lookup.rsplit("__", 1)
+            add(f"{source}__{prefix}")
+
+    # Traversal prefetches declared by the model itself (cable terminations / path endpoints).
+    for declared in ("connection_prefetch_related_fields", "cable_peer_prefetch_related_fields"):
+        declared_fn = getattr(related_model, declared, None)
+        if declared_fn is None:
+            continue
+        for entry in declared_fn():
+            if isinstance(entry, str):
+                add(f"{source}__{entry}")
+            else:
+                # A Prefetch/GenericPrefetch object; add_prefix() mutates in place, so work on a copy.
+                entry = copy.deepcopy(entry)
+                entry.add_prefix(source)
+                add(entry)
+
+    return prefetches
+
+
 class ModelViewSetMixin:
     logger = logging.getLogger(__name__ + ".ModelViewSet")
 
@@ -253,6 +337,11 @@ class ModelViewSetMixin:
         select_fields = []
         prefetch_fields = []
 
+        # Relations the viewset's queryset already select_related()s explicitly stay joined — the explicit
+        # declaration is authoritative and a redundant prefetch would just add a query.
+        already_joined = queryset.query.select_related
+        already_joined = set(already_joined) if isinstance(already_joined, dict) else set()
+
         for field_instance in serializer.fields.values():
             if field_instance.write_only:
                 continue
@@ -270,14 +359,34 @@ class ModelViewSetMixin:
                     continue
                 if isinstance(model_field, (ManyToManyField, ManyToManyRel, RelatedField, ManyToOneRel, TagsField)):
                     prefetch_fields.append(field_instance.source)
-            elif isinstance(field_instance, (drf_serializers.RelatedField, drf_serializers.Serializer)):
-                # Serializer with depth > 0, RelatedField with depth 0
+            elif isinstance(field_instance, drf_serializers.Serializer):
+                # Nested serializer (depth > 0) reads the full related object for every row, so a JOIN fits.
                 try:
                     model_field = model._meta.get_field(field_instance.source)
                 except FieldDoesNotExist:
                     continue
                 if isinstance(model_field, ForeignKey):
-                    select_fields.append(field_instance.source)
+                    if field_instance.source not in already_joined:
+                        select_fields.append(field_instance.source)
+                    # The nested serializer renders the related object's *own* relations (its foreign keys,
+                    # natural key, and traversal method fields such as cable peers), which would otherwise
+                    # each issue a query per rendered row. Prefetch them one level deep, prefixed.
+                    prefetch_fields.extend(
+                        _nested_serializer_prefetches(field_instance, model_field.remote_field.model)
+                    )
+            elif isinstance(field_instance, drf_serializers.RelatedField):
+                # RelatedField with depth 0. Prefetch rather than select_related: the hyperlinked
+                # representation itself never reads the related row (DRF's pk-only optimization), but natural
+                # keys, `display`, and method fields may — prefetching keeps those accesses query-free while
+                # fetching each related row once, instead of duplicating it into every row of a JOIN. For
+                # models with many/fat relations (e.g. Device, 17 FKs) the duplicated-JOIN row transfer
+                # dominated list-endpoint wall time.
+                try:
+                    model_field = model._meta.get_field(field_instance.source)
+                except FieldDoesNotExist:
+                    continue
+                if isinstance(model_field, ForeignKey) and field_instance.source not in already_joined:
+                    prefetch_fields.append(field_instance.source)
 
         # Prefetch deeper relations needed for this object's natural key (e.g. for `natural_slug`) to avoid N+1 queries.
         try:
@@ -288,8 +397,8 @@ class ModelViewSetMixin:
         for lookup in natural_key_field_lookups:
             if "__" in lookup:
                 prefix, _ = lookup.rsplit("__", 1)
-                # Single-level FKs are already covered by select_fields above.
-                if prefix not in select_fields:
+                # Single-level FKs are already covered by select_fields/prefetch_fields above.
+                if prefix not in select_fields and prefix not in prefetch_fields:
                     natural_key_prefetch_fields.add(prefix)
         # Add to prefetch_fields rather than select_fields to prevent unnecessary query expansion.
         prefetch_fields.extend(sorted(natural_key_prefetch_fields))
@@ -298,7 +407,16 @@ class ModelViewSetMixin:
             queryset = maybe_select_related(queryset, select_fields)
 
         if prefetch_fields:
-            queryset = maybe_prefetch_related(queryset, prefetch_fields)
+            # Deduplicate plain-string lookups (nested-serializer prefixes can overlap natural-key prefixes).
+            seen_lookups = set()
+            deduplicated = []
+            for entry in prefetch_fields:
+                if isinstance(entry, str):
+                    if entry in seen_lookups:
+                        continue
+                    seen_lookups.add(entry)
+                deduplicated.append(entry)
+            queryset = maybe_prefetch_related(queryset, deduplicated)
 
         return queryset
 

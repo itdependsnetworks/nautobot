@@ -576,8 +576,10 @@ class ModelViewSetMixinTest(testing.APITestCase):
         view.initial(request)
 
         queryset = view.get_queryset()
-        # IPAddress plus one natural-key prefetch (parent__namespace), plus four prefetches.
-        with self.assertNumQueries(6):
+        # FK serializer fields are prefetched rather than JOINed, so that fat related rows are fetched once
+        # per page instead of being duplicated into every row of the base query. Base query plus prefetches:
+        # status, role, tenant, nat_inside, parent__namespace (two queries), and tags.
+        with self.assertNumQueries(8):
             instance = queryset.first()
         # FK related objects should have been auto-selected
         with self.assertNumQueries(0):
@@ -608,6 +610,43 @@ class ModelViewSetMixinTest(testing.APITestCase):
         data = view.get_serializer(instances, many=True).data
         self.assertEqual([row["natural_slug"] for row in data], natural_slugs)
 
+        # With depth=1, nested serializers render full related objects; their own relations must be
+        # prefetched one level deep (prefixed) so they don't issue a query per rendered row.
+        view = self.SimpleIPAddressViewSet()
+        view.action_map = {"get": "list"}
+        request = APIRequestFactory().get(reverse("ipam-api:ipaddress-list"), headers=self.header, data={"depth": 1})
+        force_authenticate(request, user=self.user)
+        request = view.initialize_request(request)
+        view.setup(request)
+        view.initial(request)
+
+        queryset = view.get_queryset()
+        string_lookups = {lookup for lookup in queryset._prefetch_related_lookups if isinstance(lookup, str)}
+        # Nested FK serializers are JOINed...
+        self.assertIn("status", queryset.query.select_related)
+        self.assertIn("tenant", queryset.query.select_related)
+        # ...and their own relations are prefetched with the nested source as a prefix:
+        self.assertIn("tenant__tenant_group", string_lookups)  # nested Tenant FK
+        self.assertIn("parent__namespace", string_lookups)  # nested Prefix FK (also its natural key)
+        self.assertIn("nat_inside__parent__namespace", string_lookups)  # nested IPAddress natural key walk
+
+        # At depth=2 the recursion continues into nested-of-nested serializers:
+        view = self.SimpleIPAddressViewSet()
+        view.action_map = {"get": "list"}
+        request = APIRequestFactory().get(reverse("ipam-api:ipaddress-list"), headers=self.header, data={"depth": 2})
+        force_authenticate(request, user=self.user)
+        request = view.initialize_request(request)
+        view.setup(request)
+        view.initial(request)
+        deep_lookups = {
+            lookup for lookup in view.get_queryset()._prefetch_related_lookups if isinstance(lookup, str)
+        }
+        self.assertIn("nat_inside__parent__namespace", deep_lookups)
+        self.assertTrue(
+            any(lookup.count("__") >= 2 for lookup in deep_lookups),
+            f"expected third-level prefetches at depth=2, got {sorted(deep_lookups)}",
+        )
+
         # With exclude_m2m query parameter set to True
         view = self.SimpleIPAddressViewSet()
         view.action_map = {"get": "list"}
@@ -620,9 +659,10 @@ class ModelViewSetMixinTest(testing.APITestCase):
         view.initial(request)
 
         queryset = view.get_queryset()
-        # IPAddress plus the natural-key prefetch (parent__namespace).
+        # IPAddress base query plus the FK-field and natural-key prefetches with non-null values on this row
+        # (prefetch execution skips FK lookups whose ids are all null).
         # exclude_m2m suppresses the additional M2M/reverse prefetches.
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(4):
             instance = queryset.first()
         # FK related objects should still have been auto-selected
         with self.assertNumQueries(0):
