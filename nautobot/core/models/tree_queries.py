@@ -1,6 +1,7 @@
 import uuid
 
 from django.conf import settings
+from django.utils.functional import cached_property
 from django.core.cache import cache
 from django.db.models import Case, When
 from django.db.models.signals import post_delete, post_save
@@ -179,6 +180,11 @@ class TreeModel(TreeNode):
         display_str += self.name  # pylint: disable=no-member  # we checked with hasattr() above
         cache.set(cache_key, display_str, timeout=5)
         return display_str
+
+    @cached_property
+    def children_exists(self):
+        """Whether any direct child exists. Batch-prefilled per table page where applicable."""
+        return self.children.exists()
 
     @property
     def siblings(self):

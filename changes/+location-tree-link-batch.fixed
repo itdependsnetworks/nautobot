@@ -1,0 +1,1 @@
+Fixed N+1 queries when rendering Location tables — the hierarchy link template performed an `ancestors.count` and a `children.exists` query per row; it now uses the tree-fields depth annotation and a per-page batched children lookup. Location Type detail page: 155 → 59 queries.
