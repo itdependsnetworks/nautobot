@@ -1,0 +1,1 @@
+Fixed a per-row query in the Jobs list view's "Last Run" and "Last Status" columns: the single latest Job Result per job (and its user) is now batch-prefetched when either column is visible, and `Job.latest_result` no longer defers the fields the Last Run column renders (previously causing extra per-row loads of `date_created` and `user`).

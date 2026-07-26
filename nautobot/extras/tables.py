@@ -3,7 +3,7 @@ import re
 from textwrap import dedent
 
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import QuerySet
+from django.db.models import Prefetch, QuerySet
 from django.utils.html import format_html, format_html_join
 import django_tables2 as tables
 from django_tables2.utils import Accessor
@@ -1190,6 +1190,25 @@ class JobTable(BaseTable):
     )
     tags = TagColumn(url_name="extras:job_list")
     actions = ButtonsColumn(JobModel, prepend_template=JOB_BUTTONS)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Both columns read `latest_result` (memoized per row); prefetch the single latest
+        # JobResult per job (sliced Prefetch, which requires `to_attr`) with its `user`, which the
+        # Last Run column renders. Add it once even if both columns are visible (a duplicate
+        # lookup would raise).
+        if isinstance(self.data.data, QuerySet) and any(
+            column in self.columns and self.columns[column].visible for column in ("last_run", "last_status")
+        ):
+            self.replace_queryset(
+                self.data.data.prefetch_related(
+                    Prefetch(
+                        "job_results",
+                        queryset=JobResult.objects.select_related("user").order_by("-date_created")[:1],
+                        to_attr="_prefetched_latest_results",
+                    )
+                )
+            )
 
     def render_description(self, value):
         return render_markdown(value)
