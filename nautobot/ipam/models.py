@@ -1358,6 +1358,16 @@ class Prefix(PrimaryModel):
         """Display count of descendants."""
         return self.descendants().count()
 
+    @cached_property
+    def ancestors_count(self):
+        """Count of ancestors (hierarchy depth). Batch-prefilled per table page by PrefixTable.paginate()."""
+        return self.ancestors().count()
+
+    @cached_property
+    def children_exists(self):
+        """Whether any direct child prefix exists. Batch-prefilled per table page by PrefixTable.paginate()."""
+        return self.children.exists()
+
     def root(self):
         """
         Returns the root node (the parent of all of my ancestors).
