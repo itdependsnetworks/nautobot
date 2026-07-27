@@ -181,7 +181,7 @@ Fixed windows permit up to 2× the limit straddling a window boundary; set limit
 
 ## Calibration logging
 
-`CALIBRATION_LOG: True` makes the middleware emit one structured JSON record per request (sampled by `CALIBRATION_SAMPLE_RATE`) to the logger `nautobot.core.consumption.calibration`, pairing the assigned cost with measured reality. Measured values are never fed back into cost at runtime — they are the offline dataset for calibrating `HEURISTIC_WEIGHTS`.
+`CALIBRATION_LOG: True` makes the middleware emit one structured JSON record per request (sampled by `CALIBRATION_SAMPLE_RATE`) to the logger `nautobot.core.rate_limiting.calibration`, pairing the assigned cost with measured reality. Measured values are never fed back into cost at runtime — they are the offline dataset for calibrating `HEURISTIC_WEIGHTS`.
 
 Each record looks like this (one JSON object per line):
 
@@ -231,13 +231,13 @@ Route the logger to your log pipeline as JSON lines:
 LOGGING = {
     ...
     "handlers": {
-        "consumption_jsonl": {
+        "calibration_jsonl": {
             "class": "logging.handlers.WatchedFileHandler",
-            "filename": "/var/log/nautobot/consumption.jsonl",
+            "filename": "/var/log/nautobot/calibration.jsonl",
         },
     },
     "loggers": {
-        "nautobot.core.consumption.calibration": {"handlers": ["consumption_jsonl"], "level": "INFO"},
+        "nautobot.core.rate_limiting.calibration": {"handlers": ["calibration_jsonl"], "level": "INFO"},
     },
 }
 ```
@@ -245,7 +245,7 @@ LOGGING = {
 What to do with the data:
 
 - **Set `LIMIT`**: sum `assigned_cost` per `token_hash` per window; pick a limit above your busiest legitimate consumer.
-- **Calibrate weights**: regress `actual_db_ms` against the recorded features — the coefficients are your calibrated `HEURISTIC_WEIGHTS`. A quick sketch with pandas: `pd.read_json("consumption.jsonl", lines=True)`, flatten `features`, fit `actual_db_ms` against the priced features.
+- **Calibrate weights**: regress `actual_db_ms` against the recorded features — the coefficients are your calibrated `HEURISTIC_WEIGHTS`. A quick sketch with pandas: `pd.read_json("calibration.jsonl", lines=True)`, flatten `features`, fit `actual_db_ms` against the priced features.
 - **Find mispriced shapes**: sort by `actual_db_ms / assigned_cost`. A request costed at 5 that took 2.5 seconds of database time is exactly what this log exists to surface — its `features` and `view` tell you which weight (or missing feature) to fix.
 - **Check cost parity before per-kind enforcement**: compare the `actual_db_ms / assigned_cost` distribution for `features.kind == "rest"` vs `"graphql"`. Enabling `enforce` for a kind whose ratio runs far from the other's means the shared budget treats the two currencies unequally.
 

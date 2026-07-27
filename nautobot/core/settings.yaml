@@ -1868,7 +1868,7 @@ properties:
         Rate Limiting administration guide for the available keys. For plain requests-per-window limiting, set
         this to `nautobot.core.rate_limiting.costing.FLAT_WEIGHTS` (every request costs exactly 1).
       - `CALIBRATION_LOG` / `CALIBRATION_SAMPLE_RATE` — when enabled, emit one structured JSON record per
-        (sampled) request to the `nautobot.core.consumption.calibration` logger, pairing assigned cost with
+        (sampled) request to the `nautobot.core.rate_limiting.calibration` logger, pairing assigned cost with
         measured wall-clock/CPU/database time for offline weight calibration.
 
       Failure posture is fail-open: if Redis is unreachable, accounting and enforcement are skipped, the
@@ -1878,7 +1878,7 @@ properties:
     see_also:
       "Rate Limiting administration guide": "../guides/rate-limiting.md"
     type: "object"
-    version_added: "3.2.0"
+    version_added: "3.3.0"
   REDIS_LOCK_TIMEOUT:
     default: 600
     description: >-
