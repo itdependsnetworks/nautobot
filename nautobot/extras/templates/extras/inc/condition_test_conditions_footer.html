@@ -1,0 +1,7 @@
+<span class="text-secondary small">
+    <strong>Every</strong> condition must pass for the rule to fire. One failing row is enough to stop it.
+    {% if not result.scope_matched %}
+        Scope did not match, so this rule would not fire regardless &mdash; the conditions are shown so you
+        can see what they would have decided.
+    {% endif %}
+</span>

@@ -1,0 +1,88 @@
+{% extends "generic/object_retrieve.html" %}
+{% load helpers %}
+{% load form_helpers %}
+{% load ui_framework %}
+
+{% block content %}
+    {% comment %}
+        The picker is hand-written because it is a form, which the component framework does not model. The
+        result below it is built from framework panels, so the cards, tables, links and boolean icons match
+        every other detail view rather than being this page's own approximation of them.
+    {% endcomment %}
+    <div class="card">
+        <div class="card-header"><strong>Test This {{ obj_type|capfirst|default:'Trigger' }}</strong></div>
+        <div class="card-body">
+            {% if not object.enabled %}
+                <div class="alert alert-warning" role="alert">
+                    <span class="mdi mdi-alert" aria-hidden="true"></span>
+                    This is <strong>not enabled</strong>, so it will not fire for real changes whatever
+                    this test reports. Testing a rule before enabling it is deliberately allowed &mdash; the
+                    result below tells you what <em>would</em> happen once you enable it.
+                </div>
+            {% endif %}
+            <p class="text-secondary">
+                Check what this would do without firing anything. Replaying a change log entry rebuilds
+                the payload from that change's stored snapshots, so the conditions see exactly what live
+                evaluation saw. Testing a live object describes an update in which nothing changed, so a
+                condition that requires a transition will correctly report that it would not fire.
+            </p>
+            <form method="post" action="">
+                {% csrf_token %}
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger" role="alert">
+                        {% for error in form.non_field_errors %}
+                            <!-- FORM-ERROR __all__: {{ error }} -->
+                            <div>{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+                {% render_field form.object_change %}
+                <hr class="border-top my-20">
+                {% render_field form.object_type %}
+                {% render_field form.object_id %}
+                <button type="submit" class="btn btn-primary">
+                    <span class="mdi mdi-test-tube" aria-hidden="true"></span> Run Test
+                </button>
+            </form>
+        </div>
+    </div>
+
+    {% render_components result_panels %}
+{% endblock content %}
+
+{% block javascript %}
+    {{ block.super }}
+    {{ object_api_urls|json_script:"nb-object-api-urls" }}
+    <script type="text/javascript">
+        /*
+         * Point the object picker at the API endpoint for whichever object type is selected.
+         *
+         * The endpoint cannot be fixed server-side because the model depends on the selection, and the
+         * selection changes without a round trip. The map is rendered above, keyed by content type id.
+         */
+        var nbObjectApiUrls = JSON.parse(document.getElementById('nb-object-api-urls').textContent);
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const typeSelect = document.querySelector('select[name="object_type"]');
+            const objectSelect = document.querySelector('select[name="object_id"]');
+            if (!typeSelect || !objectSelect) { return; }
+
+            function repointObjectPicker() {
+                const url = nbObjectApiUrls[typeSelect.value];
+                // Clear the previous selection: an object of the old type is not valid for the new one.
+                if ($(objectSelect).data('select2')) {
+                    $(objectSelect).val(null).trigger('change.select2');
+                }
+                objectSelect.setAttribute('data-url', url || '');
+                // Rebuild select2 so it picks up the new endpoint.
+                if (window.nb && window.nb.select2) {
+                    if ($(objectSelect).data('select2')) { $(objectSelect).select2('destroy'); }
+                    window.nb.select2.initializeSelect2Fields(objectSelect.parentElement);
+                }
+            }
+
+            // select2 signals through jQuery, which native listeners do not observe.
+            $(typeSelect).on('change select2:select select2:clear', repointObjectPicker);
+        });
+    </script>
+{% endblock javascript %}

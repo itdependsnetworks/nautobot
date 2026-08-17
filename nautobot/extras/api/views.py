@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.forms import ValidationError as FormsValidationError
@@ -1072,7 +1073,69 @@ class JobByNameViewSet(
 #
 
 
-class JobHooksViewSet(NautobotModelViewSet):
+class ConditionalTriggerAPIMixin:
+    """
+    The condition-preset catalog and the dry-run endpoint, shared by the Webhook and Job Hook APIs.
+
+    Both models carry the same scope and conditions, so both answer the same two questions the same way.
+    """
+
+    @extend_schema(
+        responses={"200": serializers.ConditionPresetSerializer(many=True)},
+        filters=False,
+    )
+    @action(detail=False, methods=["get"], filterset_class=None)
+    def presets(self, request):
+        """
+        List the available condition presets and the parameters each takes.
+
+        Exists so the form and any external tooling read the catalog from one place rather than each
+        keeping a copy that can fall out of date.
+        """
+        from nautobot.extras.conditions.presets import get_condition_presets
+
+        data = [preset.as_dict() for preset in get_condition_presets()]
+        return Response(serializers.ConditionPresetSerializer(data, many=True).data)
+
+    @extend_schema(
+        request=serializers.ConditionalTriggerDryRunInputSerializer,
+        responses={"200": serializers.DryRunResponseSerializer},
+    )
+    # Permission is checked explicitly below rather than by DRF's action-to-permission mapping, which would
+    # demand change permission for a POST. Dry-run writes nothing, and requiring change permission would
+    # lock read-only users out of the one tool meant to help them understand a trigger.
+    @action(detail=True, methods=["post"], url_path="dry-run", permission_classes=[IsAuthenticated])
+    def dry_run(self, request, pk):
+        """Report whether this would fire for a given object or past change, firing nothing."""
+        from nautobot.extras.conditions.dryrun import dry_run as run_dry_run
+
+        action_object = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+
+        input_serializer = serializers.ConditionalTriggerDryRunInputSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        data = input_serializer.validated_data
+
+        object_change = None
+        instance = None
+        if data.get("object_change"):
+            object_change = get_object_or_404(
+                ObjectChange.objects.restrict(request.user, "view"), pk=data["object_change"]
+            )
+        else:
+            model = data["object_type"].model_class()
+            if model is None:
+                raise ValidationError("Unknown object type.")
+            instance = get_object_or_404(model.objects.restrict(request.user, "view"), pk=data["object_id"])
+
+        try:
+            result = run_dry_run(action_object, object_change=object_change, instance=instance)
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.messages)
+
+        return Response(serializers.DryRunResponseSerializer(result.as_dict()).data)
+
+
+class JobHooksViewSet(ConditionalTriggerAPIMixin, NautobotModelViewSet):
     """
     Manage job hooks through DELETE, GET, POST, PUT, and PATCH requests.
     """
@@ -1512,7 +1575,7 @@ class TeamViewSet(NautobotModelViewSet):
 #
 
 
-class WebhooksViewSet(NotesViewSetMixin, ModelViewSet):
+class WebhooksViewSet(ConditionalTriggerAPIMixin, NotesViewSetMixin, ModelViewSet):
     """
     Manage Webhooks through DELETE, GET, POST, PUT, and PATCH requests.
     """

@@ -1628,6 +1628,9 @@ class CustomFieldUIViewSet(ScopeFilterViewMixin, NautobotUIViewSet):
         return super().get_scope_filter_fields_context(request, model_class)
 
 
+#
+# Custom Links
+#
 class CustomLinkUIViewSet(NautobotUIViewSet):
     bulk_update_form_class = forms.CustomLinkBulkEditForm
     filterset_class = filters.CustomLinkFilterSet
@@ -3548,9 +3551,9 @@ class ConditionalTriggerViewMixin(ScopeFilterViewMixin):
     Both models carry `ConditionalTriggerMixin`, so both get the same editor, the same panels and the same
     dry-run. Keeping it in one mixin is what stops the two drifting apart in behaviour or in wording.
 
-    A viewset using this must add `conditional_trigger_panels()` to its detail content. The create/edit
-    template is shared and needs no per-viewset setting; override `conditional_trigger_template` only
-    for an action type that needs different surrounding markup.
+    A viewset using this must add `conditional_trigger_panels()` and `conditional_trigger_tab()` to its
+    detail content. The create/edit template is shared and needs no per-viewset setting; override
+    `conditional_trigger_template` only for an action type that needs different surrounding markup.
     """
 
     conditional_trigger_template = "extras/conditional_trigger_update.html"
@@ -3575,6 +3578,16 @@ class ConditionalTriggerViewMixin(ScopeFilterViewMixin):
             ),
         )
 
+    @staticmethod
+    def conditional_trigger_tab(url_name, weight=1000):
+        """The Test tab, for a detail view's `extra_tabs`."""
+        return object_detail.DistinctViewTab(
+            weight=weight,
+            tab_id="test",
+            label="Test",
+            url_name=url_name,
+        )
+
     def get_template_name(self):
         if self.action in ("create", "update") and self.conditional_trigger_template:
             return self.conditional_trigger_template
@@ -3592,6 +3605,83 @@ class ConditionalTriggerViewMixin(ScopeFilterViewMixin):
         context = super().get_scope_filter_fields_context(request, model_class)
         context["condition_presets_json"] = _condition_presets_json()
         return context
+
+    #
+    # Test tab (dry-run)
+    #
+
+    @action(
+        detail=True,
+        methods=["GET", "POST"],
+        url_path="test",
+        url_name="test",
+        custom_view_base_action="view",
+    )
+    def test(self, request, *args, **kwargs):
+        """
+        Report whether this rule would fire for a chosen object or change-log entry, firing nothing.
+
+        GET renders the picker; POST renders the per-part verdict. Both are `view`-level actions because
+        dry-run writes nothing, and requiring change permission would keep read-only users away from
+        the one tool meant to help them understand a rule.
+        """
+        from nautobot.extras.conditions.dryrun import dry_run
+
+        instance = self.get_object()
+        result = None
+        object_change = None
+        target = None
+        # Bind on any POST, including an empty one: `request.POST or None` would leave the form unbound
+        # for an empty submit, so the user would get a blank form back instead of being told what is missing.
+        form = forms.ConditionalTriggerDryRunForm(
+            request.POST if request.method == "POST" else None,
+            action_object=instance,
+        )
+
+        if request.method == "POST" and form.is_valid():
+            object_change = form.cleaned_data.get("object_change")
+            if object_change is None:
+                model = form.cleaned_data["object_type"].model_class()
+                if model is None:
+                    form.add_error("object_type", "Unknown object type.")
+                else:
+                    target = (
+                        model.objects.restrict(request.user, "view").filter(pk=form.cleaned_data["object_id"]).first()
+                    )
+                    if target is None:
+                        form.add_error("object_id", "No such object, or you do not have permission to view it.")
+            if not form.errors:
+                try:
+                    result = dry_run(instance, object_change=object_change, instance=target)
+                except ValidationError as exc:
+                    form.add_error(None, exc.messages)
+
+        # What the test was run against, so the result can link back to it. For a replayed change the
+        # object may since have been deleted, in which case only the change log entry is linkable.
+        tested_object = target
+        if tested_object is None and object_change is not None:
+            tested_object = object_change.changed_object
+
+        return Response(
+            {
+                "object": instance,
+                "form": form,
+                "result": result,
+                "object_change": object_change,
+                "tested_object": tested_object,
+                "object_api_urls": getattr(form, "object_api_urls", {}),
+                "result_summary": _dry_run_summary(result, tested_object, object_change),
+                "condition_rows": _dry_run_condition_rows(result),
+                "result_panels": _dry_run_result_panels(result),
+                "no_conditions_text": f"This {self.queryset.model._meta.verbose_name} has no conditions, so every "
+                "in-scope change passes.",
+                "template": "extras/conditional_trigger_test.html",
+            }
+        )
+
+    #
+    # Conditions formset
+    #
 
     def get_extra_context(self, request, instance=None):
         context = super().get_extra_context(request, instance)
@@ -3657,6 +3747,91 @@ class ConditionalTriggerViewMixin(ScopeFilterViewMixin):
         return obj
 
 
+def _dry_run_summary(result, tested_object, object_change):
+    """
+    The dry-run verdict as key/value data for the UI framework's panel to render.
+
+    Returning data rather than markup is what lets the Test tab's result look like every other detail
+    view: the framework renders a model instance as a link and a boolean as the usual green tick or red
+    cross, with no template of ours deciding how those should look.
+    """
+    if result is None:
+        return {}
+    tested_against = tested_object
+    if tested_against is None and object_change is not None:
+        # Deleted since the change, so there is nothing to link to. Say so instead of showing a dash,
+        # which would read as "not recorded".
+        tested_against = "Object no longer exists"
+    summary = {"would_fire": result.would_fire, "tested_against": tested_against}
+    if object_change is not None:
+        summary["replaying"] = object_change
+    summary["scope_matched"] = result.scope_matched
+    return summary
+
+
+def _dry_run_condition_rows(result):
+    """Per-condition verdicts as rows for the UI framework's table panel."""
+    if result is None:
+        return []
+    return [
+        {
+            "index": index,
+            # The stored row as JSON rather than as Python's dict repr, matching how the detail view's
+            # Conditions panel shows it. Escaped, because it contains the user's own expression text.
+            "condition": format_html("<code>{}</code>", json.dumps(condition.row, sort_keys=True)),
+            "passed": helpers.render_boolean(condition.passed),
+            "error": format_html('<span class="text-danger">{}</span>', condition.error) if condition.error else None,
+        }
+        for index, condition in enumerate(result.conditions, start=1)
+    ]
+
+
+def _dry_run_result_panels(result):
+    """
+    The panels that present a dry-run result, or none at all before a test has been run.
+
+    The conditions panel is chosen rather than configured: a rule with no conditions needs a sentence
+    explaining that every in-scope change therefore passes, where an empty table would read as though
+    something had gone missing.
+    """
+    if result is None:
+        return ()
+    panels = [
+        object_detail.KeyValueTablePanel(
+            weight=100,
+            section=SectionChoices.FULL_WIDTH,
+            label="Result",
+            context_data_key="result_summary",
+            footer_content_template_path="extras/inc/condition_test_result_footer.html",
+        )
+    ]
+    if result.conditions:
+        panels.append(
+            object_detail.DataTablePanel(
+                weight=200,
+                section=SectionChoices.FULL_WIDTH,
+                label="Conditions",
+                context_data_key="condition_rows",
+                # Verdict before detail: the stored condition can be a long expression, and a wide cell
+                # would push the pass/fail column out of view on a narrow screen.
+                columns=["index", "passed", "error", "condition"],
+                column_headers=["#", "Passed", "Error", "Condition"],
+                footer_content_template_path="extras/inc/condition_test_conditions_footer.html",
+            )
+        )
+    else:
+        panels.append(
+            object_detail.TextPanel(
+                weight=200,
+                section=SectionChoices.FULL_WIDTH,
+                label="Conditions",
+                context_field="no_conditions_text",
+                render_as=object_detail.TextPanel.RenderOptions.PLAINTEXT,
+            )
+        )
+    return tuple(panels)
+
+
 def _conditions_to_initial(instance):
     """Turn a rule's stored condition rows back into initial data for the formset."""
     if instance is None or not getattr(instance, "conditions", None):
@@ -3701,7 +3876,8 @@ class JobHookUIViewSet(ConditionalTriggerViewMixin, NautobotUIViewSet):
                 fields="__all__",
             ),
             *ConditionalTriggerViewMixin.conditional_trigger_panels(),
-        )
+        ),
+        extra_tabs=(ConditionalTriggerViewMixin.conditional_trigger_tab("extras:jobhook_test"),),
     )
 
 
@@ -5356,5 +5532,6 @@ class WebhookUIViewSet(ConditionalTriggerViewMixin, NautobotUIViewSet):
                 render_as=object_detail.BaseTextPanel.RenderOptions.CODE,
             ),
             *ConditionalTriggerViewMixin.conditional_trigger_panels(),
-        ]
+        ],
+        extra_tabs=(ConditionalTriggerViewMixin.conditional_trigger_tab("extras:webhook_test"),),
     )

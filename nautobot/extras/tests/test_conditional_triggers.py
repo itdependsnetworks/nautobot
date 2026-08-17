@@ -13,9 +13,10 @@ from django.contrib.contenttypes.models import ContentType
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Location, LocationType
 from nautobot.extras.choices import ConditionTypeChoices, ObjectChangeActionChoices
+from nautobot.extras.conditions.dryrun import dry_run
 from nautobot.extras.conditions.gate import scoped_actions_for_model
 from nautobot.extras.context_managers import web_request_context
-from nautobot.extras.models import Status, Tag, Webhook
+from nautobot.extras.models import ObjectChange, Status, Tag, Webhook
 
 MOCK_URL = "https://8.8.8.8/"
 
@@ -267,6 +268,97 @@ class TriggerFreeCostTestCase(ConditionalTriggerTestCase):
             scoped_actions_for_model(Location, ObjectChangeActionChoices.ACTION_UPDATE)
         # And the save still works, with no action to fire.
         self.assertEqual(self.fire(location, description="x"), [])
+
+
+class DryRunTestCase(ConditionalTriggerTestCase):
+    """Dry-run must predict what live evaluation does."""
+
+    def change_a_location(self, **kwargs):
+        location = self.make_location("dry-run-loc")
+        with web_request_context(self.user):
+            location.description = "after"
+            location.save()
+        object_change = (
+            ObjectChange.objects.filter(changed_object_id=location.pk, action=ObjectChangeActionChoices.ACTION_UPDATE)
+            .order_by("-time")
+            .first()
+        )
+        return location, object_change
+
+    def test_dry_run_reproduces_a_firing_outcome(self):
+        webhook = self.make_webhook("passes", conditions=[expression_row("true")])
+        _, object_change = self.change_a_location()
+        result = dry_run(webhook, object_change=object_change)
+        self.assertTrue(result.would_fire)
+
+    def test_dry_run_predicts_a_non_firing_action(self):
+        webhook = self.make_webhook("fails", conditions=[expression_row("false")])
+        _, object_change = self.change_a_location()
+        self.assertFalse(dry_run(webhook, object_change=object_change).would_fire)
+
+    def test_dry_run_dispatches_nothing(self):
+        webhook = self.make_webhook("passes", conditions=[expression_row("true")])
+        _, object_change = self.change_a_location()
+        with patch("nautobot.extras.webhooks.process_webhook.apply_async") as mock_enqueue:
+            dry_run(webhook, object_change=object_change)
+        self.assertEqual(mock_enqueue.call_count, 0)
+
+    def test_dry_run_reports_scope_separately(self):
+        webhook = self.make_webhook("scoped", scope_filter={"name": ["nowhere"]}, conditions=[expression_row("true")])
+        _, object_change = self.change_a_location()
+        result = dry_run(webhook, object_change=object_change)
+        self.assertFalse(result.scope_matched)
+        self.assertFalse(result.would_fire)
+        self.assertEqual(len(result.conditions), 1, "conditions are reported even when scope fails")
+
+    def test_dry_run_against_a_live_object(self):
+        webhook = self.make_webhook("live", conditions=[expression_row("data.name == 'dry-run-loc'")])
+        location, _ = self.change_a_location()
+        self.assertTrue(dry_run(webhook, instance=location).would_fire)
+
+    def test_dry_run_per_row_results(self):
+        webhook = self.make_webhook("rows", conditions=[expression_row("true"), expression_row("false")])
+        _, object_change = self.change_a_location()
+        result = dry_run(webhook, object_change=object_change)
+        self.assertEqual([row.passed for row in result.conditions], [True, False])
+
+    def test_dry_run_requires_exactly_one_target(self):
+        from django.core.exceptions import ValidationError
+
+        webhook = self.make_webhook("targets")
+        location, object_change = self.change_a_location()
+        with self.assertRaises(ValidationError):
+            dry_run(webhook)
+        with self.assertRaises(ValidationError):
+            dry_run(webhook, object_change=object_change, instance=location)
+
+    def test_dry_run_against_a_delete_change(self):
+        webhook = self.make_webhook(
+            "deletes",
+            events=[ObjectChangeActionChoices.ACTION_DELETE],
+            conditions=[expression_row("snapshots.prechange.name")],
+        )
+        location = self.make_location("to-delete")
+        with web_request_context(self.user):
+            location.delete()
+        object_change = (
+            ObjectChange.objects.filter(action=ObjectChangeActionChoices.ACTION_DELETE).order_by("-time").first()
+        )
+        self.assertTrue(dry_run(webhook, object_change=object_change).would_fire)
+
+    def test_job_hooks_dry_run_the_same_way(self):
+        """The dry-run service takes any action carrying the mixin, not a specific model."""
+        from nautobot.extras.models import Job, JobHook
+
+        job = Job.objects.filter(is_job_hook_receiver=True, installed=True, enabled=True).first()
+        if job is None:
+            self.skipTest("no installed and enabled job hook receiver")
+        job_hook = JobHook(name="dry-run job hook", job=job, type_update=True, conditions=[expression_row("true")])
+        job_hook.save()
+        job_hook.content_types.set([self.location_ct])
+        job_hook.validated_save()
+        _, object_change = self.change_a_location()
+        self.assertTrue(dry_run(job_hook, object_change=object_change).would_fire)
 
 
 class TriggerPreservationTestCase(ConditionalTriggerTestCase):

@@ -5,7 +5,7 @@ The pieces here know nothing about which model owns them. A Webhook and a Job Ho
 this one engine, which is what keeps their behaviour identical instead of merely similar.
 """
 
-# PLACEHOLDER: `dry_run` is re-exported here in story 7 (Dry-run: the Test tab and the API endpoints).
+from nautobot.extras.conditions.dryrun import dry_run
 from nautobot.extras.conditions.engine import (
     compile_condition,
     ConditionError,
@@ -40,6 +40,7 @@ __all__ = (
     "build_payload_for_instance",
     "build_payload_from_object_change",
     "compile_condition",
+    "dry_run",
     "evaluate",
     "evaluate_condition",
     "evaluate_conditions",

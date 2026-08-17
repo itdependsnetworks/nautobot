@@ -2,6 +2,7 @@ from datetime import date, datetime
 import inspect
 import json
 import logging
+import uuid
 
 from django import forms
 from django.conf import settings
@@ -13,6 +14,7 @@ from django.core.validators import MinValueValidator
 from django.db.models.fields import TextField
 from django.forms import inlineformset_factory, ModelMultipleChoiceField, MultipleHiddenInput
 from django.urls.base import reverse, reverse_lazy
+from django.urls.exceptions import NoReverseMatch
 from django.utils.timezone import get_current_timezone_name
 
 from nautobot.core.constants import CHARFIELD_MAX_LENGTH
@@ -44,6 +46,7 @@ from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from nautobot.core.forms.fields import MultiValueCharField
 from nautobot.core.forms.forms import ConfirmationForm
 from nautobot.core.forms.widgets import ClearableFileInput
+from nautobot.core.utils.lookup import get_route_for_model
 from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, DeviceType, Location, Platform
 from nautobot.extras.choices import (
     ApprovalWorkflowStateChoices,
@@ -155,6 +158,7 @@ __all__ = (
     "ComputedFieldForm",
     "ConditionForm",
     "ConditionFormSet",
+    "ConditionalTriggerDryRunForm",
     "ConfigContextBulkEditForm",
     "ConfigContextFilterForm",
     "ConfigContextForm",
@@ -1764,7 +1768,18 @@ class JobHookBulkEditForm(ConditionalTriggerBulkEditFormMixin, NautobotBulkEditF
 
 class JobHookForm(BootstrapMixin, forms.ModelForm):
     content_types = MultipleContentTypeField(
-        queryset=ChangeLoggedModelsQuery().as_queryset(), required=True, label="Content Type(s)"
+        queryset=ChangeLoggedModelsQuery().as_queryset(),
+        required=True,
+        label="Content Type(s)",
+        widget=StaticSelect2Multiple(
+            attrs={
+                "hx-trigger": "change",
+                "hx-get": reverse_lazy("extras:jobhook_scope_filter_fields"),
+                "hx-select": "#nb-scope-filter-form-container",
+                "hx-target": "#nb-scope-filter-form-container",
+                "hx-swap": "outerHTML",
+            }
+        ),
     )
     job = DynamicModelChoiceField(
         queryset=Job.objects.filter(is_job_hook_receiver=True),
@@ -2889,7 +2904,20 @@ class WebhookBulkEditForm(ConditionalTriggerBulkEditFormMixin, BootstrapMixin, N
 
 
 class WebhookForm(BootstrapMixin, forms.ModelForm):
-    content_types = MultipleContentTypeField(feature="webhooks", required=False, label="Content Type(s)")
+    content_types = MultipleContentTypeField(
+        feature="webhooks",
+        required=False,
+        label="Content Type(s)",
+        widget=StaticSelect2Multiple(
+            attrs={
+                "hx-trigger": "change",
+                "hx-get": reverse_lazy("extras:webhook_scope_filter_fields"),
+                "hx-select": "#nb-scope-filter-form-container",
+                "hx-target": "#nb-scope-filter-form-container",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
 
     class Meta:
         model = Webhook
@@ -3093,3 +3121,103 @@ class ConditionForm(BootstrapMixin, forms.Form):
 
 
 ConditionFormSet = forms.formset_factory(ConditionForm, extra=1, can_delete=True)
+
+
+class ConditionalTriggerDryRunForm(BootstrapMixin, forms.Form):
+    """Picker for a Webhook's or Job Hook's Test tab: a live object or an entry from the change log."""
+
+    object_change = DynamicModelChoiceField(
+        queryset=ObjectChange.objects.all(),
+        required=False,
+        label="Change log entry",
+        help_text="Replay a change that already happened. The payload is rebuilt from its stored snapshots.",
+    )
+    object_type = forms.ModelChoiceField(
+        queryset=ContentType.objects.all(),
+        required=False,
+        label="Object type",
+        widget=StaticSelect2(),
+    )
+    object_id = forms.CharField(
+        required=False,
+        label="Object",
+        help_text="Test against a live object. Nothing changed, so conditions requiring a transition will not pass.",
+        widget=APISelect(),
+    )
+
+    def __init__(self, *args, action_object=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.action_object = action_object
+        if action_object is None:
+            return
+
+        content_types = list(action_object.content_types.all())
+        type_field = self.fields["object_type"]
+        type_field.queryset = ContentType.objects.filter(pk__in=[content_type.pk for content_type in content_types])
+        # Default to the first object type. Most actions watch exactly one, so making the tester pick it is
+        # busywork, and the object picker below needs a type before it can offer anything.
+        if content_types:
+            type_field.initial = content_types[0].pk
+
+        change_field = self.fields["object_change"]
+        change_field.queryset = ObjectChange.objects.filter(changed_object_type__in=content_types)
+        # The queryset above only constrains validation. The picker fetches its options from the REST API,
+        # so the same filter has to reach that request as a query parameter. Otherwise it offers every
+        # change ever recorded, nearly all of them for models this action does not watch.
+        for content_type in content_types:
+            change_field.widget.add_query_param("changed_object_type", f"{content_type.app_label}.{content_type.model}")
+
+        # The object picker is a type-ahead against whichever object type is selected. Its API URL cannot be
+        # fixed at class definition time because the model varies, so it is set here from the submitted type
+        # (or the default), and `object_api_urls` lets the template repoint it when the type changes.
+        self.object_api_urls = {str(content_type.pk): self._api_url(content_type) for content_type in content_types}
+        selected = self.data.get("object_type") or (str(content_types[0].pk) if content_types else None)
+        url = self.object_api_urls.get(str(selected))
+        if url:
+            self.fields["object_id"].widget.attrs["data-url"] = url
+
+    @staticmethod
+    def _api_url(content_type):
+        """The REST list endpoint for a content type, or empty if the model has no API route."""
+        model = content_type.model_class()
+        if model is None:
+            return ""
+        try:
+            return reverse(get_route_for_model(model, "list", api=True))
+        except NoReverseMatch:
+            return ""
+
+    def clean_object_id(self):
+        """
+        Reject anything that is not a primary key before it reaches the database.
+
+        The picker only ever submits one, but the field is a plain text input underneath, so a hand-built
+        POST can put anything in it. Without this the value reaches `filter(pk=...)`, which raises on a
+        malformed UUID, answering a mistyped id with a 400 and a logged traceback instead of telling
+        the user what was wrong with their input.
+        """
+        value = (self.cleaned_data.get("object_id") or "").strip()
+        if not value:
+            return ""
+        try:
+            uuid.UUID(value)
+        except (AttributeError, TypeError, ValueError):
+            raise ValidationError("Select an object from the list.")
+        return value
+
+    def clean(self):
+        data = super().clean()
+        object_change = data.get("object_change")
+        object_type = data.get("object_type")
+        object_id = data.get("object_id")
+
+        # Only `object_id` counts as "an object was chosen". `object_type` is pre-filled with the rule's
+        # first object type so the picker below has something to query, so treating it as a choice would
+        # make picking a change log entry look like picking both.
+        if object_change and object_id:
+            raise ValidationError("Choose either a change log entry or an object, not both.")
+        if not object_change and not object_id:
+            raise ValidationError("Choose a change log entry, or an object.")
+        if object_id and not object_type:
+            raise ValidationError({"object_type": "Select the object's type."})
+        return data

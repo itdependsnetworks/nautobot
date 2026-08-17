@@ -822,6 +822,72 @@ class JobClassDetailSerializer(JobClassSerializer):
     result = JobResultSerializer(required=False)
 
 
+class ConditionPresetParameterChoiceSerializer(serializers.Serializer):
+    """One option of a `choice` parameter."""
+
+    value = serializers.CharField(read_only=True)
+    label = serializers.CharField(read_only=True)
+
+
+class ConditionPresetParameterSerializer(serializers.Serializer):
+    """One parameter a condition preset accepts, so a client can build a form for it."""
+
+    name = serializers.CharField(read_only=True)
+    label = serializers.CharField(read_only=True)
+    kind = serializers.CharField(read_only=True)
+    required = serializers.BooleanField(read_only=True)
+    help_text = serializers.CharField(read_only=True, allow_blank=True)
+    # Populated only for a `choice` parameter; empty for every other kind.
+    choices = ConditionPresetParameterChoiceSerializer(many=True, read_only=True)
+
+
+class ConditionPresetSerializer(serializers.Serializer):
+    """A built-in condition type and the parameters it takes."""
+
+    key = serializers.CharField(read_only=True)
+    label = serializers.CharField(read_only=True)
+    description = serializers.CharField(read_only=True, allow_blank=True)
+    params_schema = ConditionPresetParameterSerializer(many=True, read_only=True)
+
+
+class ConditionalTriggerDryRunInputSerializer(serializers.Serializer):
+    """What to test a rule against: either a live object or an entry from the change log."""
+
+    object_type = ContentTypeField(queryset=ContentType.objects.all(), required=False)
+    object_id = serializers.UUIDField(required=False)
+    object_change = serializers.UUIDField(required=False)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        has_object = bool(attrs.get("object_type") or attrs.get("object_id"))
+        has_change = bool(attrs.get("object_change"))
+        if has_object == has_change:
+            raise serializers.ValidationError(
+                "Provide either `object_type` and `object_id`, or `object_change`, not both and not neither."
+            )
+        if has_object and not (attrs.get("object_type") and attrs.get("object_id")):
+            raise serializers.ValidationError("`object_type` and `object_id` must be given together.")
+        return attrs
+
+
+class ConditionResultSerializer(serializers.Serializer):
+    """The verdict for one condition row."""
+
+    index = serializers.IntegerField(read_only=True)
+    row = serializers.JSONField(read_only=True)
+    passed = serializers.BooleanField(read_only=True)
+    error = serializers.CharField(read_only=True, allow_null=True)
+
+
+class DryRunResponseSerializer(serializers.Serializer):
+    """Per-part verdict, so a user can see which piece said no."""
+
+    scope_matched = serializers.BooleanField(read_only=True)
+    conditions = ConditionResultSerializer(many=True, read_only=True)
+    would_fire = serializers.BooleanField(read_only=True)
+    error = serializers.CharField(read_only=True, allow_null=True)
+
+
 # `scope_filter` is `editable=False` on the model, because it is written through a filter form rather
 # than typed into a field. Left alone that makes it read-only to the API, and a client's scope would be
 # accepted and silently dropped, creating an action that fires for every object of its type.
