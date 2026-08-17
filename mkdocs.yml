@@ -569,6 +569,9 @@ nav:
               - Static Group Associations: "user-guide/platform-functionality/staticgroupassociation.md"
           - ECharts: "user-guide/platform-functionality/echarts.md"
           - Event Notifications: "user-guide/platform-functionality/events.md"
+          - Event Rules:
+              - "user-guide/platform-functionality/conditional-triggers.md"
+              - Expressions: "user-guide/platform-functionality/condition-expressions.md"
           - Export Templates: "user-guide/platform-functionality/exporttemplate.md"
           - External Integrations: "user-guide/platform-functionality/externalintegration.md"
           - Git Repositories: "user-guide/platform-functionality/gitrepository.md"

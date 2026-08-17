@@ -1,5 +1,11 @@
 # Webhooks
 
+!!! tip "Narrowing when this fires"
+    A webhook watches whole object types. To fire only for particular objects, or only for
+    particular changes, give it a scope filter and conditions. See
+    [Conditional Triggers](conditional-triggers.md).
+
+
 A webhook is a mechanism for notifying an external system when a change occurs in Nautobot. For example, you might want to alert a monitoring tool whenever a device's status is updated. This can be achieved by creating a webhook for the device model and specifying a receiver URL. When Nautobot detects a change, it sends an HTTP request with details about the event and the user who triggered it.
 
 Webhooks are managed via the web UI under **Extensibility > Webhooks**.

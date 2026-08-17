@@ -1,0 +1,6 @@
+Added a scope filter and conditions to Webhooks and Job Hooks, so an action can fire for particular objects and particular changes rather than for every change to an object type. Both fields are empty by default, and an action with both empty behaves exactly as before.
+Added built-in condition presets: field transition, field changed, field compare, user is, and user is not. Field names may be dotted, e.g. `status.name`.
+Added a `not` flag on each condition row, which inverts that row's verdict for presets and raw expressions alike.
+Added raw Jinja2 expressions as the advanced condition option, evaluated by the same sandboxed engine as the presets.
+Added dry-run testing, as a Test tab on the Webhook and Job Hook detail views and as `POST /api/extras/webhooks/{id}/dry-run/` and `POST /api/extras/job-hooks/{id}/dry-run/`.
+Added `/api/extras/webhooks/presets/` and `/api/extras/job-hooks/presets/`, listing the condition preset catalog and each preset's parameters.

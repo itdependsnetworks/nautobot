@@ -7,6 +7,10 @@ Nautobot provides and uses an system capable of publishing event notifications o
 !!! info
     In the future, Nautobot [webhooks](webhook.md) and [job hooks](jobs/jobhook.md) will likely be reimplemented as consumers of the event notification system.
 
+!!! info
+    [Conditional trigger](conditional-triggers.md) conditions are written against the same `prechange` / `postchange` / `differences`
+    shape described below, so an expression that reads a record-change payload here reads the same names there.
+
 ## Subscribing to Event Notifications
 
 Any subclass of the `nautobot.core.events.EventBroker` abstract base class can be instantiated and then registered as a subscriber to event notifications. Typically you will do this in your `nautobot_config.py` or equivalent configuration file:

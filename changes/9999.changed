@@ -1,0 +1,1 @@
+Changed the Webhook uniqueness check to permit two webhooks with the same object type, event and payload URL when their scope filters or conditions differ, so one endpoint can serve several distinct triggers.
