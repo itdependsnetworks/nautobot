@@ -481,6 +481,16 @@ class ObjectChangeActionChoices(ChoiceSet):
     }
 
 
+class ConditionTypeChoices(ChoiceSet):
+    TYPE_PRESET = "preset"
+    TYPE_EXPRESSION = "expression"
+
+    CHOICES = (
+        (TYPE_PRESET, "Preset"),
+        (TYPE_EXPRESSION, "Expression"),
+    )
+
+
 class ObjectChangeEventContextChoices(ChoiceSet):
     CONTEXT_WEB = "web"
     CONTEXT_JOB = "job"
