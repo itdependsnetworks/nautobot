@@ -2,8 +2,11 @@
 Class-modifying mixins that need to be standalone to avoid circular imports.
 """
 
+import logging
+
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 from django.urls import NoReverseMatch, reverse
@@ -11,7 +14,21 @@ from django.urls import NoReverseMatch, reverse
 from nautobot.core.utils.deprecation import method_deprecated_in_favor_of
 from nautobot.core.utils.filtering import build_filter_dict_from_filterset
 from nautobot.core.utils.lookup import get_filterset_for_model, get_route_for_model, get_user_from_instance
-from nautobot.extras.choices import ApprovalWorkflowStateChoices
+from nautobot.extras.choices import ApprovalWorkflowStateChoices, ObjectChangeActionChoices
+
+logger = logging.getLogger(__name__)
+
+
+def unknown_filter_parameters(filterset, filter_data):
+    """
+    Return the sorted parameter names in `filter_data` that `filterset` does not define.
+
+    A FilterSet form only binds the parameters it knows about, so `form.is_valid()` returns True for a
+    filter naming something that does not exist: the parameter is silently dropped and the filter
+    matches far more than the author intended. Anywhere a stored filter is validated, the parameter
+    names have to be checked separately from the values.
+    """
+    return sorted(set(filter_data or {}) - set(filterset.filters))
 
 
 class ApprovableModelMixin(models.Model):
@@ -322,9 +339,26 @@ class ConditionalTriggerMixin(models.Model):
     class Meta:
         abstract = True
 
+    def save(self, *args, **kwargs):
+        """Normalise the stored conditions, then save.
+
+        Dropping blank rows is a change to the data, so it belongs here rather than in `clean()`. Doing it
+        on every save means a bare `save()` stores the same thing `validated_save()` would.
+        """
+        if self.conditions in (None, ""):
+            self.conditions = []
+        if isinstance(self.conditions, list):
+            self.conditions = [row for row in self.conditions if row not in (None, "", {}, [])]
+        super().save(*args, **kwargs)
+
     #
     # Scope
     #
+
+    @property
+    def has_conditional_trigger(self):
+        """Whether this action needs any evaluation beyond its object types and event flags."""
+        return bool(self.scope_filter) or bool(self.conditions)
 
     @property
     def scope_filter_model_class(self):
@@ -340,6 +374,20 @@ class ConditionalTriggerMixin(models.Model):
         if self.scope_filter:
             return {f"scope-{name}": value for name, value in self.scope_filter.items()}
         return {}
+
+    def watches_action(self, action):
+        """Whether this action's event flags include `action`, an `ObjectChangeActionChoices` value."""
+        return bool(
+            getattr(
+                self,
+                {
+                    ObjectChangeActionChoices.ACTION_CREATE: "type_create",
+                    ObjectChangeActionChoices.ACTION_UPDATE: "type_update",
+                    ObjectChangeActionChoices.ACTION_DELETE: "type_delete",
+                }.get(action, ""),
+                False,
+            )
+        )
 
     def set_scope_filter(self, form_data):
         """
@@ -358,6 +406,206 @@ class ConditionalTriggerMixin(models.Model):
             return
         self.scope_filter = build_filter_dict_from_filterset(filterset_class, form_data)
 
-    # PLACEHOLDER: validation and scope evaluation arrive in story 5 (Validate the scope filter
-    # and conditions at save time). Until then the two fields are stored and rendered, but
-    # nothing checks them and nothing evaluates them.
+    def get_in_scope_queryset(self, queryset, job_logger=logger):
+        """
+        Return a filtered version of `queryset` containing only the objects in scope.
+
+        If `scope_filter` is empty, `queryset` is returned unchanged, because an unscoped action
+        watches everything of its object types.
+
+        If the filter cannot be applied (the model has no filterset, or the stored filter names
+        something that filterset does not support) nothing is in scope and the problem is logged as an error. The
+        action is inert for that model until someone fixes the filter.
+
+        Fail closed, because a scope filter exists to narrow: widening it to every object would deliver
+        webhooks, and run job hooks, against objects the author deliberately excluded, and a delivery cannot
+        be recalled. An inert action is the recoverable failure. `CustomField.get_in_scope_queryset` fails
+        the other way on purpose: treating everything as in-scope there means provisioning a field on
+        more objects than needed, which is a correctable state instead of an action taken in the world.
+        """
+        if not self.scope_filter:
+            return queryset
+
+        model = queryset.model
+        filterset_class = get_filterset_for_model(model)
+        if not filterset_class:
+            job_logger.error(
+                "%s `%s` has a scope filter but no filterset exists for %s, so its scope cannot be "
+                "evaluated; it will not fire for %s until the filter is removed.",
+                self._meta.verbose_name,
+                self,
+                model._meta.label,
+                model._meta.label,
+            )
+            return queryset.none()
+
+        filterset = filterset_class(data=self.scope_filter, queryset=queryset)
+
+        unknown = unknown_filter_parameters(filterset, self.scope_filter)
+        if unknown:
+            job_logger.error(
+                "%s `%s` scope filter names parameter(s) %s that %s does not support, so its scope cannot "
+                "be evaluated; it will not fire for %s until the filter is corrected.",
+                self._meta.verbose_name,
+                self,
+                ", ".join(unknown),
+                model._meta.label,
+                model._meta.label,
+            )
+            return queryset.none()
+
+        if not filterset.form.is_valid():
+            job_logger.error(
+                "%s `%s` has an invalid scope filter for %s (%s), so its scope cannot be evaluated; it "
+                "will not fire for %s until the filter is corrected.",
+                self._meta.verbose_name,
+                self,
+                model._meta.label,
+                filterset.form.errors.as_text(),
+                model._meta.label,
+            )
+            return queryset.none()
+
+        return filterset.qs
+
+    def matches_scope(self, instance, job_logger=logger):
+        """
+        Return whether `instance` is in scope.
+
+        This runs inside a change-logging signal receiver, once per scoped action per changed object, so it
+        is deliberately the cheapest query the ORM can issue: the scope filter applied to a queryset already
+        constrained to a single primary key.
+        """
+        if not self.scope_filter:
+            return True
+        model = instance._meta.concrete_model
+        queryset = model.objects.filter(pk=instance.pk)
+        return self.get_in_scope_queryset(queryset, job_logger=job_logger).exists()
+
+    @staticmethod
+    def check_scope_filter(scope_filter, content_types):
+        """
+        Return an error message if `scope_filter` is not usable for every content type, or None if it is.
+
+        Validated against every selected content type, not just the first. An action watching two models
+        stores one filter for both, so a parameter only one of them supports would silently fail to scope
+        the other, which reads as "it fired for something out of scope".
+
+        A static method because the content types have to be passed in: they are many-to-many, so on a
+        create neither `clean()` nor a serializer's `validate()` can read them off the instance.
+
+        Args:
+            scope_filter (dict): The filter parameters to check.
+            content_types (iterable): The ContentTypes the action watches.
+
+        Returns:
+            (str): The problem, or None if there is none.
+        """
+        if not scope_filter:
+            return None
+        problems = []
+        for content_type in content_types:
+            model_class = content_type.model_class()
+            if model_class is None:
+                continue
+            filterset_class = get_filterset_for_model(model_class)
+            if filterset_class is None:
+                problems.append(f"{model_class._meta.label} has no filterset, so it cannot be scoped.")
+                continue
+            filterset = filterset_class(data=scope_filter, queryset=model_class.objects.none())
+            unknown = unknown_filter_parameters(filterset, scope_filter)
+            if unknown:
+                problems.append(f"{model_class._meta.label} has no filter parameter(s): {', '.join(unknown)}.")
+                continue
+            if not filterset.form.is_valid():
+                problems.append(filterset.form.errors.as_text())
+        # Every selected type is reported, so an action watching three models that all reject the filter
+        # is fixed in one pass instead of one save per model.
+        return " ".join(problems) if problems else None
+
+    #
+    # Validation
+    #
+
+    def clean_conditional_trigger(self):
+        """Validate the scope filter and conditions. Call this from the model's own `clean()`."""
+        self._clean_scope_filter()
+        self._clean_conditions()
+
+    def _clean_scope_filter(self):
+        """Reject a scope filter the model's filterset cannot understand, rather than finding out at event time."""
+        if not self.scope_filter:
+            return
+        if not isinstance(self.scope_filter, dict):
+            raise ValidationError({"scope_filter": "Scope filter must be a dictionary of filter parameters."})
+        if not self.present_in_database:
+            # content_types is a M2M and is not populated until after the first save, so there is no model to
+            # validate against yet. The form and serializer validate the filter at that point instead.
+            return
+        error = self.check_scope_filter(self.scope_filter, self.content_types.all())
+        if error:
+            raise ValidationError({"scope_filter": error})
+
+    def _clean_conditions(self):
+        """Reject condition rows that could not run: unknown preset, bad params, or an expression that won't compile.
+
+        Validates without normalising. Blank rows are skipped here and stripped in `save()`, so `clean()`
+        stays free of side effects and a caller that inspects `self.conditions` after validation sees what
+        it passed in.
+        """
+        from nautobot.extras.choices import ConditionTypeChoices
+        from nautobot.extras.conditions.engine import compile_condition, ConditionError
+        from nautobot.extras.conditions.presets import get_condition_preset
+
+        conditions = [] if self.conditions in (None, "") else self.conditions
+        if not isinstance(conditions, list):
+            raise ValidationError({"conditions": "Conditions must be a list of condition rows."})
+
+        # Every bad row is reported, so a user with three malformed rows fixes them in one pass rather
+        # than one save per row.
+        problems = []
+
+        for index, row in enumerate(conditions):
+            label = f"Condition {index + 1}"
+
+            # A blank row is what an untouched row on the form means and what an empty cell in a CSV
+            # import means. In both cases the intent is "no condition here", not "a condition I got wrong".
+            if row in (None, "", {}, []):
+                continue
+
+            if not isinstance(row, dict):
+                problems.append(f"{label}: each condition must be a dictionary.")
+                continue
+
+            if "negate" in row and not isinstance(row["negate"], bool):
+                problems.append(f"{label}: `negate` must be true or false.")
+                continue
+
+            row_type = row.get("type")
+            if row_type == ConditionTypeChoices.TYPE_PRESET:
+                preset = get_condition_preset(row.get("preset"))
+                if preset is None:
+                    problems.append(f"{label}: unknown preset `{row.get('preset')}`.")
+                    continue
+                try:
+                    preset.clean_params(row.get("params"))
+                except ValidationError as exc:
+                    problems.append(f"{label}: {' '.join(exc.messages)}")
+            elif row_type == ConditionTypeChoices.TYPE_EXPRESSION:
+                source = row.get("source")
+                if not isinstance(source, str) or not source.strip():
+                    problems.append(f"{label}: an expression row requires a `source`.")
+                    continue
+                try:
+                    compile_condition(source)
+                except ConditionError as exc:
+                    problems.append(f"{label}: {exc}")
+            else:
+                problems.append(
+                    f"{label}: unknown condition type `{row_type}`. "
+                    f"Expected `{ConditionTypeChoices.TYPE_PRESET}` or "
+                    f"`{ConditionTypeChoices.TYPE_EXPRESSION}`."
+                )
+
+        if problems:
+            raise ValidationError({"conditions": problems})

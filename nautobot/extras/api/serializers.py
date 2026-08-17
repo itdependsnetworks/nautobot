@@ -96,7 +96,7 @@ from nautobot.extras.models import (
     UserSavedViewAssociation,
     Webhook,
 )
-from nautobot.extras.models.mixins import NotesMixin
+from nautobot.extras.models.mixins import ConditionalTriggerMixin, NotesMixin
 from nautobot.extras.utils import (
     ChangeLoggedModelsQuery,
     FeatureQuery,
@@ -835,7 +835,7 @@ CONDITIONAL_TRIGGER_EXTRA_KWARGS = {
 
 
 class ConditionalTriggerSerializerMixin:
-    """Normalises the scope filter and conditions that `ConditionalTriggerMixin` adds to Webhooks and Job Hooks."""
+    """Validates the scope filter that `ConditionalTriggerMixin` adds to Webhooks and Job Hooks."""
 
     def validate(self, attrs):
         # A CSV round-trip turns an empty list into a cell containing an empty string, which arrives here
@@ -851,9 +851,22 @@ class ConditionalTriggerSerializerMixin:
         if "scope_filter" in attrs and attrs["scope_filter"] in ("", None, []):
             attrs["scope_filter"] = {}
 
-        # PLACEHOLDER: story 5 (Validate the scope filter and conditions at save time) checks the filter
-        # against the submitted content types here, before returning.
-        return super().validate(attrs)
+        validated_attrs = super().validate(attrs)
+
+        # content_types is many-to-many, so on a create the model's clean() has nothing to validate the
+        # scope filter against. Check it here against the submitted types, falling back to the stored ones
+        # on a PATCH that changes only one of the two.
+        scope_filter = attrs.get("scope_filter")
+        if scope_filter is None and self.instance is not None:
+            scope_filter = self.instance.scope_filter
+        content_types = attrs.get("content_types")
+        if content_types is None and self.instance is not None and self.instance.present_in_database:
+            content_types = self.instance.content_types.all()
+        error = ConditionalTriggerMixin.check_scope_filter(scope_filter, content_types or [])
+        if error:
+            raise serializers.ValidationError({"scope_filter": error})
+
+        return validated_attrs
 
 
 class JobHookSerializer(ConditionalTriggerSerializerMixin, NautobotModelSerializer):

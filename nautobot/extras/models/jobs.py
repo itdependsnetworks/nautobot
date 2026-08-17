@@ -491,6 +491,8 @@ class JobHook(ConditionalTriggerMixin, OrganizationalModel):
     def clean(self):
         super().clean()
 
+        self.clean_conditional_trigger()
+
         # At least one action type must be selected
         if not self.type_create and not self.type_delete and not self.type_update:
             raise ValidationError("You must select at least one type: create, update, and/or delete.")

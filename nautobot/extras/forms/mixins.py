@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = (  # noqa:RUF022
+    "ConditionalTriggerBulkEditFormMixin",
     "ContactTeamModelFilterFormMixin",
     "CustomFieldModelBulkEditFormMixin",
     "CustomFieldModelFilterFormMixin",
@@ -57,6 +58,29 @@ __all__ = (  # noqa:RUF022
 #
 # Form mixins
 #
+
+
+class ConditionalTriggerBulkEditFormMixin(BulkEditForm):
+    """Re-checks the scope filter of an action that carries `ConditionalTriggerMixin` after a bulk edit."""
+
+    def post_save(self, obj):
+        """
+        Apply the object-type changes, then re-check the scope filter against what they leave behind.
+
+        An action stores one scope filter for every object type it watches, so adding a type whose
+        filterset does not support one of the stored parameters leaves a filter that cannot be applied.
+        `clean()` cannot catch it: object types are many-to-many, so the bulk edit job adds them here,
+        after `full_clean()` and `save()` have already run. Without this the edit reports success and the
+        action goes silently inert for the added type, which is the one failure a user cannot see.
+
+        Raising rolls the surrounding transaction back; see `nautobot.core.jobs.bulk_actions`.
+        """
+        from nautobot.extras.models.mixins import ConditionalTriggerMixin
+
+        super().post_save(obj)
+        error = ConditionalTriggerMixin.check_scope_filter(obj.scope_filter, obj.content_types.all())
+        if error:
+            raise ValidationError({"add_content_types": error})
 
 
 class ContactTeamModelFilterFormMixin(forms.Form):

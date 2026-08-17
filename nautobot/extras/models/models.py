@@ -1065,6 +1065,8 @@ class Webhook(
     def clean(self):
         super().clean()
 
+        self.clean_conditional_trigger()
+
         # At least one action type must be selected
         if not self.type_create and not self.type_delete and not self.type_update:
             raise ValidationError("You must select at least one type: create, update, and/or delete.")
@@ -1115,7 +1117,12 @@ class Webhook(
         """
         Helper method for enforcing uniqueness.
 
-        Don't allow two webhooks with the same content_type, same payload_url, and any action(s) in common.
+        Don't allow two webhooks with the same content_type, same payload_url, and any action(s) in
+        common, unless they are distinguished by a scope filter or conditions. Two webhooks to one endpoint for
+        the same event used to mean the receiver got the same thing twice, which is what this prevents. Once
+        they carry different triggers they are deliberately different, which is how one endpoint serves
+        several reasons without duplicating its URL and secret across rows that cannot be told apart.
+
         Called by WebhookForm.clean() and WebhookSerializer.validate()
         """
 
@@ -1131,11 +1138,24 @@ class Webhook(
             type_update = instance.type_update if type_update is None else type_update
             type_delete = instance.type_delete if type_delete is None else type_delete
 
+        # A trigger that narrows when it fires is not a duplicate of one that does not, nor of one that
+        # narrows differently.
+        instance_trigger = (
+            (instance.scope_filter or {}, instance.conditions or []) if instance is not None else ({}, [])
+        )
+
         if content_types is not None:
             for content_type in content_types:
                 webhooks = cls.objects.filter(content_types__in=[content_type], payload_url=payload_url)
                 if instance and instance.present_in_database:
                     webhooks = webhooks.exclude(pk=instance.pk)
+                webhooks = webhooks.exclude(
+                    pk__in=[
+                        other.pk
+                        for other in webhooks
+                        if (other.scope_filter or {}, other.conditions or []) != instance_trigger
+                    ]
+                )
 
                 existing_type_create = webhooks.filter(type_create=type_create).exists() if type_create else False
                 existing_type_update = webhooks.filter(type_update=type_update).exists() if type_update else False

@@ -1,7 +1,10 @@
 """Tests for the condition evaluation engine, preset catalog, and payload builder."""
 
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 
+from nautobot.dcim.models import Device, Location
 from nautobot.extras.choices import ConditionTypeChoices, ObjectChangeActionChoices
 from nautobot.extras.conditions import engine
 from nautobot.extras.conditions.engine import (
@@ -19,6 +22,8 @@ from nautobot.extras.conditions.presets import (
     PresetParameter,
     register_condition_preset,
 )
+from nautobot.extras.models import Webhook
+from nautobot.extras.models.mixins import ConditionalTriggerMixin
 
 
 def expression_row(source):
@@ -521,3 +526,182 @@ class PayloadShapeTestCase(TestCase):
             {dict(ObjectChangeActionChoices)[a].lower() for a, _ in ObjectChangeActionChoices.CHOICES},
             {"created", "updated", "deleted"},
         )
+
+
+class ConditionalTriggerValidationTestCase(TestCase):
+    """A scope or condition that could not run must not be saveable."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+
+    def make_webhook(self, **kwargs):
+        kwargs.setdefault("name", "conditional webhook")
+        kwargs.setdefault("payload_url", "http://example.com/test")
+        kwargs.setdefault("type_update", True)
+        webhook = Webhook(**kwargs)
+        webhook.save()
+        webhook.content_types.set([self.device_ct])
+        return webhook
+
+    def test_a_valid_condition_saves(self):
+        webhook = self.make_webhook(conditions=[expression_row("data.name")])
+        webhook.validated_save()
+        self.assertEqual(str(webhook), "conditional webhook")
+
+    def test_unknown_preset_key_is_rejected(self):
+        webhook = self.make_webhook(conditions=[preset_row("no_such_preset")])
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("unknown preset", str(ctx.exception))
+
+    def test_bad_preset_params_are_rejected(self):
+        webhook = self.make_webhook(conditions=[preset_row("field_transition", field="status")])
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("requires parameter", str(ctx.exception))
+
+    def test_non_compiling_expression_is_rejected(self):
+        webhook = self.make_webhook(conditions=[expression_row("data.name ==")])
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("Condition 1", str(ctx.exception))
+
+    def test_unknown_condition_type_is_rejected(self):
+        webhook = self.make_webhook(conditions=[{"type": "nonsense"}])
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("unknown condition type", str(ctx.exception))
+
+    def test_conditions_must_be_a_list(self):
+        webhook = self.make_webhook(conditions={"type": "expression", "source": "true"})
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("must be a list", str(ctx.exception))
+
+    def test_error_message_names_the_offending_row(self):
+        webhook = self.make_webhook(conditions=[expression_row("true"), expression_row("data.name ==")])
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("Condition 2", str(ctx.exception))
+
+    def test_negate_must_be_a_boolean(self):
+        webhook = self.make_webhook(conditions=[{**expression_row("true"), "negate": "yes"}])
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("must be true or false", str(ctx.exception))
+
+    def test_blank_rows_are_dropped_rather_than_rejected(self):
+        webhook = self.make_webhook(conditions=[expression_row("true"), {}, None])
+        webhook.validated_save()
+        self.assertEqual(len(webhook.conditions), 1)
+
+    def test_unknown_scope_filter_parameter_is_rejected(self):
+        webhook = self.make_webhook(scope_filter={"no_such_param": "x"})
+        with self.assertRaises(ValidationError) as ctx:
+            webhook.validated_save()
+        self.assertIn("no filter parameter", str(ctx.exception))
+
+    def test_valid_scope_filter_is_accepted(self):
+        webhook = self.make_webhook(scope_filter={"name": ["device-1"]})
+        webhook.validated_save()
+
+    def test_empty_scope_and_conditions_are_allowed(self):
+        """The default state, and the one that must behave exactly as it did before this existed."""
+        webhook = self.make_webhook()
+        webhook.validated_save()
+        self.assertFalse(webhook.has_conditional_trigger)
+
+    def test_has_conditional_trigger(self):
+        self.assertTrue(self.make_webhook(conditions=[expression_row("true")]).has_conditional_trigger)
+        self.assertTrue(self.make_webhook(name="scoped", scope_filter={"name": ["x"]}).has_conditional_trigger)
+
+    def test_scope_filter_prefixed(self):
+        webhook = self.make_webhook(scope_filter={"name": ["device-1"]})
+        self.assertEqual(webhook.scope_filter_prefixed, {"scope-name": ["device-1"]})
+
+    def test_watches_action(self):
+        webhook = self.make_webhook(type_create=True, type_update=False, type_delete=True)
+        self.assertTrue(webhook.watches_action(ObjectChangeActionChoices.ACTION_CREATE))
+        self.assertFalse(webhook.watches_action(ObjectChangeActionChoices.ACTION_UPDATE))
+        self.assertTrue(webhook.watches_action(ObjectChangeActionChoices.ACTION_DELETE))
+
+    def test_job_hooks_validate_the_same_way(self):
+        """The mixin is shared, so a job hook rejects exactly what a webhook rejects."""
+        from nautobot.extras.models import Job, JobHook
+
+        job = Job.objects.filter(is_job_hook_receiver=True, installed=True, enabled=True).first()
+        if job is None:
+            self.skipTest("no installed and enabled job hook receiver")
+        job_hook = JobHook(
+            name="conditional job hook", job=job, type_update=True, conditions=[expression_row("data.name ==")]
+        )
+        job_hook.save()
+        job_hook.content_types.set([self.device_ct])
+        with self.assertRaises(ValidationError) as ctx:
+            job_hook.validated_save()
+        self.assertIn("Condition 1", str(ctx.exception))
+
+
+class ConditionalTriggerScopeTestCase(TestCase):
+    """`matches_scope` is what the signal receiver calls, once per scoped action per changed object."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+        cls.device = Device.objects.first()
+        cls.location = cls.device.location
+
+    def make_webhook(self, scope_filter):
+        webhook = Webhook(
+            name=f"scope-{len(scope_filter)}-{id(scope_filter)}",
+            payload_url="http://example.com/test",
+            type_update=True,
+            scope_filter=scope_filter,
+        )
+        webhook.save()
+        webhook.content_types.set([self.device_ct])
+        return webhook
+
+    def test_empty_scope_matches_everything_without_a_query(self):
+        webhook = self.make_webhook({})
+        with self.assertNumQueries(0):
+            self.assertTrue(webhook.matches_scope(self.device))
+
+    def test_matching_scope_returns_true(self):
+        self.assertTrue(self.make_webhook({"name": [self.device.name]}).matches_scope(self.device))
+
+    def test_non_matching_scope_returns_false(self):
+        self.assertFalse(self.make_webhook({"name": ["definitely-not-this-device"]}).matches_scope(self.device))
+
+    def test_scope_check_is_a_single_query(self):
+        webhook = self.make_webhook({"name": [self.device.name]})
+        with self.assertNumQueries(1):
+            webhook.matches_scope(self.device)
+
+    def test_unreadable_scope_matches_nothing(self):
+        """
+        A filter that cannot be applied makes the action inert, rather than firing for everything.
+
+        A scope filter exists to narrow, so widening it to every object would deliver webhooks and run job
+        hooks against objects the author excluded, and a delivery cannot be recalled.
+        """
+        webhook = self.make_webhook({"name": [self.device.name]})
+        Webhook.objects.filter(pk=webhook.pk).update(scope_filter={"no_such_param": "x"})
+        webhook.refresh_from_db()
+        with self.assertLogs("nautobot.extras.models.mixins", level="ERROR"):
+            self.assertFalse(webhook.matches_scope(self.device))
+
+    def test_invalid_scope_value_matches_nothing(self):
+        webhook = self.make_webhook({"name": [self.device.name]})
+        Webhook.objects.filter(pk=webhook.pk).update(scope_filter={"device_type": ["no-such-device-type"]})
+        webhook.refresh_from_db()
+        with self.assertLogs("nautobot.extras.models.mixins", level="ERROR"):
+            self.assertFalse(webhook.matches_scope(self.device))
+
+    def test_check_scope_filter_validates_every_content_type(self):
+        """One filter is stored for every watched type, so a parameter only one supports is rejected."""
+        location_ct = ContentType.objects.get_for_model(Location)
+        error = ConditionalTriggerMixin.check_scope_filter({"serial": ["ABC"]}, [self.device_ct, location_ct])
+        self.assertIsNotNone(error)
+        self.assertIn("Location", error)

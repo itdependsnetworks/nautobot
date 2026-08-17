@@ -127,6 +127,7 @@ from .base import (
     NautobotModelForm,
 )
 from .mixins import (
+    ConditionalTriggerBulkEditFormMixin,
     CustomFieldModelBulkEditFormMixin,
     CustomFieldModelFormMixin,
     NoteModelBulkEditFormMixin,
@@ -1724,7 +1725,7 @@ class JobFilterForm(BootstrapMixin, forms.Form):
     tags = TagFilterField(model)
 
 
-class JobHookBulkEditForm(NautobotBulkEditForm):
+class JobHookBulkEditForm(ConditionalTriggerBulkEditFormMixin, NautobotBulkEditForm):
     pk = forms.ModelMultipleChoiceField(queryset=JobHook.objects.all(), widget=forms.MultipleHiddenInput())
     job = DynamicModelChoiceField(
         queryset=Job.objects.all(),
@@ -2833,7 +2834,7 @@ class TagBulkEditForm(NautobotBulkEditForm):
 #
 # Webhooks
 #
-class WebhookBulkEditForm(BootstrapMixin, NoteModelBulkEditFormMixin):
+class WebhookBulkEditForm(ConditionalTriggerBulkEditFormMixin, BootstrapMixin, NoteModelBulkEditFormMixin):
     """Bulk edit form for Webhook objects."""
 
     pk = forms.ModelMultipleChoiceField(queryset=Webhook.objects.all(), widget=forms.MultipleHiddenInput())
