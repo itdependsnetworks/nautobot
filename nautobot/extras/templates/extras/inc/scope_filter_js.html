@@ -1,0 +1,74 @@
+{% comment %}
+    Script for the scope filter sub-form, shared by custom fields and conditional triggers.
+
+    Include inside the enclosing template's `{% block javascript %}`, alongside
+    `extras/inc/scope_filter_card.html` in the body. `filter_form.js` calls `reInitialize` and
+    `getInputName` by name, so those are globals rather than module-scoped.
+{% endcomment %}
+{% load helpers %}
+
+<script src="{% versioned_static 'js/filter_form.js' %}" onerror="nb.media.handleFailure(this)"></script>
+<script type="text/javascript">
+    /**
+     * Re-initialize select2 after HTMX swaps the scope filter card.
+     *
+     * Does nothing when the swap produced the empty-state message rather than a form.
+     */
+    const initializeScopeFilter = event => {
+        const container = document.getElementById('nb-scope-filter-form-container');
+        if (container && container.querySelector('#filter-tabs')) {
+            window.nb.select2.initializeSelect2Fields(event.target);
+        }
+    }
+
+    const getFilterForms = () => ({
+        defaultFilterForm: document.querySelector('#default-filter'),
+        dynamicFilterForm: document.querySelector('#advanced-filter'),
+    });
+
+    const isEventFromDefaultFilterFormField = (defaultFilterForm, event) => (
+        event.target.closest(`#${defaultFilterForm?.id}`) !== null
+    )
+
+    /** Called by filter_form.js when it needs select2 re-initialized. */
+    const reInitialize = element => {
+        window.nb.select2.initializeSelect2Fields(element)
+    }
+
+    /** Called by filter_form.js to name an input added on the Advanced tab. */
+    const getInputName = (name) => (`scope-${name}`)
+
+    document.addEventListener('DOMContentLoaded', () => {
+        /*
+         * Re-map select2's events to a plain `change` so the HTMX trigger on the content-type field fires.
+         * select2 signals changes through jQuery, which HTMX does not observe.
+         */
+        ['select2:select', 'select2:unselect', 'select2:clear'].forEach(function (evt) {
+            $('#id_content_types').on(evt, function () {
+                htmx.trigger('#id_content_types', 'change');
+            });
+        });
+
+        document.addEventListener('submit', (event) => {
+            const { defaultFilterForm, dynamicFilterForm } = getFilterForms();
+            if (!defaultFilterForm || !dynamicFilterForm) { return; }
+
+            /*
+             * Apply a filter chosen on the Advanced tab but not explicitly added, which users expect.
+             */
+            const add = dynamicFilterForm.querySelector('button.nb-dynamic-filter-add');
+            if (add) { add.click(); }
+
+            /*
+             * The two tabs hold the same data, so submitting both would duplicate it. Drop the names from
+             * the Basic tab's inputs immediately before submit.
+             */
+            defaultFilterForm
+                .querySelectorAll('input[name], select[name], textarea[name]')
+                .forEach(el => {
+                    el.dataset.originalName = el.name
+                    el.removeAttribute('name')
+                })
+        }, {capture: true});
+    });
+</script>

@@ -1337,7 +1337,123 @@ class ObjectAssignContactOrTeamView(generic.ObjectEditView):
 #
 
 
-class CustomFieldUIViewSet(NautobotUIViewSet):
+class ScopeFilterViewMixin:
+    """
+    Shared machinery for the "scope filter" sub-form.
+
+    A scope filter is a stored dict of FilterSet parameters, edited with the target model's own filter
+    form. Custom fields and conditional triggers both do this, so the context builder lives here instead of being
+    copied. The rendered markup and its script are shared too, via `extras/inc/scope_filter_card.html`
+    and `extras/inc/scope_filter_js.html`.
+
+    Fields are rendered under a `scope-` prefix so they cannot collide with the object's own form fields.
+    """
+
+    scope_filter_prefix = "scope"
+
+    def get_scope_filter_context(self, model_class, scope_filter_data=None):
+        """
+        Build the context the scope filter sub-form renders from.
+
+        Args:
+            model_class (Model): The model whose filter form should be offered.
+            scope_filter_data (dict): Either the filter stored on the object or a raw `request.POST`.
+
+        Returns:
+            (dict): Template context. `content_type_selected` is False when there is nothing to render.
+        """
+        prefix = self.scope_filter_prefix
+        if not scope_filter_data:
+            scope_filter_data = {}
+
+        # Drop empty values: some filter fields (e.g. NaturalKeyOrPKMultipleChoiceFilter) reject an empty
+        # list or string outright.
+        # TODO: remove once those filters tolerate empty input.
+        filtered = scope_filter_data.copy()
+        for key in list(filtered.keys()):
+            if key.startswith(f"{prefix}-"):
+                values = filtered.getlist(key) if hasattr(filtered, "getlist") else filtered.get(key)
+                if values in ("", None, [], [""], ()):
+                    filtered.pop(key)
+
+        filterset_class = get_filterset_for_model(model_class)
+        if filterset_class is None:
+            # Nothing to scope by; the template shows its empty-state message.
+            return {"content_type_selected": False}
+
+        filterset = filterset_class(data=filtered, queryset=model_class.objects.all(), prefix=prefix)
+        filterset_form_class = get_form_for_model(model_class, form_prefix="Filter")
+        filterset_form = filterset_form_class(filtered, prefix=prefix)
+        display_filter_params = [
+            check_filter_for_display(filterset.filters, field_name, values, prefix=prefix)
+            for field_name, values in filtered.items()
+            if field_name.startswith(f"{prefix}-")
+        ]
+        dynamic_filter_form = DynamicFilterFormSet(filterset=filterset)(form_kwargs={"filter_fields_prefix": prefix})
+
+        return {
+            "filterset": filterset,
+            "filter_params": display_filter_params,
+            "dynamic_filter_form": dynamic_filter_form,
+            "filter_form": filterset_form,
+            "content_type_selected": True,
+        }
+
+    def get_content_type_model_class(self, data):
+        """
+        Return the model class for the first selected object type, or None if none is selected yet.
+
+        Override to validate the selection more strictly; `CustomFieldUIViewSet` does, because its form
+        must reject an unusable content type rather than quietly offering no filter fields.
+        """
+        content_type_ids = data.getlist("content_types") if hasattr(data, "getlist") else data.get("content_types")
+        if not content_type_ids:
+            return None
+        try:
+            content_type = ContentType.objects.filter(pk__in=content_type_ids).first()
+        except (ValueError, TypeError):
+            return None
+        return content_type.model_class() if content_type else None
+
+    def get_scope_filter_fields_template(self):
+        """The template the HTMX endpoint below re-renders. Only part of it is swapped in; see there."""
+        return self.template_name
+
+    def get_scope_filter_fields_context(self, request, model_class):
+        """
+        Context for that re-render. `model_class` is None when no object type is selected yet.
+
+        Override to add view-specific context, or to answer differently when the rest of the form means
+        no filter should be offered at all.
+        """
+        if model_class is None:
+            return {"content_type_selected": False}
+        return self.get_scope_filter_context(model_class)
+
+    @action(
+        detail=False,
+        methods=["GET"],
+        url_path="scope-filter-fields",
+        url_name="scope_filter_fields",
+        custom_view_base_action="change",
+    )
+    def scope_filter_fields_for_content_types(self, request, *args, **kwargs):
+        """
+        HTMX endpoint re-rendering the scope filter fields when the selected object type changes.
+
+        This renders the whole template, but `hx-swap-oob` in it means HTMX swaps only the relevant part
+        of the page.
+        """
+        model_class = self.get_content_type_model_class(request.GET)
+        html = render_to_string(
+            template_name=self.get_scope_filter_fields_template(),
+            context=self.get_scope_filter_fields_context(request, model_class),
+            request=request,
+        )
+        return HttpResponse(html)
+
+
+class CustomFieldUIViewSet(ScopeFilterViewMixin, NautobotUIViewSet):
     bulk_update_form_class = forms.CustomFieldBulkEditForm
     queryset = CustomField.objects.all()
     serializer_class = serializers.CustomFieldSerializer
@@ -1449,53 +1565,6 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
 
         raise ValidationError(content_type_form.errors)
 
-    def get_scope_filter_context(self, model_class, scope_filter_data=None):
-        """
-        Function responsible for generating context for scope filter form.
-
-        `scope_filter_data` can be both: value from DB or plain request.POST
-        """
-        prefix = "scope"
-        if not scope_filter_data:
-            scope_filter_data = {}
-
-        # We need to drop empty values, because some type of fields (e.g. NaturalKeyOrPKMultipleChoiceFilter) don't accept empty list or str
-        # TODO: Remove this code after fix on NaturalKeyOrPKMultipleChoiceFilter and other
-        scope_filter_data_filtered = scope_filter_data.copy()
-        for key in list(scope_filter_data_filtered.keys()):
-            if key.startswith("scope-"):
-                if hasattr(scope_filter_data_filtered, "getlist"):
-                    values = scope_filter_data_filtered.getlist(key)
-                else:
-                    values = scope_filter_data_filtered.get(key)
-                if values in ("", None, [], [""], ()):
-                    scope_filter_data_filtered.pop(key)
-
-        filterset_class = get_filterset_for_model(model_class)
-        filterset = filterset_class(
-            data=scope_filter_data_filtered,
-            queryset=model_class.objects.all(),
-            prefix=prefix,
-        )
-        filterset_form_class = get_form_for_model(model_class, form_prefix="Filter")
-        filterset_form = filterset_form_class(scope_filter_data_filtered, prefix=prefix)
-        display_filter_params = [
-            # To avoid input name collision between scope filter fields and standard custom field form we're prefixing all the fields
-            check_filter_for_display(filterset.filters, field_name, values, prefix=prefix)
-            for field_name, values in scope_filter_data_filtered.items()
-            if field_name.startswith(f"{prefix}-")
-        ]
-
-        dynamic_filter_form = DynamicFilterFormSet(filterset=filterset)(form_kwargs={"filter_fields_prefix": prefix})
-
-        return {
-            "filterset": filterset,
-            "filter_params": display_filter_params,
-            "dynamic_filter_form": dynamic_filter_form,
-            "filter_form": filterset_form,
-            "content_type_selected": True,
-        }
-
     def form_save(self, form, **kwargs):
         obj = super().form_save(form, **kwargs)
 
@@ -1517,37 +1586,19 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
 
         return obj
 
-    @action(
-        detail=False,
-        methods=["GET"],
-        url_path="scope-filter-fields",
-        url_name="scope_filter_fields",
-        custom_view_base_action="change",
-    )
-    def scope_filter_fields_for_content_types(self, request, *args, **kwargs):
+    def get_scope_filter_fields_context(self, request, model_class):
         """
-        HTMX endpoint to re-render scope filter part of form on content type update.
+        As the base, except a required custom field offers no scope filter at all.
+
+        A required field must be populated on every object of its type, so scoping it to a subset would
+        contradict that; the template shows the explanation instead of filter fields.
         """
         required_checked = request.GET.get("required", None) == "on"
-        context = {"required_checked": required_checked}
-
-        model_class = self.get_content_type_model_class(request.GET)
-        if model_class and not required_checked:
-            context = self.get_scope_filter_context(model_class)
-
-        # It's rendering the whole template, but due to `hx-swap-oob` in template
-        # HTMX will swap only part of the page
-        html = render_to_string(
-            template_name=self.template_name,
-            context=context,
-            request=request,
-        )
-        return HttpResponse(html)
+        if model_class is None or required_checked:
+            return {"required_checked": required_checked}
+        return super().get_scope_filter_fields_context(request, model_class)
 
 
-#
-# Custom Links
-#
 class CustomLinkUIViewSet(NautobotUIViewSet):
     bulk_update_form_class = forms.CustomLinkBulkEditForm
     filterset_class = filters.CustomLinkFilterSet

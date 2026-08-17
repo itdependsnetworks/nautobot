@@ -2332,7 +2332,11 @@ class CustomFieldTestCase(
 
         response_content = response.content.decode(response.charset)
         self.assertIn("nb-scope-filter-form-container", response_content)
-        self.assertInHTML("Please select content types first to load scope filter available fields.", response_content)
+        self.assertInHTML(
+            "Select one or more object types to load the available scope filter fields. "
+            "An empty filter matches every object of the selected type(s).",
+            response_content,
+        )
 
     def test_scope_filter_fields_with_invalid_content_type(self):
         self.add_permissions("extras.change_customfield")
@@ -2344,7 +2348,11 @@ class CustomFieldTestCase(
 
         response_content = response.content.decode(response.charset)
         self.assertIn("nb-scope-filter-form-container", response_content)
-        self.assertInHTML("Please select content types first to load scope filter available fields.", response_content)
+        self.assertInHTML(
+            "Select one or more object types to load the available scope filter fields. "
+            "An empty filter matches every object of the selected type(s).",
+            response_content,
+        )
         self.assertNotIn('<select name="scope-location_type"', response_content)
         self.assertNotIn('<select name="scope-parent"', response_content)
 

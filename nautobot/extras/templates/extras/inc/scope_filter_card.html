@@ -1,0 +1,77 @@
+{% comment %}
+    Scope filter sub-form, shared by custom fields and conditional triggers.
+
+    Renders the target model's own filter form under a `scope-` prefix, so its inputs cannot collide with
+    the object's own fields. The context comes from `ScopeFilterViewMixin.get_scope_filter_context`, and
+    the enclosing template must include `extras/inc/scope_filter_js.html`.
+
+    The heading and empty-state text are defaults here rather than arguments, so every form using this
+    component reads the same. Only pass an override when a form genuinely differs.
+
+    Accepts:
+      scope_filter_disabled_message Shown instead of the form when scoping cannot apply at all, which is
+                                    specific to the including form (e.g. a required custom field).
+      scope_filter_title            Override the heading. Rarely needed.
+      scope_filter_empty_message    Override the empty-state text. Rarely needed.
+{% endcomment %}
+{% load form_helpers %}
+
+<div class="card" id="nb-scope-filter-form-container" hx-on::after-settle="initializeScopeFilter(event)">
+    <div class="card-header"><strong>{{ scope_filter_title|default:"Scope Filter" }}</strong></div>
+    {% if scope_filter_disabled_message %}
+        <div class="card-body text-center text-secondary p-20">
+            {{ scope_filter_disabled_message }}
+        </div>
+    {% elif content_type_selected %}
+        <div class="card-body">
+            <ul id="filter-tabs" class="nav nav-tabs">
+                {% if filter_form %}
+                    <li role="presentation" class="nav-item">
+                        <a class="nav-link active" href="#default-filter" role="tab" data-bs-toggle="tab">Basic</a>
+                    </li>
+                {% endif %}
+                {% if dynamic_filter_form %}
+                    <li role="presentation" class="nav-item">
+                        <a class="nav-link position-relative{% if not filter_form %} active{% endif %}" href="#advanced-filter" role="tab" data-bs-toggle="tab">Advanced</a>
+                    </li>
+                {% endif %}
+            </ul>
+            <div class="tab-content h-100">
+                {% if filter_form %}
+                    <div id="default-filter" role="tabpanel" class="tab-pane fade show active h-100 p-20">
+                        <div class="h-100 vstack">
+                            <div class="align-content-start flex-fill pb-20">
+                                {% for field in filter_form.hidden_fields %}{{ field }}{% endfor %}
+                                {% for field in filter_form.visible_fields %}
+                                    {% if field.name != "q" %}{% render_field field %}{% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                {% endif %}
+                {% if dynamic_filter_form %}
+                    <div id="advanced-filter" role="tabpanel" class="tab-pane fade{% if not filter_form %} show active{% endif %} h-100 p-20">
+                        <div class="align-content-start flex-fill pb-20">
+                            {{ dynamic_filter_form.management_form }}
+                            <div id="nb-add-filter-form">
+                                {% for field in dynamic_filter_form.0.visible_fields %}
+                                    {% render_field field container_class="nb-add-filter-form-field" %}
+                                {% endfor %}
+                            </div>
+                            <button class="nb-dynamic-filter-add btn btn-primary d-block ms-auto my-20" type="button">
+                                <span aria-hidden="true" class="mdi mdi-plus me-4"></span><!--
+                            -->Add Filter
+                            </button>
+                            <hr class="border-top my-20">
+                            {% include "inc/dynamic_filter_items.html" %}
+                        </div>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    {% else %}
+        <div class="card-body text-center text-secondary p-20">
+            {{ scope_filter_empty_message|default:"Select one or more object types to load the available scope filter fields. An empty filter matches every object of the selected type(s)." }}
+        </div>
+    {% endif %}
+</div>
