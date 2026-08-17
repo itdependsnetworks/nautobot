@@ -48,6 +48,8 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     ObjectChangeEventContextChoices,
 )
+from nautobot.extras.conditions.gate import should_fire
+from nautobot.extras.conditions.payload import build_event_payload
 from nautobot.extras.context_managers import web_request_context
 from nautobot.extras.forms import JobForm
 from nautobot.extras.jobs_console_log import JobConsoleLogExecutor
@@ -1458,7 +1460,7 @@ def run_console_log_job_and_return_job_result(self, *args, **kwargs):
     return executor.execute()
 
 
-def enqueue_job_hooks(object_change, may_reload_jobs=True, jobhook_queryset=None):
+def enqueue_job_hooks(object_change, may_reload_jobs=True, jobhook_queryset=None, snapshots=None, change_context=None):
     """
     Find job hook(s) assigned to this changed object type + action and enqueue them to be processed.
 
@@ -1466,6 +1468,10 @@ def enqueue_job_hooks(object_change, may_reload_jobs=True, jobhook_queryset=None
         object_change (ObjectChange): The change that may trigger JobHooks to execute.
         may_reload_jobs (bool): Whether to reload JobHook source code from disk to guarantee up-to-date code.
         jobhook_queryset (QuerySet): Previously retrieved set of JobHooks to potentially enqueue
+        snapshots (dict): Before/after data for `object_change`, used when a job hook has conditions.
+        change_context (ChangeContext): Carries the scope verdicts recorded by the change-logging
+            receivers. Passed in instead of read from the context variable because the dispatch stage runs
+            after `change_logging` has exited, by which point the variable is already reset.
 
     Returns:
         result (tuple[bool, QuerySet]): whether Jobs were reloaded here, and the jobhooks that were considered
@@ -1493,12 +1499,31 @@ def enqueue_job_hooks(object_change, may_reload_jobs=True, jobhook_queryset=None
     if not jobhook_queryset:  # not .exists() as we *want* to populate the queryset cache
         return jobs_reloaded, jobhook_queryset
 
+    # A job hook may narrow its object types further with a scope filter and conditions. Applied before
+    # reloading job modules below, so a change that matches nothing costs nothing. The payload is built
+    # only if some hook has conditions to read it; a scope filter alone never does.
+    payload = None
+    if any(job_hook.conditions for job_hook in jobhook_queryset):
+        snaps = snapshots if snapshots is not None else object_change.get_snapshots()
+        payload = build_event_payload(object_change, snaps)
+
+    if change_context is None:
+        from nautobot.extras.signals import change_context_state
+
+        change_context = change_context_state.get()
+
+    job_hooks = [
+        job_hook for job_hook in jobhook_queryset if should_fire(job_hook, object_change, change_context, payload)
+    ]
+    if not job_hooks:
+        return jobs_reloaded, jobhook_queryset
+
     # Enqueue the jobs related to the job_hooks
     if may_reload_jobs:
         get_jobs(reload=True)
         jobs_reloaded = True
 
-    for job_hook in jobhook_queryset:
+    for job_hook in job_hooks:
         job_model = job_hook.job
         if not job_model.installed or not job_model.enabled:
             logger.warning(

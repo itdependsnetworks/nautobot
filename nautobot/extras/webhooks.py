@@ -9,6 +9,8 @@ from django.utils import timezone
 import netaddr
 
 from nautobot.extras.choices import ObjectChangeActionChoices
+from nautobot.extras.conditions.gate import should_fire
+from nautobot.extras.conditions.payload import build_event_payload
 from nautobot.extras.models import Webhook
 from nautobot.extras.registry import registry
 from nautobot.extras.tasks import process_webhook
@@ -176,7 +178,7 @@ def validate_webhook_url(url):
     return chosen
 
 
-def enqueue_webhooks(object_change, snapshots=None, webhook_queryset=None):
+def enqueue_webhooks(object_change, snapshots=None, webhook_queryset=None, change_context=None):
     """
     Find Webhook(s) assigned to this instance + action and enqueue them to be processed.
 
@@ -184,6 +186,9 @@ def enqueue_webhooks(object_change, snapshots=None, webhook_queryset=None):
         object_change (ObjectChange): The change that may trigger Webhooks to be sent.
         snapshots (list): The before/after data snapshots corresponding to the object_change.
         webhook_queryset (QuerySet): Previously retrieved set of Webhooks to potentially send.
+        change_context (ChangeContext): Carries the scope verdicts recorded by the change-logging
+            receivers. Passed in instead of read from the context variable because the dispatch stage runs
+            after `change_logging` has exited, by which point the variable is already reset.
 
     Returns:
         webhook_queryset (QuerySet): for reuse when processing multiple ObjectChange with the same content-type+action.
@@ -207,23 +212,54 @@ def enqueue_webhooks(object_change, snapshots=None, webhook_queryset=None):
     if webhook_queryset:  # not .exists() as we *want* to populate the queryset cache
         if snapshots is None:
             snapshots = object_change.get_snapshots()
-        # fall back to object_data if object_data_v2 is not available
-        serialized_data = object_change.object_data_v2
-        if serialized_data is None:
-            serialized_data = object_change.object_data
+
+        # Built once, and only if some webhook actually has conditions to evaluate against it. A scope
+        # filter alone never reads the payload.
+        payload = None
+        if any(webhook.conditions for webhook in webhook_queryset):
+            payload = build_event_payload(object_change, snapshots)
+
+        if change_context is None:
+            from nautobot.extras.signals import change_context_state
+
+            change_context = change_context_state.get()
 
         # Enqueue the webhooks
         for webhook in webhook_queryset:
-            args = [
-                webhook.pk,
-                serialized_data,
-                model_name,
-                object_change.action,
-                str(timezone.now()),
-                object_change.user_name,
-                object_change.request_id,
-                snapshots,
-            ]
-            process_webhook.apply_async(args=args)
+            if not should_fire(webhook, object_change, change_context, payload):
+                continue
+            dispatch_webhook(webhook, object_change, snapshots=snapshots)
 
     return webhook_queryset
+
+
+def dispatch_webhook(webhook, object_change, snapshots=None):
+    """
+    Enqueue a single Webhook for delivery in response to `object_change`.
+
+    Split out of `enqueue_webhooks` so that conditional-trigger dispatch can send a webhook through exactly the
+    same code the legacy trigger path uses, rather than a second copy of it that could drift.
+
+    Args:
+        webhook (Webhook): The webhook to send.
+        object_change (ObjectChange): The change that triggered it.
+        snapshots (dict): Before/after data snapshots; computed from `object_change` if not supplied.
+    """
+    if snapshots is None:
+        snapshots = object_change.get_snapshots()
+    # fall back to object_data if object_data_v2 is not available
+    serialized_data = object_change.object_data_v2
+    if serialized_data is None:
+        serialized_data = object_change.object_data
+
+    args = [
+        webhook.pk,
+        serialized_data,
+        object_change.changed_object_type.model,
+        object_change.action,
+        str(timezone.now()),
+        object_change.user_name,
+        object_change.request_id,
+        snapshots,
+    ]
+    process_webhook.apply_async(args=args)

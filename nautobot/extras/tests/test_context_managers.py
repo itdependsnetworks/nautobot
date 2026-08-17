@@ -94,16 +94,40 @@ class WebRequestContextTestCase(TestCase):
         self.assertEqual(len(oc_list), 2)
         self.assertEqual(oc_list[0].action, ObjectChangeActionChoices.ACTION_CREATE)
         self.assertEqual(oc_list[1].action, ObjectChangeActionChoices.ACTION_DELETE)
+        # `snapshots` and `change_context` are passed explicitly because conditional triggers evaluate
+        # after `change_logging` has exited, by which point the context variable is already reset.
         mock_enqueue_job_hooks.assert_has_calls(
             [
-                mock.call(oc_list[0], may_reload_jobs=True, jobhook_queryset=None),
-                mock.call(oc_list[1], may_reload_jobs=False, jobhook_queryset=None),
+                mock.call(
+                    oc_list[0],
+                    may_reload_jobs=True,
+                    jobhook_queryset=None,
+                    snapshots=oc_list[0].get_snapshots(),
+                    change_context=mock.ANY,
+                ),
+                mock.call(
+                    oc_list[1],
+                    may_reload_jobs=False,
+                    jobhook_queryset=None,
+                    snapshots=oc_list[1].get_snapshots(),
+                    change_context=mock.ANY,
+                ),
             ],
         )
         mock_enqueue_webhooks.assert_has_calls(
             [
-                mock.call(oc_list[0], snapshots=oc_list[0].get_snapshots(), webhook_queryset=None),
-                mock.call(oc_list[1], snapshots=oc_list[1].get_snapshots(), webhook_queryset=None),
+                mock.call(
+                    oc_list[0],
+                    snapshots=oc_list[0].get_snapshots(),
+                    webhook_queryset=None,
+                    change_context=mock.ANY,
+                ),
+                mock.call(
+                    oc_list[1],
+                    snapshots=oc_list[1].get_snapshots(),
+                    webhook_queryset=None,
+                    change_context=mock.ANY,
+                ),
             ]
         )
 

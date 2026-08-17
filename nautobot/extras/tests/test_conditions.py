@@ -14,6 +14,7 @@ from nautobot.extras.conditions.engine import (
     evaluate_conditions,
     resolve_condition,
 )
+from nautobot.extras.conditions.gate import invalidate_scoped_action_cache, scoped_actions_for_model
 from nautobot.extras.conditions.payload import event_value
 from nautobot.extras.conditions.presets import (
     ConditionPreset,
@@ -641,6 +642,86 @@ class ConditionalTriggerValidationTestCase(TestCase):
         with self.assertRaises(ValidationError) as ctx:
             job_hook.validated_save()
         self.assertIn("Condition 1", str(ctx.exception))
+
+
+class ScopedActionCacheTestCase(TestCase):
+    """The per-model lookup the change-logging receivers use, and its invalidation."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+        cls.location_ct = ContentType.objects.get_for_model(Location)
+
+    def setUp(self):
+        super().setUp()
+        invalidate_scoped_action_cache()
+
+    def make_webhook(self, name, scope_filter=None, content_type=None, enabled=True):
+        webhook = Webhook(
+            name=name,
+            payload_url="http://example.com/test",
+            type_update=True,
+            enabled=enabled,
+            scope_filter=scope_filter if scope_filter is not None else {"name": ["anything"]},
+        )
+        webhook.save()
+        webhook.content_types.set([content_type or self.device_ct])
+        return webhook
+
+    def test_nothing_scoped_returns_empty(self):
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_returns_scoped_actions_for_the_model(self):
+        webhook = self.make_webhook("scoped")
+        found = scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual([item.pk for item in found], [webhook.pk])
+
+    def test_unscoped_actions_are_excluded(self):
+        """An action with no scope filter needs no query while the change is in flight."""
+        self.make_webhook("unscoped", scope_filter={})
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_action_filter_narrows_the_result(self):
+        self.make_webhook("scoped")
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_DELETE), [])
+
+    def test_disabled_actions_are_excluded(self):
+        self.make_webhook("disabled", enabled=False)
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_actions_for_another_model_are_excluded(self):
+        self.make_webhook("elsewhere", content_type=self.location_ct)
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_creating_an_action_invalidates_a_cached_empty_result(self):
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+        webhook = self.make_webhook("late")
+        found = scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual([item.pk for item in found], [webhook.pk])
+
+    def test_editing_an_action_invalidates_the_cache(self):
+        webhook = self.make_webhook("edited")
+        scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
+        webhook.enabled = False
+        webhook.save()
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_deleting_an_action_invalidates_the_cache(self):
+        webhook = self.make_webhook("doomed")
+        scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
+        webhook.delete()
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_changing_content_types_invalidates_the_cache(self):
+        webhook = self.make_webhook("moved")
+        scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
+        webhook.content_types.set([self.location_ct])
+        self.assertEqual(scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE), [])
+
+    def test_a_lookup_costs_no_queries_once_cached(self):
+        scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
+        with self.assertNumQueries(0):
+            scoped_actions_for_model(Device, ObjectChangeActionChoices.ACTION_UPDATE)
 
 
 class ConditionalTriggerScopeTestCase(TestCase):

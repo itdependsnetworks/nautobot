@@ -30,6 +30,7 @@ from nautobot.extras.choices import (
     JobResultStatusChoices,
     ObjectChangeActionChoices,
 )
+from nautobot.extras.conditions.gate import invalidate_scoped_action_cache, record_scope_matches
 from nautobot.extras.constants import CHANGELOG_MAX_CHANGE_CONTEXT_DETAIL, PENDING_WORKFLOWS_ERROR_CODE
 from nautobot.extras.customfields import enqueue_custom_field_job
 from nautobot.extras.models import (
@@ -41,11 +42,13 @@ from nautobot.extras.models import (
     DynamicGroupMembership,
     GitRepository,
     Job as JobModel,
+    JobHook,
     JobQueue as JobQueueModel,
     JobResult,
     MetadataType,
     ObjectChange,
     Relationship,
+    Webhook,
 )
 from nautobot.extras.models.approvals import (
     ApprovalWorkflow,
@@ -201,6 +204,23 @@ def invalidate_models_cache(sender, **kwargs):
             cache.delete_pattern(f"{cache_key}(*)")
 
 
+@receiver(post_save, sender=Webhook)
+@receiver(post_delete, sender=Webhook)
+@receiver(m2m_changed, sender=Webhook.content_types.through)
+@receiver(post_save, sender=JobHook)
+@receiver(post_delete, sender=JobHook)
+@receiver(m2m_changed, sender=JobHook.content_types.through)
+def invalidate_scoped_action_cache_receiver(sender, **kwargs):
+    """
+    Invalidate the per-model lookup of scoped Webhooks and Job Hooks used by the change-logging receivers.
+
+    Without this an edited scope would keep its old behavior until the cache happened to be dropped.
+    Worse, a newly scoped action would never take effect on a model whose empty result was already
+    cached.
+    """
+    invalidate_scoped_action_cache()
+
+
 @receiver(post_delete, sender=CustomField)
 @receiver(post_delete, sender=CustomFieldChoice)
 @receiver(post_save, sender=CustomFieldChoice)
@@ -287,6 +307,21 @@ def _object_change_branch_name(instance):
         return None  # no need to switch branches
 
     return DOLT_DEFAULT_BRANCH  # need to switch temporarily to the default `main` branch for this record
+
+
+def _record_scope_matches(action, instance):
+    """
+    Record which scoped Webhooks and Job Hooks have `instance` in scope, for the dispatch stage to read.
+
+    Scope has to be decided here instead of at dispatch time. Dispatch runs when the request or job
+    finishes, by which point a deleted object's row is gone and no query can reach it. Deciding it in the
+    receiver, while the change is still in flight, also pins the answer to the state that caused the event.
+
+    Installations where nothing is scoped pay one cache read and no queries.
+    """
+    if not hasattr(instance, "to_objectchange"):
+        return
+    record_scope_matches(change_context_state.get(), action, instance)
 
 
 @receiver(post_save)
@@ -410,6 +445,9 @@ def _create_or_update_object_change(change_context, instance, action):
         # restore field cache
         instance._state.fields_cache = original_cache
 
+        # Inside the BranchContext, so the scope query reads the same branch the change is written to.
+        _record_scope_matches(action, instance)
+
 
 def _record_m2m_side_object_changes(change_context, through_instance, side_field_names):
     """
@@ -513,6 +551,10 @@ def _handle_deleted_object(sender, instance, **kwargs):
 
             # restore field cache
             instance._state.fields_cache = original_cache
+
+            # This is the pre_delete receiver, the last point at which the row still exists to be queried.
+            # Inside the BranchContext, so the scope query reads the same branch the change is written to.
+            _record_scope_matches(ObjectChangeActionChoices.ACTION_DELETE, instance)
 
     # Increment metric counters
     model_deletes.labels(instance._meta.model_name).inc()

@@ -1,6 +1,6 @@
 from copy import deepcopy
 import json
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 import uuid
 
 from django.apps import apps
@@ -518,7 +518,9 @@ class WebhookTest(APITestCase):
         all_changes = get_changes_for_model(location)
         self.assertEqual(all_changes.count(), 1)
         change = all_changes.first()
-        mock_enqueue_webhooks.assert_called_once_with(change, snapshots=change.get_snapshots(), webhook_queryset=None)
+        mock_enqueue_webhooks.assert_called_once_with(
+            change, snapshots=change.get_snapshots(), webhook_queryset=None, change_context=ANY
+        )
 
     def test_all_webhook_supported_models(self):
         """

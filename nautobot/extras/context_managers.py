@@ -34,6 +34,13 @@ class ChangeContext:
 
         pre_object_data (dict): Optional dictionary of serialized object data to be used in the object snapshot
         pre_object_data_v2 (dict): Optional dictionary of serialized object data to be used in the object snapshot
+
+    Attributes:
+        scope_matches (dict): Maps `(str(object_pk), action)` to the set of Webhook and Job Hook PKs whose
+            scope filter matched that object. Written by the change-logging receivers while the change is in
+            flight (the only point at which a to-be-deleted row can still be queried) and read by the
+            dispatch stage below. The action is part of the key because one request can produce several
+            actions for the same object, each with its own set of watching actions.
     """
 
     defer_object_changes = False  # advanced usage, for creating object changes in bulk
@@ -70,6 +77,7 @@ class ChangeContext:
             self.change_id = uuid.uuid4()
         self.pre_object_data = pre_object_data
         self.pre_object_data_v2 = pre_object_data_v2
+        self.scope_matches = {}
 
     def get_user(self, instance=None):
         """Return self.user if set, otherwise return self.request.user"""
@@ -256,21 +264,27 @@ def web_request_context(
                     jobhook_queryset = None
                     webhook_queryset = None
 
-                if context != ObjectChangeEventContextChoices.CONTEXT_JOB_HOOK:
-                    # Make sure JobHooks are up to date (only once) before calling them
-                    did_reload_jobs, jobhook_queryset = enqueue_job_hooks(
-                        oc, may_reload_jobs=(not jobs_reloaded), jobhook_queryset=jobhook_queryset
-                    )
-                    if did_reload_jobs:
-                        jobs_reloaded = True
-
                 # TODO: get_snapshots() currently requires a DB query per object change processed.
                 # We need to develop a more efficient approach: https://github.com/nautobot/nautobot/issues/6303
                 snapshots = oc.get_snapshots(
                     pre_object_data.get(str(oc.changed_object_id), None) if pre_object_data else None,
                     pre_object_data_v2.get(str(oc.changed_object_id), None) if pre_object_data_v2 else None,
                 )
-                webhook_queryset = enqueue_webhooks(oc, snapshots=snapshots, webhook_queryset=webhook_queryset)
+
+                if context != ObjectChangeEventContextChoices.CONTEXT_JOB_HOOK:
+                    # Make sure JobHooks are up to date (only once) before calling them
+                    did_reload_jobs, jobhook_queryset = enqueue_job_hooks(
+                        oc,
+                        may_reload_jobs=(not jobs_reloaded),
+                        jobhook_queryset=jobhook_queryset,
+                        snapshots=snapshots,
+                        change_context=change_context,
+                    )
+                    if did_reload_jobs:
+                        jobs_reloaded = True
+                webhook_queryset = enqueue_webhooks(
+                    oc, snapshots=snapshots, webhook_queryset=webhook_queryset, change_context=change_context
+                )
 
                 # topic examples: "nautobot.change.dcim.device", "nautobot.add.ipam.ipaddress"
                 event_topic = f"nautobot.{oc.action}.{oc.changed_object_type.app_label}.{oc.changed_object_type.model}"
