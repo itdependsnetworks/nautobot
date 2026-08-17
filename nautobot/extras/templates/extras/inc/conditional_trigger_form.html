@@ -1,0 +1,169 @@
+{% comment %}
+    The scope filter and conditions editor, shared by the Webhook and Job Hook forms.
+
+    Both models carry `ConditionalTriggerMixin`, so both edit these the same way. The including template
+    must be rendered by a view using `ConditionalTriggerViewMixin`, which supplies `conditions`,
+    `condition_presets_json` and the scope filter context.
+{% endcomment %}
+{% load form_helpers %}
+
+<style type="text/css">
+
+        /*
+         * Conditions are laid out mobile-first and widen at Bootstrap's breakpoints.
+         *
+         * Fixed widths were wrong: the row is only ~274px wide at 576px and ~1065px at 1920px, and a
+         * comparison row needs three parameters. So the parameters flex to share whatever room is left,
+         * with a minimum that keeps them legible, and the selects widen a step at a time.
+         */
+        .nb-conditions .nb-condition-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            gap: 0.375rem;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--bs-border-color, #dee2e6);
+        }
+        .nb-conditions .nb-condition-row:last-of-type { border-bottom: 0; }
+
+        /* Narrow screens: one control per line, each full width. Nothing else fits honestly. */
+        .nb-conditions .nb-condition-part { flex: 1 1 100%; }
+        .nb-conditions .nb-condition-values { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+        .nb-conditions .nb-condition-values > .nb-condition-value { flex: 1 1 100%; }
+        /*
+         * Every select2 fills its own slot. The width has to be forced because select2 writes an inline
+         * pixel width when it initializes, measured before these rules apply.
+         */
+        .nb-conditions .nb-condition-part > .select2-container,
+        .nb-conditions .nb-condition-value .select2-container,
+        .nb-conditions .nb-condition-value input[type="text"] { width: 100% !important; }
+        .nb-conditions .nb-condition-and { align-self: center; font-style: italic; }
+        .nb-conditions .nb-condition-negate {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            min-height: 2.25rem;
+        }
+        .nb-conditions .nb-condition-negate input { margin: 0; }
+
+        /* >= md: controls sit side by side, parameters sharing the remaining width. */
+        @media (min-width: 768px) {
+            .nb-conditions .nb-condition-and { flex: 0 0 auto; min-width: 2.2rem; }
+            .nb-conditions .nb-condition-part { flex: 0 0 auto; }
+            .nb-conditions .nb-condition-option > .select2-container { width: 13rem !important; }
+            /*
+             * At this width three parameters cannot share a line with both selects, so they get a line of
+             * their own, reserved even when the chosen preset has none, so the row's height does not
+             * change as presets are switched.
+             */
+            .nb-conditions .nb-condition-values { flex: 1 1 100%; min-height: 2.25rem; }
+            .nb-conditions .nb-condition-values > .nb-condition-value {
+                flex: 1 1 4rem;
+                min-width: 3.5rem;
+                max-width: 14rem;
+            }
+            .nb-conditions .nb-condition-value input[type="text"],
+            .nb-conditions .nb-condition-value .select2-container { width: 100% !important; }
+            .nb-conditions .nb-condition-value select { width: 100%; }
+            /*
+             * The operator gets a fixed slot rather than an equal share: its longest label ("starts with")
+             * needs more room than a value input does, and unlike a value it cannot be scrolled to read.
+             */
+            .nb-conditions .nb-condition-values > .nb-condition-value[data-value-for="param_operator"] {
+                flex: 0 0 9.5rem;
+            }
+            /* The raw expression is the one input worth all the room available. */
+            .nb-conditions .nb-condition-values > .nb-condition-value[data-value-for="source"] {
+                flex: 1 1 100%;
+                max-width: none;
+            }
+            /* The formset plugin appends its delete button as the row's last child. */
+            .nb-conditions .nb-condition-row > *:last-child { margin-left: auto; }
+        }
+
+        /* >= lg (row ~690px): the parameters fit alongside the selects, so the row is one line. */
+        @media (min-width: 992px) {
+            /*
+             * No wrapping from here up. The parameters can shrink towards their minimum, which keeps the
+             * delete button on the same line as everything else. If it wraps, the row doubles in height,
+             * which is the jumping this layout exists to avoid.
+             */
+            .nb-conditions .nb-condition-row,
+            .nb-conditions .nb-condition-values { flex-wrap: nowrap; }
+            .nb-conditions .nb-condition-values { flex: 1 1 auto; min-width: 0; min-height: 0; }
+            .nb-conditions .nb-condition-values > .nb-condition-value { flex: 0 1 5rem; min-width: 3.5rem; }
+        }
+
+        /* >= xl (row ~741px): room to let the parameters breathe. */
+        @media (min-width: 1200px) {
+            .nb-conditions .nb-condition-values > .nb-condition-value { flex: 0 1 6rem; min-width: 4rem; }
+        }
+
+        /*
+         * The widest parameters. Gated at 1600px rather than Bootstrap's 1400px xxl breakpoint because the
+         * page's container is what matters, not the viewport: the row is ~741px at 1200px, *narrower* at
+         * 1400px, and only reaches ~851px at 1600px. Widening at 1400px would spend room that is not there.
+         */
+        @media (min-width: 1600px) {
+            .nb-conditions .nb-condition-option > .select2-container { width: 14rem !important; }
+            .nb-conditions .nb-condition-values > .nb-condition-value { flex: 0 1 7rem; }
+        }
+    </style>
+{% comment %}
+    Marks a POST as coming from this editor. Without it, a request that predates these fields (an old
+    script, or an App posting the webhook form the way it always has) would arrive with no conditions
+    formset and no scope inputs, and be read as "clear them both". Absent marker means leave both alone.
+{% endcomment %}
+<input type="hidden" name="conditional_trigger_form" value="1">
+
+    {% comment %}
+        Conditions before the scope filter: the conditions are the rule's substance, while the filter is
+        optional and only loads once an object type is chosen.
+    {% endcomment %}
+    <div class="card" id="nb-event-rule-conditions-card">
+        <div class="card-header"><strong>Conditions</strong></div>
+        <div class="card-body">
+            <p class="text-secondary">
+                <strong>Every</strong> condition must pass for the rule to fire. A rule with no conditions
+                fires for every in-scope change.
+            </p>
+            {{ conditions.non_form_errors }}
+            {% comment %}
+                One flex line per condition rather than a table. A table forced every parameter into one
+                narrow cell, where they stacked vertically and changed the row's height each time a preset
+                was chosen, so the whole grid shifted under the cursor. On a single line, choosing a preset
+                changes which inputs are present, not how tall the row is.
+            {% endcomment %}
+            <div id="event-rule-conditions" class="nb-conditions">
+                {{ conditions.management_form }}
+                {% for condition in conditions.forms %}
+                    <div class="formset_row-{{ conditions.prefix }} nb-condition-row">
+                        <span class="nb-condition-and text-secondary">and</span>
+                        {% for hidden in condition.hidden_fields %}{{ hidden }}{% endfor %}
+                        {% comment %}
+                            One select for the whole choice: a raw expression is listed alongside the
+                            presets, so there is no separate "type" to answer first.
+                        {% endcomment %}
+                        <span class="nb-condition-part nb-condition-option">
+                            {{ condition.condition }}
+                            {% include "extras/inc/condition_errors.html" with field=condition.condition %}
+                        </span>
+                        <span class="nb-condition-part nb-condition-values">
+                            {% for field in condition.value_fields %}
+                                <span class="nb-condition-value" data-value-for="{{ field.name }}">
+                                    {{ field }}
+                                    {% include "extras/inc/condition_errors.html" with field=field %}
+                                </span>
+                            {% endfor %}
+                        </span>
+                        <span class="nb-condition-part nb-condition-negate" title="Pass when this condition does NOT hold">
+                            {{ condition.negate }}
+                            <label for="{{ condition.negate.id_for_label }}" class="mb-0">not</label>
+                        </span>
+                        <span class="nb-condition-part nb-condition-delete">{{ condition.DELETE }}</span>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% include "extras/inc/scope_filter_card.html" %}

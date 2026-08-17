@@ -1,0 +1,8 @@
+{% if field.errors %}
+    <ul class="mb-0 ps-16">
+        {% for error in field.errors %}
+            <!-- FORM-ERROR {{ field.name }}: {{ error }} -->
+            <li class="text-danger">{{ error }}</li>
+        {% endfor %}
+    </ul>
+{% endif %}

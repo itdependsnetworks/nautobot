@@ -1,0 +1,27 @@
+{% extends 'generic/object_create.html' %}
+{% load form_helpers %}
+
+{% comment %}
+    The create/edit form for an action that carries a conditional trigger, plus the scope filter and
+    conditions editor. Shared by Webhooks and Job Hooks, and by any action type that later mixes in
+    `ConditionalTriggerViewMixin`; nothing here is specific to one of them.
+
+    The form block is spelled out rather than extended, so the conditions and scope cards sit between the
+    model's own fields and the tags/custom-fields block, which is the order they are configured in.
+{% endcomment %}
+
+{% block form %}
+    <div class="card">
+        <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
+        <div class="card-body">
+            {% render_form form %}
+        </div>
+    </div>
+    {% include "extras/inc/conditional_trigger_form.html" %}
+    {% include 'inc/extras_features_edit_form_fields.html' %}
+{% endblock form %}
+
+{% block javascript %}
+    {{ block.super }}
+    {% include "extras/inc/conditional_trigger_js.html" %}
+{% endblock javascript %}

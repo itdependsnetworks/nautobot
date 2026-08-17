@@ -1,5 +1,6 @@
 from collections import OrderedDict
 import json
+import logging
 
 from db_file_storage.model_utils import delete_file, delete_file_if_needed
 from db_file_storage.storage import DatabaseFileStorage
@@ -33,6 +34,7 @@ from nautobot.extras.choices import (
 from nautobot.extras.constants import HTTP_CONTENT_TYPE_JSON
 from nautobot.extras.models import ChangeLoggedModel
 from nautobot.extras.models.mixins import (
+    ConditionalTriggerMixin,
     ContactMixin,
     DataComplianceModelMixin,
     DynamicGroupsModelMixin,
@@ -47,6 +49,9 @@ from nautobot.extras.utils import extras_features, FeatureQuery, image_upload
 from .jobs import Job, JOB_LOGS, JobLogEntry, JobResult, ScheduledJob, ScheduledJobs  # noqa: F401  # unused-import
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
+
 #
 # Config contexts
 #
@@ -974,6 +979,7 @@ class UserSavedViewAssociation(BaseModel):
 @extras_features("graphql")
 class Webhook(
     ChangeLoggedModel,
+    ConditionalTriggerMixin,
     ContactMixin,
     DynamicGroupsModelMixin,
     NotesMixin,

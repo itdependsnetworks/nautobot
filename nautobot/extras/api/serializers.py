@@ -822,7 +822,41 @@ class JobClassDetailSerializer(JobClassSerializer):
     result = JobResultSerializer(required=False)
 
 
-class JobHookSerializer(NautobotModelSerializer):
+# `scope_filter` is `editable=False` on the model, because it is written through a filter form rather
+# than typed into a field. Left alone that makes it read-only to the API, and a client's scope would be
+# accepted and silently dropped, creating an action that fires for every object of its type.
+#
+# This has to be `Meta.extra_kwargs` on each serializer rather than a field declared on the mixin below:
+# DRF collects declared fields only from bases that have `_declared_fields`, and a hand-declared
+# `JSONField` would also lose the `DjangoJSONEncoder` that `ModelSerializer` copies off the model field.
+CONDITIONAL_TRIGGER_EXTRA_KWARGS = {
+    "scope_filter": {"read_only": False, "required": False},
+}
+
+
+class ConditionalTriggerSerializerMixin:
+    """Normalises the scope filter and conditions that `ConditionalTriggerMixin` adds to Webhooks and Job Hooks."""
+
+    def validate(self, attrs):
+        # A CSV round-trip turns an empty list into a cell containing an empty string, which arrives here
+        # as `[""]` rather than `[]`. Normalise before validating so an exported-then-reimported action
+        # matches the one it came from.
+        #
+        # Both checks test for the key's presence first. On a PATCH, `attrs` holds only the fields the
+        # client sent, so a field that is simply absent must be left alone; treating absent as empty would
+        # let any partial update clear a scope the client never mentioned, silently widening the trigger to
+        # every object of its type.
+        if isinstance(attrs.get("conditions"), list):
+            attrs["conditions"] = [row for row in attrs["conditions"] if row not in (None, "", {}, [])]
+        if "scope_filter" in attrs and attrs["scope_filter"] in ("", None, []):
+            attrs["scope_filter"] = {}
+
+        # PLACEHOLDER: story 5 (Validate the scope filter and conditions at save time) checks the filter
+        # against the submitted content types here, before returning.
+        return super().validate(attrs)
+
+
+class JobHookSerializer(ConditionalTriggerSerializerMixin, NautobotModelSerializer):
     content_types = ContentTypeField(
         queryset=ChangeLoggedModelsQuery().as_queryset(),
         many=True,
@@ -831,6 +865,7 @@ class JobHookSerializer(NautobotModelSerializer):
     class Meta:
         model = JobHook
         fields = "__all__"
+        extra_kwargs = CONDITIONAL_TRIGGER_EXTRA_KWARGS
 
     def validate(self, attrs):
         validated_attrs = super().validate(attrs)
@@ -1268,7 +1303,7 @@ class TeamSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):
 #
 
 
-class WebhookSerializer(ValidatedModelSerializer, NotesSerializerMixin):
+class WebhookSerializer(ConditionalTriggerSerializerMixin, ValidatedModelSerializer, NotesSerializerMixin):
     content_types = ContentTypeField(
         queryset=ContentType.objects.filter(FeatureQuery("webhooks").get_query()).order_by("app_label", "model"),
         many=True,
@@ -1277,6 +1312,7 @@ class WebhookSerializer(ValidatedModelSerializer, NotesSerializerMixin):
     class Meta:
         model = Webhook
         fields = "__all__"
+        extra_kwargs = CONDITIONAL_TRIGGER_EXTRA_KWARGS
 
     def validate(self, attrs):
         validated_attrs = super().validate(attrs)

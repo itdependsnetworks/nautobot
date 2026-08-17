@@ -1,0 +1,104 @@
+{% comment %}
+    Script for the shared scope filter and conditions editor; include inside `{% block javascript %}`.
+{% endcomment %}
+    {{ condition_presets_json|json_script:"nb-condition-presets" }}
+    {% include "extras/inc/scope_filter_js.html" %}
+    <script type="text/javascript">
+        /*
+         * Deliberately `var` rather than `const`, so that re-evaluating this script (as happens inside an
+         * embedded action modal) does not throw on redeclaration.
+         */
+        var nbConditionPresets = JSON.parse(document.getElementById('nb-condition-presets').textContent);
+
+        $('.formset_row-{{ conditions.prefix }}').formset({
+            addText: '<span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add another Condition',
+            addCssClass: 'btn btn-primary add-row',
+            deleteText: '<span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>',
+            deleteCssClass: 'btn btn-danger delete-row',
+            prefix: '{{ conditions.prefix }}',
+            formCssClass: 'dynamic-formset-{{ conditions.prefix }}',
+            added: function (row) {
+                jsify_form(row);
+                nbRefreshConditionRow(row[0] || row);
+                nbRefreshConditionJoins();
+            },
+            removed: function () {
+                nbRefreshConditionJoins();
+            }
+        });
+
+        /**
+         * Show, in a single row, only the inputs its type and preset actually use.
+         *
+         * The columns are fixed (Type, Option, Value, Delete) so this only swaps the contents of the
+         * Value cell. Nothing is added or removed from the table, so no other row is disturbed and no cell
+         * can drift out from under its header.
+         */
+        function nbRefreshConditionRow(row) {
+            if (!row || !row.querySelector) { return; }
+            const select = row.querySelector('[name$="-condition"]');
+            const choice = select ? select.value : '';
+            const isExpression = choice === '__expression__';
+
+            const preset = (!isExpression && choice) ? nbConditionPresets[choice] : null;
+            const shown = isExpression
+                ? new Set(['source'])
+                : new Set((preset ? preset.params_schema : []).map(p => 'param_' + p.name));
+
+            row.querySelectorAll('.nb-condition-value').forEach(slot => {
+                const name = slot.dataset.valueFor;
+                const visible = shown.has(name);
+                slot.style.display = visible ? '' : 'none';
+                if (!visible) {
+                    slot.querySelectorAll('input, select, textarea').forEach(el => {
+                        if (el.type !== 'checkbox' && el.type !== 'hidden') { el.value = ''; }
+                    });
+                }
+            });
+        }
+
+        function nbRefreshAllConditionRows_impl() {
+            document.querySelectorAll('#event-rule-conditions .nb-condition-row')
+                .forEach(nbRefreshConditionRow);
+            nbRefreshConditionJoins();
+        }
+
+        /**
+         * Show "and" on every condition row except the first.
+         *
+         * Conditions are AND-ed, which is not obvious from a stack of inputs, and this is cheaper than a
+         * paragraph explaining it. Recomputed rather than rendered server-side, because rows are added and
+         * removed in the browser.
+         */
+        function nbRefreshConditionJoins() {
+            const rows = Array.from(
+                document.querySelectorAll('#event-rule-conditions .nb-condition-row')
+            ).filter(row => row.offsetParent !== null || row.style.display !== 'none');
+            rows.forEach((row, index) => {
+                const join = row.querySelector('.nb-condition-and');
+                if (join) { join.classList.toggle('d-none', index === 0); }
+            });
+        }
+
+        function nbRefreshAllConditionRows() {
+            nbRefreshAllConditionRows_impl();
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            nbRefreshAllConditionRows();
+            /*
+             * Bound through jQuery, not addEventListener. These selects are select2 widgets, and select2
+             * signals a change with jQuery's `.trigger('change')`, which does not reach native DOM
+             * listeners, so a native listener here would never fire when a user picks a preset.
+             * Delegated from document so rows added later are covered too.
+             */
+            $(document).on(
+                'change select2:select select2:unselect select2:clear',
+                'select[name$="-condition"]',
+                function () {
+                    nbRefreshConditionRow(this.closest('.nb-condition-row'));
+                }
+            );
+        });
+
+    </script>

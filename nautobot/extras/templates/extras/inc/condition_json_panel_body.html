@@ -1,0 +1,16 @@
+{% load buttons %}
+{% load helpers %}
+{% comment %}
+    Body content for a conditional trigger's JSON panels, adding a copy button.
+
+    A scope filter or a condition list is exactly the kind of value someone wants to lift out of the page,
+    into a ticket or an API call. `KeyValueTablePanel` already offers a copy button for every value it
+    renders; `BaseTextPanel` does not, so this supplies one for these two panels.
+
+    The id goes on a wrapper rather than on a `pre`: `render_json` and `render_yaml` emit their own
+    `<code>` inside the `<pre>`, so adding another `<pre>` here would nest them.
+{% endcomment %}
+<span class="nb-btn-inline-hover-target">
+    <pre id="{{ value_id }}">{% if render_as == 'yaml' %}{{ value | render_yaml }}{% else %}{{ value | render_json }}{% endif %}</pre>
+    {% copy_button target=value_id_selector label="Copy" %}
+</span>

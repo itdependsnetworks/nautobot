@@ -119,6 +119,7 @@ from . import filters, forms, jobs_ui, tables
 from .api import serializers
 from .choices import (
     ApprovalWorkflowStateChoices,
+    ConditionTypeChoices,
     CustomFieldTypeChoices,
     DynamicGroupTypeChoices,
     JobExecutionType,
@@ -1335,6 +1336,34 @@ class ObjectAssignContactOrTeamView(generic.ObjectEditView):
 #
 # Custom fields
 #
+
+
+class CopyableJSONPanel(object_detail.ObjectTextPanel):
+    """
+    An `ObjectTextPanel` that offers a copy button for the value it renders.
+
+    `KeyValueTablePanel` gives every value it renders a copy button, but `BaseTextPanel` does not, so a
+    JSON blob (the sort of value most worth lifting out of the page) has no way to be copied. This
+    supplies one without changing the shared component, whose rendered markup is asserted by core tests.
+    """
+
+    body_content_template_path = "extras/inc/condition_json_panel_body.html"
+
+    def render_body_content(self, context):
+        value = self.get_value(context)
+        if not value and self.render_placeholder:
+            return object_detail.HTML_NONE
+        # Derived from the panel's body_id, which is unique to the page and already assigned by now. Not
+        # reused directly, since that id is on the body wrapper and must not appear twice.
+        value_id = f"{self.body_id or 'panel'}_value"
+        return object_detail.render_component_template(
+            self.body_content_template_path,
+            context,
+            render_as=self.render_as.value,
+            value=value,
+            value_id=value_id,
+            value_id_selector=f"#{value_id}",
+        )
 
 
 class ScopeFilterViewMixin:
@@ -3512,7 +3541,150 @@ class ScheduledJobUIViewSet(
 #
 
 
-class JobHookUIViewSet(NautobotUIViewSet):
+class ConditionalTriggerViewMixin(ScopeFilterViewMixin):
+    """
+    The scope, conditions and Test tab shared by the Webhook and Job Hook views.
+
+    Both models carry `ConditionalTriggerMixin`, so both get the same editor, the same panels and the same
+    dry-run. Keeping it in one mixin is what stops the two drifting apart in behaviour or in wording.
+
+    A viewset using this must add `conditional_trigger_panels()` to its detail content. The create/edit
+    template is shared and needs no per-viewset setting; override `conditional_trigger_template` only
+    for an action type that needs different surrounding markup.
+    """
+
+    conditional_trigger_template = "extras/conditional_trigger_update.html"
+
+    @staticmethod
+    def conditional_trigger_panels(weight=800, section=SectionChoices.RIGHT_HALF):
+        """The Scope Filter and Conditions panels, for a detail view's `panels`."""
+        return (
+            CopyableJSONPanel(
+                weight=weight,
+                section=section,
+                label="Scope Filter",
+                object_field="scope_filter",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+            ),
+            CopyableJSONPanel(
+                weight=weight + 100,
+                section=section,
+                label="Conditions",
+                object_field="conditions",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+            ),
+        )
+
+    def get_template_name(self):
+        if self.action in ("create", "update") and self.conditional_trigger_template:
+            return self.conditional_trigger_template
+        return super().get_template_name()
+
+    #
+    # Scope filter sub-form
+    #
+
+    def get_scope_filter_fields_template(self):
+        return self.conditional_trigger_template
+
+    def get_scope_filter_fields_context(self, request, model_class):
+        """As the base, plus the preset catalog, which the condition rows are rebuilt from client-side."""
+        context = super().get_scope_filter_fields_context(request, model_class)
+        context["condition_presets_json"] = _condition_presets_json()
+        return context
+
+    def get_extra_context(self, request, instance=None):
+        context = super().get_extra_context(request, instance)
+        if self.action not in ("create", "update"):
+            return context
+
+        if request.method == "POST":
+            conditions = forms.ConditionFormSet(data=request.POST, prefix="conditions")
+        else:
+            conditions = forms.ConditionFormSet(initial=_conditions_to_initial(instance), prefix="conditions")
+        context["conditions"] = conditions
+        context["condition_presets_json"] = _condition_presets_json()
+
+        model_class = None
+        if request.method == "POST":
+            model_class = self.get_content_type_model_class(request.POST)
+            scope_data = request.POST
+        elif instance is not None and instance.present_in_database:
+            model_class = instance.scope_filter_model_class
+            scope_data = instance.scope_filter_prefixed
+        else:
+            scope_data = None
+
+        if model_class is not None:
+            context.update(self.get_scope_filter_context(model_class, scope_data))
+        else:
+            context["content_type_selected"] = False
+        return context
+
+    def form_save(self, form, **kwargs):
+        obj = super().form_save(form, **kwargs)
+
+        # A POST that did not come from this editor leaves the scope and conditions untouched. Webhooks and
+        # job hooks were postable long before these fields existed, and a request that predates them must
+        # not be read as an instruction to clear them.
+        if "conditional_trigger_form" not in self.request.POST:
+            return obj
+
+        context = self.get_extra_context(self.request, obj)
+
+        conditions = context["conditions"]
+        if not conditions.is_valid():
+            raise ValidationError(conditions.errors)
+        rows = []
+        for condition_form in conditions.forms:
+            if condition_form.cleaned_data.get("DELETE"):
+                continue
+            row = getattr(condition_form, "condition_row", None)
+            if row is not None:
+                rows.append(row)
+        obj.conditions = rows
+
+        filterset = context.get("filterset")
+        if filterset is not None:
+            filter_form = filterset.form
+            if not filter_form.is_valid():
+                raise ValidationError(filter_form.errors)
+            obj.set_scope_filter(filter_form.cleaned_data)
+        else:
+            obj.scope_filter = {}
+
+        obj.validated_save()
+        return obj
+
+
+def _conditions_to_initial(instance):
+    """Turn a rule's stored condition rows back into initial data for the formset."""
+    if instance is None or not getattr(instance, "conditions", None):
+        return []
+    from nautobot.extras.forms import ConditionForm
+
+    initial = []
+    for row in instance.conditions:
+        entry = {"negate": bool(row.get("negate"))}
+        if row.get("type") == ConditionTypeChoices.TYPE_EXPRESSION:
+            entry["condition"] = ConditionForm.EXPRESSION_CHOICE
+            entry["source"] = row.get("source", "")
+        else:
+            entry["condition"] = row.get("preset", "")
+            for name, value in (row.get("params") or {}).items():
+                entry[f"param_{name}"] = value
+        initial.append(entry)
+    return initial
+
+
+def _condition_presets_json():
+    """The preset catalog, for the form to reveal the right parameter fields per preset."""
+    from nautobot.extras.conditions.presets import get_condition_presets
+
+    return {preset.key: preset.as_dict() for preset in get_condition_presets()}
+
+
+class JobHookUIViewSet(ConditionalTriggerViewMixin, NautobotUIViewSet):
     bulk_update_form_class = forms.JobHookBulkEditForm
     filterset_class = filters.JobHookFilterSet
     filterset_form_class = forms.JobHookFilterForm
@@ -3528,6 +3700,7 @@ class JobHookUIViewSet(NautobotUIViewSet):
                 section=SectionChoices.LEFT_HALF,
                 fields="__all__",
             ),
+            *ConditionalTriggerViewMixin.conditional_trigger_panels(),
         )
     )
 
@@ -5145,7 +5318,7 @@ class TeamUIViewSet(NautobotUIViewSet):
 #
 
 
-class WebhookUIViewSet(NautobotUIViewSet):
+class WebhookUIViewSet(ConditionalTriggerViewMixin, NautobotUIViewSet):
     bulk_update_form_class = forms.WebhookBulkEditForm
     filterset_class = filters.WebhookFilterSet
     filterset_form_class = forms.WebhookFilterForm
@@ -5182,5 +5355,6 @@ class WebhookUIViewSet(NautobotUIViewSet):
                 object_field="body_template",
                 render_as=object_detail.BaseTextPanel.RenderOptions.CODE,
             ),
+            *ConditionalTriggerViewMixin.conditional_trigger_panels(),
         ]
     )

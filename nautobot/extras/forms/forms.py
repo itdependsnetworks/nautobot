@@ -49,6 +49,7 @@ from nautobot.extras.choices import (
     ApprovalWorkflowStateChoices,
     ButtonClassChoices,
     ComputedFieldTypeChoices,
+    ConditionTypeChoices,
     CustomFieldFilterLogicChoices,
     DynamicGroupTypeChoices,
     JobCancelTypeChoices,
@@ -151,6 +152,8 @@ __all__ = (
     "ComputedFieldBulkEditForm",
     "ComputedFieldFilterForm",
     "ComputedFieldForm",
+    "ConditionForm",
+    "ConditionFormSet",
     "ConfigContextBulkEditForm",
     "ConfigContextFilterForm",
     "ConfigContextForm",
@@ -2934,3 +2937,158 @@ class WebhookFilterForm(BootstrapMixin, forms.Form):
     type_update = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     type_delete = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     enabled = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+
+
+#
+# Conditional triggers
+#
+
+
+def _field_operator_choices():
+    """Operator choices for a field comparison condition, resolved on first use."""
+    from nautobot.extras.conditions.operators import FIELD_OPERATORS
+
+    return [("", "---------"), *FIELD_OPERATORS]
+
+
+class ConditionForm(BootstrapMixin, forms.Form):
+    """
+    One condition row on a Webhook's or Job Hook's form.
+
+    A row is either a preset with its parameters or a raw expression, chosen from one dropdown: a raw
+    expression is offered as the first option alongside the presets. Splitting that into a "type" select
+    and a "preset" select made the user answer a question about the form's structure before saying what
+    they wanted.
+
+    Rather than fetching a different sub-form per preset, every preset parameter is declared here and the
+    template reveals only the ones the selected preset uses, driven by the catalog embedded in the page.
+    There are five parameters across all built-in presets, so the union is small enough that a server
+    round-trip per selection would cost more than it saves.
+    """
+
+    #: Sentinel for the raw-expression option, which is not a preset key.
+    EXPRESSION_CHOICE = "__expression__"
+
+    condition = forms.ChoiceField(choices=[], required=False, widget=StaticSelect2(), label="Condition")
+    negate = forms.BooleanField(
+        required=False,
+        label="Not",
+        help_text="Pass when this condition does NOT hold.",
+    )
+    # The parameter inputs all share one Value column, so each carries its own placeholder. There is no
+    # per-parameter column header to label them.
+    param_field = forms.CharField(required=False, label="Field", widget=forms.TextInput(attrs={"placeholder": "Field"}))
+    param_operator = forms.ChoiceField(
+        # A callable, so the operator list is imported when the form is used rather than at module import.
+        # Everything else this module needs from `conditions` is imported inside a method for the same
+        # reason: to keep the import graph one-directional.
+        choices=_field_operator_choices,
+        required=False,
+        label="Operator",
+        # No clear button: an operator is not optional once a comparison is chosen, and the button costs
+        # enough width inside this narrow slot to clip the longest label.
+        widget=StaticSelect2(attrs={"data-allow-clear": "false"}),
+    )
+    param_from = forms.CharField(required=False, label="From", widget=forms.TextInput(attrs={"placeholder": "From"}))
+    param_to = forms.CharField(required=False, label="To", widget=forms.TextInput(attrs={"placeholder": "To"}))
+    param_value = forms.CharField(required=False, label="Value", widget=forms.TextInput(attrs={"placeholder": "Value"}))
+    param_username = forms.CharField(
+        required=False, label="Username", widget=forms.TextInput(attrs={"placeholder": "Username"})
+    )
+    source = forms.CharField(
+        required=False,
+        label="Expression",
+        widget=forms.TextInput(attrs={"placeholder": "e.g. data.status.name == 'Active'"}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from nautobot.extras.conditions.presets import get_condition_presets
+
+        # Raw expression first: it is the escape hatch, and listing it alongside the presets means the
+        # choice is "what do I want this row to check", not "which kind of row is this".
+        self.fields["condition"].choices = [
+            ("", "---------"),
+            (self.EXPRESSION_CHOICE, "Raw expression"),
+            *[(preset.key, preset.label) for preset in get_condition_presets()],
+        ]
+
+    def value_fields(self):
+        """
+        The bound fields that share the Value column: every preset parameter, plus the raw expression.
+
+        They all live in one cell, so the template renders them from here rather than naming each one.
+        Which of them is visible for a given row is decided in the browser from the preset catalog.
+        """
+        names = [
+            "param_field",
+            "param_operator",
+            "param_from",
+            "param_to",
+            "param_value",
+            "param_username",
+            "source",
+        ]
+        return [self[name] for name in names]
+
+    def is_blank(self):
+        """
+        Whether the user left this row untouched, in which case it is dropped rather than validated.
+
+        The names come from `value_fields` so that adding a parameter cannot leave this check stale.
+        """
+        names = ["condition"] + [bound.name for bound in self.value_fields()]
+        return not any(self.cleaned_data.get(name) for name in names)
+
+    def clean(self):
+        from nautobot.extras.conditions.engine import compile_condition, ConditionError
+        from nautobot.extras.conditions.presets import get_condition_preset
+
+        data = super().clean()
+        if self.is_blank():
+            return data
+
+        choice = data.get("condition")
+        negate = bool(data.get("negate"))
+
+        if not choice:
+            raise ValidationError({"condition": "Choose what this condition should check."})
+
+        if choice == self.EXPRESSION_CHOICE:
+            source = (data.get("source") or "").strip()
+            if not source:
+                raise ValidationError({"source": "An expression is required."})
+            try:
+                compile_condition(source)
+            except ConditionError as exc:
+                raise ValidationError({"source": str(exc)})
+            self.condition_row = {
+                "type": ConditionTypeChoices.TYPE_EXPRESSION,
+                "source": source,
+                "negate": negate,
+            }
+            return data
+
+        preset_key = choice
+        preset = get_condition_preset(preset_key)
+        if preset is None:
+            raise ValidationError({"condition": f"Unknown preset `{preset_key}`."})
+
+        params = {}
+        for parameter in preset.parameters:
+            params[parameter.name] = data.get(f"param_{parameter.name}") or ""
+        try:
+            preset.clean_params(params)
+        except ValidationError as exc:
+            raise ValidationError({"condition": exc.messages})
+
+        self.condition_row = {
+            "type": ConditionTypeChoices.TYPE_PRESET,
+            "preset": preset_key,
+            "params": params,
+            "negate": negate,
+        }
+        return data
+
+
+ConditionFormSet = forms.formset_factory(ConditionForm, extra=1, can_delete=True)

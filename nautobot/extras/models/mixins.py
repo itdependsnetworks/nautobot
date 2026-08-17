@@ -4,11 +4,13 @@ Class-modifying mixins that need to be standalone to avoid circular imports.
 
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 from django.urls import NoReverseMatch, reverse
 
 from nautobot.core.utils.deprecation import method_deprecated_in_favor_of
-from nautobot.core.utils.lookup import get_route_for_model, get_user_from_instance
+from nautobot.core.utils.filtering import build_filter_dict_from_filterset
+from nautobot.core.utils.lookup import get_filterset_for_model, get_route_for_model, get_user_from_instance
 from nautobot.extras.choices import ApprovalWorkflowStateChoices
 
 
@@ -283,3 +285,79 @@ class DataComplianceModelMixin:
                 continue
 
         return None
+
+
+class ConditionalTriggerMixin(models.Model):
+    """
+    Adds a scope and a list of conditions to an action that fires on object changes.
+
+    A Webhook or Job Hook already says *which object types* and *which kinds of change* it watches, via
+    `content_types` and the `type_create` / `type_update` / `type_delete` flags. This mixin adds the two
+    questions those cannot answer: *which objects* (the scope, a stored set of FilterSet parameters) and
+    *which changes* (the conditions, an ordered list that must all pass).
+
+    Both are empty by default, and an action with both empty behaves exactly as it did before this
+    existed, which is what makes the feature additive instead of a change to every installation.
+
+    The two live here rather than on a separate model because an action and its trigger logic are the
+    same thing to the person configuring them: one page, one object, one set of object types.
+    """
+
+    scope_filter = models.JSONField(
+        encoder=DjangoJSONEncoder,
+        editable=False,
+        default=dict,
+        blank=True,
+        help_text="A JSON-encoded dictionary of filter parameters limiting which objects this fires for. "
+        "An empty dictionary means every object of the selected type(s).",
+    )
+    conditions = models.JSONField(
+        encoder=DjangoJSONEncoder,
+        default=list,
+        blank=True,
+        help_text="An ordered list of condition rows, all of which must pass. An empty list means every "
+        "in-scope change passes.",
+    )
+
+    class Meta:
+        abstract = True
+
+    #
+    # Scope
+    #
+
+    @property
+    def scope_filter_model_class(self):
+        """The model class the scope filter form is built from, taken from the first assigned content type."""
+        content_types = self.content_types.all()
+        if not content_types:
+            return None
+        return content_types[0].model_class()
+
+    @property
+    def scope_filter_prefixed(self):
+        """The stored scope filter with a `scope-` prefix on each key, for rendering the filter sub-form."""
+        if self.scope_filter:
+            return {f"scope-{name}": value for name, value in self.scope_filter.items()}
+        return {}
+
+    def set_scope_filter(self, form_data):
+        """
+        Store the filter parameters from a filter form's cleaned data.
+
+        Args:
+            form_data (dict): Dictionary of filter parameters, generally a filter form's cleaned data.
+        """
+        model_class = self.scope_filter_model_class
+        if model_class is None:
+            self.scope_filter = {}
+            return
+        filterset_class = get_filterset_for_model(model_class)
+        if filterset_class is None:
+            self.scope_filter = {}
+            return
+        self.scope_filter = build_filter_dict_from_filterset(filterset_class, form_data)
+
+    # PLACEHOLDER: validation and scope evaluation arrive in story 5 (Validate the scope filter
+    # and conditions at save time). Until then the two fields are stored and rendered, but
+    # nothing checks them and nothing evaluates them.
