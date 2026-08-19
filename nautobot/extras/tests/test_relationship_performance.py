@@ -302,16 +302,15 @@ class RelationshipBaselineTest(RelationshipFixtureTestMixin, RelationshipBenchma
         )
         self.assertGreater(measurement["queries"], 0)
 
-    def test_baseline_repeated_association_queries(self):
+    def test_no_repeated_association_queries(self):
         """
-        Demonstrate the N+1 pattern itself, not just its total, using the existing repeated-query detector.
+        The N+1 pattern itself must be gone, not merely its total.
 
-        PLACEHOLDER: characterizes current behavior; core-4 Bulk peer resolution inverts this to assert that the
-        detector does *not* fire.
+        Before the loader this block tripped the repeated-query detector; the characterization version of this test
+        asserted that it did. It now asserts the opposite.
         """
-        with self.assertRaises(AssertionError):
-            with AssertNoRepeatedQueries(self, threshold=5):
-                evaluate_relationships_data(self.location.get_relationships_data())
+        with AssertNoRepeatedQueries(self, threshold=5):
+            evaluate_relationships_data(self.location.get_relationships_data())
 
 
 @tag("performance")

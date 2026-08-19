@@ -22,7 +22,7 @@ from nautobot.extras.choices import (
 )
 from nautobot.extras.models import Relationship, RelationshipAssociation, Status
 from nautobot.extras.relationships import evaluated_queryset, RelationshipAssociationLoader
-from nautobot.extras.tests.relationship_fixtures import build_relationship_benchmark_fixture
+from nautobot.extras.tests.relationship_fixtures import build_relationship_benchmark_fixture, peer_models
 
 
 def legacy_get_relationships(obj, include_hidden=False, advanced_ui=None):
@@ -86,6 +86,105 @@ def as_comparable(relationships_by_side):
         }
         for side, relationships in relationships_by_side.items()
     }
+
+
+def legacy_get_relationships_with_related_objects(obj, include_hidden=False, advanced_ui=None):
+    """
+    The pre-loader implementation of `RelationshipModel.get_relationships_with_related_objects()`, verbatim.
+
+    Reference behavior for `LegacyRelatedObjectEquivalenceTest`. Do not "improve" it.
+    """
+    src_relationships, dst_relationships = Relationship.objects.get_for_model(obj)
+
+    if advanced_ui is not None:
+        src_relationships = src_relationships.filter(advanced_ui=advanced_ui)
+        dst_relationships = dst_relationships.filter(advanced_ui=advanced_ui)
+
+    resp = {
+        RelationshipSideChoices.SIDE_SOURCE: {},
+        RelationshipSideChoices.SIDE_DESTINATION: {},
+        RelationshipSideChoices.SIDE_PEER: {},
+    }
+
+    for side, relationships in (
+        (RelationshipSideChoices.SIDE_SOURCE, src_relationships),
+        (RelationshipSideChoices.SIDE_DESTINATION, dst_relationships),
+    ):
+        peer_side = RelationshipSideChoices.OPPOSITE[side]
+        for relationship in relationships:
+            if getattr(relationship, f"{side}_hidden") and not include_hidden:
+                continue
+
+            if getattr(relationship, f"{side}_filter"):
+                filterset = get_filterset_for_model(obj._meta.model)
+                if filterset:
+                    filter_params = getattr(relationship, f"{side}_filter")
+                    if not filterset(filter_params, obj._meta.model.objects.filter(id=obj.id)).qs.exists():
+                        continue
+
+            remote_ct = getattr(relationship, f"{peer_side}_type")
+            remote_model = remote_ct.model_class()
+            if remote_model is not None:
+                if not relationship.symmetric:
+                    query_params = {
+                        f"{peer_side}_for_associations__relationship": relationship,
+                        f"{peer_side}_for_associations__{side}_id": obj.pk,
+                    }
+                    resp[side][relationship] = remote_model.objects.filter(**query_params).distinct()
+                    if not relationship.has_many(peer_side):
+                        resp[side][relationship] = resp[side][relationship].first()
+                else:
+                    side_query_params = {
+                        f"{peer_side}_for_associations__relationship": relationship,
+                        f"{peer_side}_for_associations__{side}_id": obj.pk,
+                    }
+                    peer_side_query_params = {
+                        f"{side}_for_associations__relationship": relationship,
+                        f"{side}_for_associations__{peer_side}_id": obj.pk,
+                    }
+                    resp[RelationshipSideChoices.SIDE_PEER][relationship] = remote_model.objects.filter(
+                        Q(**side_query_params) | Q(**peer_side_query_params)
+                    ).distinct()
+                    if not relationship.has_many(peer_side):
+                        resp[RelationshipSideChoices.SIDE_PEER][relationship] = resp[RelationshipSideChoices.SIDE_PEER][
+                            relationship
+                        ].first()
+            else:
+                if not relationship.symmetric:
+                    count = RelationshipAssociation.objects.filter(
+                        relationship=relationship, **{f"{side}_id": obj.pk}
+                    ).count()
+                    resp[side][relationship] = f"{count} {remote_ct} object(s)"
+                else:
+                    count = (
+                        RelationshipAssociation.objects.filter(relationship=relationship)
+                        .filter(Q(source_id=obj.pk) | Q(destination_id=obj.pk))
+                        .count()
+                    )
+                    resp[RelationshipSideChoices.SIDE_PEER][relationship] = f"{count} {remote_ct} object(s)"
+
+    return resp
+
+
+def related_objects_as_comparable(related_by_side):
+    """Reduce a `get_relationships_with_related_objects()`-shaped dict to comparable primitives.
+
+    Peer order is preserved rather than sorted, because it is user-visible: the detail panel displays the first
+    three peers of a many-valued relationship.
+    """
+    comparable = {}
+    for side, relationships in related_by_side.items():
+        comparable[side] = {}
+        for relationship, value in relationships.items():
+            if isinstance(value, str):
+                comparable[side][relationship.key] = value
+            elif value is None:
+                comparable[side][relationship.key] = None
+            elif isinstance(value, QuerySet):
+                comparable[side][relationship.key] = [str(instance.pk) for instance in value]
+            else:
+                comparable[side][relationship.key] = str(value.pk)
+    return comparable
 
 
 class RelationshipLoaderTestMixin:
@@ -480,3 +579,158 @@ class EvaluatedQuerysetTest(TestCase):
         queryset = evaluated_queryset(Manufacturer, self.manufacturers)
         self.assertIsInstance(queryset, QuerySet)
         self.assertIs(queryset.model, Manufacturer)
+
+
+class LegacyRelatedObjectEquivalenceTest(RelationshipLoaderTestMixin, TestCase):
+    """
+    `get_relationships_with_related_objects()` must return exactly what the join-based implementation returned.
+
+    This is the riskiest migration in the effort: the old code reached peers through a reverse generic join per
+    definition, the new code resolves them in bulk per content type, and the two must agree on membership, on
+    single-versus-many collapsing, on the uninstalled-App placeholder string, and on peer ordering.
+    """
+
+    def test_matches_legacy_default(self):
+        self.assertEqual(
+            related_objects_as_comparable(self.location.get_relationships_with_related_objects()),
+            related_objects_as_comparable(legacy_get_relationships_with_related_objects(self.location)),
+        )
+
+    def test_matches_legacy_include_hidden(self):
+        self.assertEqual(
+            related_objects_as_comparable(self.location.get_relationships_with_related_objects(include_hidden=True)),
+            related_objects_as_comparable(
+                legacy_get_relationships_with_related_objects(self.location, include_hidden=True)
+            ),
+        )
+
+    def test_matches_legacy_advanced_ui_true(self):
+        self.assertEqual(
+            related_objects_as_comparable(self.location.get_relationships_with_related_objects(advanced_ui=True)),
+            related_objects_as_comparable(
+                legacy_get_relationships_with_related_objects(self.location, advanced_ui=True)
+            ),
+        )
+
+    def test_matches_legacy_advanced_ui_false(self):
+        self.assertEqual(
+            related_objects_as_comparable(self.location.get_relationships_with_related_objects(advanced_ui=False)),
+            related_objects_as_comparable(
+                legacy_get_relationships_with_related_objects(self.location, advanced_ui=False)
+            ),
+        )
+
+    def test_matches_legacy_for_every_object(self):
+        for location in Location.objects.filter(location_type=self.fixture.location_type):
+            with self.subTest(location=location.name):
+                self.assertEqual(
+                    related_objects_as_comparable(location.get_relationships_with_related_objects(include_hidden=True)),
+                    related_objects_as_comparable(
+                        legacy_get_relationships_with_related_objects(location, include_hidden=True)
+                    ),
+                )
+
+    def test_queryset_is_returned_exactly_for_many_valued_relationships(self):
+        """
+        A queryset comes back if and only if the far side can hold many objects.
+
+        `KeyValueTablePanel.render_value()` branches on `isinstance(value, models.QuerySet)`, so getting this mapping
+        wrong renders a single object through the queryset branch or vice versa.
+        """
+        related = self.location.get_relationships_with_related_objects(include_hidden=True)
+        many_valued = 0
+        single_valued = 0
+        for side, relationships in related.items():
+            for relationship, value in relationships.items():
+                if isinstance(value, str):
+                    # Uninstalled-App placeholder; neither shape applies.
+                    continue
+                # Mirrors how `related_object_sets()` picks the side it asks `has_many()` about.
+                peer_side = (
+                    RelationshipSideChoices.SIDE_SOURCE
+                    if side == RelationshipSideChoices.SIDE_PEER
+                    else RelationshipSideChoices.OPPOSITE[side]
+                )
+                expected_many = relationship.has_many(peer_side)
+                self.assertEqual(
+                    isinstance(value, QuerySet),
+                    expected_many,
+                    f"{relationship.key} on side {side}: has_many({peer_side}) is {expected_many} but value is "
+                    f"{type(value).__name__}",
+                )
+                if expected_many:
+                    many_valued += 1
+                else:
+                    single_valued += 1
+        self.assertGreater(many_valued, 0, "Fixture produced no many-valued relationships")
+        self.assertGreater(single_valued, 0, "Fixture produced no single-valued relationships")
+
+    def test_peer_reads_issue_no_queries(self):
+        related = self.location.get_relationships_with_related_objects(include_hidden=True)
+        with CaptureQueriesContext(connection) as ctx:
+            for relationships in related.values():
+                for value in relationships.values():
+                    if isinstance(value, QuerySet):
+                        value.exists()
+                        value.count()
+                        list(value[:3])
+        self.assertEqual(len(ctx.captured_queries), 0, [q["sql"] for q in ctx.captured_queries])
+
+
+class PeerResolutionTest(RelationshipLoaderTestMixin, TestCase):
+    """Bulk peer resolution: one query per distinct peer content type."""
+
+    def _peer_table_queries(self, captured_queries):
+        """Return `{db_table: query count}` for queries touching any of the benchmark fixture's peer tables."""
+        counts = {}
+        for model in peer_models():
+            table = model._meta.db_table
+            hits = [q for q in captured_queries if f'"{table}"' in q["sql"]]
+            if hits:
+                counts[table] = len(hits)
+        return counts
+
+    def test_one_query_per_peer_content_type(self):
+        loader = RelationshipAssociationLoader.for_object(self.location)
+        with CaptureQueriesContext(connection) as ctx:
+            loader.load()
+        per_table = self._peer_table_queries(ctx.captured_queries)
+        self.assertTrue(per_table, "No peer queries were issued at all")
+        for table, count in per_table.items():
+            self.assertEqual(count, 1, f"Expected exactly one bulk query for {table}, got {count}")
+
+    def test_peer_query_count_does_not_grow_with_association_count(self):
+        """The whole point of bulk resolution: cost follows content types, not associations."""
+        loader = RelationshipAssociationLoader.for_object(self.location)
+        with CaptureQueriesContext(connection) as ctx:
+            result = loader.load()
+        peer_queries = sum(self._peer_table_queries(ctx.captured_queries).values())
+
+        resolved_peers = sum(
+            len(result.peers_for(self.location, relationship, side))
+            for side, relationships in result.association_sets(self.location).items()
+            for relationship in relationships
+        )
+        self.assertGreater(resolved_peers, peer_queries * 2, "Fixture is too small to demonstrate bulk resolution")
+
+    def test_get_peer_is_free_after_loading(self):
+        """Both endpoints are cached, so `RelationshipAssociation.get_peer()` must not query."""
+        relationships = self.location.get_relationships(include_hidden=True)
+        with CaptureQueriesContext(connection) as ctx:
+            for side_relationships in relationships.values():
+                for queryset in side_relationships.values():
+                    for association in queryset:
+                        association.get_peer(self.location)
+        self.assertEqual(len(ctx.captured_queries), 0, [q["sql"] for q in ctx.captured_queries])
+
+    def test_resolve_peers_false_skips_peer_queries(self):
+        loader = RelationshipAssociationLoader.for_object(self.location, resolve_peers=False)
+        with CaptureQueriesContext(connection) as ctx:
+            loader.load()
+        self.assertEqual(
+            self._peer_table_queries(ctx.captured_queries),
+            {},
+            "resolve_peers=False must not query any peer table",
+        )
+        association_queries = [q for q in ctx.captured_queries if "extras_relationshipassociation" in q["sql"]]
+        self.assertEqual(len(association_queries), 2)

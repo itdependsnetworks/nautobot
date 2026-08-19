@@ -5,8 +5,7 @@ Relationship retrieval was historically *definition-centric*: for each relations
 model, ask the database whether this object has any associations. Query count therefore grew with the number of
 definitions, independent of how much data actually existed. This module inverts that: it retrieves every
 association involving an object (or a batch of objects) in two queries, one per endpoint side, then groups the
-rows in memory. Resolving the objects on the far end of those associations in bulk lands in a later story
-(core-4 Bulk peer resolution); this story stops at the association rows.
+rows in memory.
 
 The loader is the single owner of applicable-definition resolution, association retrieval, grouping, and symmetric
 normalization. `RelationshipModel` helpers delegate to it and reshape its output into their existing return
@@ -21,6 +20,7 @@ queryset whose results are already loaded, which satisfies those consumers witho
 from collections import defaultdict
 from dataclasses import dataclass
 import logging
+from operator import attrgetter
 
 from django.contrib.contenttypes.models import ContentType
 
@@ -32,6 +32,12 @@ logger = logging.getLogger(__name__)
 
 #: The two concrete endpoint sides an association row can match an object on.
 ENDPOINT_SIDES = (RelationshipSideChoices.SIDE_SOURCE, RelationshipSideChoices.SIDE_DESTINATION)
+
+#: Above this many peer ids for a single content type, the bulk peer query is split into chunks so that no single
+#: `IN` predicate becomes unreasonably large. Deliberately an internal constant rather than a Nautobot setting:
+#: no measurement so far shows a large `IN` predicate causing trouble, and a public setting is a permanent
+#: commitment. Promote it to a setting if a deployment is found that needs to tune it.
+PEER_QUERY_CHUNK_SIZE = 1000
 
 
 @dataclass(frozen=True)
@@ -110,7 +116,7 @@ class RelationshipAssociationLoader:
     memoized on the instance.
     """
 
-    def __init__(self, objects, *, include_hidden=False, advanced_ui=None, user=None):
+    def __init__(self, objects, *, include_hidden=False, advanced_ui=None, user=None, resolve_peers=True):
         """
         Args:
             objects (list): Instances of one concrete model. Must be non-empty and homogeneous.
@@ -118,6 +124,8 @@ class RelationshipAssociationLoader:
             advanced_ui (bool): If not None, restrict to definitions with this `advanced_ui` value.
             user (User): If provided, peer objects are restricted to those this user may view. `None` means no
                 restriction, matching the behavior of the UI and REST callers today.
+            resolve_peers (bool): Whether to bulk-resolve the objects on the far end of each association. Pass
+                False when only the association rows are needed, to skip one query per peer content type.
         """
         if not objects:
             raise ValueError("RelationshipAssociationLoader requires at least one object")
@@ -127,8 +135,14 @@ class RelationshipAssociationLoader:
         self.include_hidden = include_hidden
         self.advanced_ui = advanced_ui
         self.user = user
+        self.resolve_peers = resolve_peers
         self._result = None
         self._content_type = None
+        #: Content type ids that peers were resolved for, used for instrumentation counts.
+        self._resolved_peer_content_types = set()
+        #: {(content_type_id, pk): position} in the peer model's own default ordering, so that callers returning
+        #: peer querysets can reproduce the ordering the previous join-based implementation produced.
+        self._peer_positions = {}
         # Cache of filter dict -> set of object pks matching it, so that definitions sharing a filter, and repeated
         # loads within one loader, evaluate that filter only once.
         self._filter_matches = {}
@@ -184,9 +198,19 @@ class RelationshipAssociationLoader:
             associations = self._fetch_associations(applicable)
             grouped = self._group_associations(applicable, associations)
 
+            peer_content_types = 0
+            peer_objects = 0
+            if self.resolve_peers:
+                peers = self._resolve_peers(self._collect_peer_ids(grouped))
+                grouped = self._attach_peers(grouped, peers)
+                peer_content_types = len(self._resolved_peer_content_types)
+                peer_objects = len(peers)
+
             span.set_attribute("nautobot.extras.relationships.definitions", definition_count)
             span.set_attribute("nautobot.extras.relationships.associations", len(associations))
             span.set_attribute("nautobot.extras.relationships.filter_evaluations", len(self._filter_matches))
+            span.set_attribute("nautobot.extras.relationships.peer_content_types", peer_content_types)
+            span.set_attribute("nautobot.extras.relationships.peer_objects", peer_objects)
 
             self._result = RelationshipLoadResult(
                 objects=self.objects,
@@ -346,6 +370,118 @@ class RelationshipAssociationLoader:
 
         return grouped
 
+    def _collect_peer_ids(self, grouped):
+        """Return `{content_type_id: {object_pk, ...}}` for every peer endpoint referenced by the loaded rows."""
+        peer_ids = defaultdict(set)
+        for records in grouped.values():
+            for record in records:
+                peer_ids[record.peer_type_id].add(record.peer_id)
+        return peer_ids
+
+    def _resolve_peers(self, peer_ids):
+        """
+        Fetch peer objects in bulk, one query per distinct content type.
+
+        When `self.user` is set, each peer queryset is restricted through Nautobot's existing restricted-queryset
+        API, so an inaccessible peer is simply absent from the result and is therefore indistinguishable from one
+        that does not exist. When it is not set, no restriction is applied, matching what the UI and REST callers
+        did before the loader existed.
+
+        Returns:
+            (dict): `{(content_type_id, object_pk): instance}` for every peer that could be resolved.
+        """
+        resolved = {}
+        for content_type_id, pks in peer_ids.items():
+            content_type = ContentType.objects.get_for_id(content_type_id)
+            model = content_type.model_class()
+            if model is None:
+                # Can happen when an App that provided the peer model is no longer installed.
+                logger.debug(
+                    "Unable to resolve relationship peers for content type %s: no model class, perhaps an App is "
+                    "not installed",
+                    content_type,
+                )
+                continue
+
+            queryset = model.objects.all()
+            if self.user is not None and hasattr(queryset, "restrict"):
+                queryset = queryset.restrict(self.user, "view")
+
+            instances = self._fetch_peer_chunks(queryset, model, sorted(pks, key=str))
+            self._resolved_peer_content_types.add(content_type_id)
+            for position, instance in enumerate(instances):
+                resolved[(content_type_id, instance.pk)] = instance
+                self._peer_positions[(content_type_id, instance.pk)] = position
+
+            missing = len(pks) - len(instances)
+            if missing:
+                logger.debug(
+                    "%d of %d relationship peers of type %s were not resolved; they may be inaccessible to this "
+                    "user or the associations may be stale",
+                    missing,
+                    len(pks),
+                    content_type,
+                )
+        return resolved
+
+    def _fetch_peer_chunks(self, queryset, model, pks):
+        """
+        Evaluate `queryset` restricted to `pks`, splitting very large `IN` predicates into chunks.
+
+        Results come back in the peer model's own default ordering, which is what the previous join-based
+        implementation displayed. When chunking engages, that ordering is restored across chunks where the model's
+        `Meta.ordering` is made up of plain field names; for anything more complex (expressions, related lookups)
+        the chunk order stands, which is acceptable because chunking only engages at sizes where a caller is
+        displaying a small sample of thousands of peers.
+        """
+        if len(pks) <= PEER_QUERY_CHUNK_SIZE:
+            return list(queryset.filter(pk__in=pks))
+
+        instances = []
+        for start in range(0, len(pks), PEER_QUERY_CHUNK_SIZE):
+            instances.extend(queryset.filter(pk__in=pks[start : start + PEER_QUERY_CHUNK_SIZE]))
+        logger.debug(
+            "Fetched %d %s relationship peers in %d chunks",
+            len(instances),
+            model._meta.label,
+            -(-len(pks) // PEER_QUERY_CHUNK_SIZE),
+        )
+        return _sorted_by_model_ordering(instances, model)
+
+    def _attach_peers(self, grouped, peers):
+        """
+        Attach resolved peers to the grouped records, and populate each association's foreign key caches.
+
+        Both endpoints are cached, not just the peer: `RelationshipAssociation.get_peer()` dereferences the source
+        *and* the destination in order to work out which end the caller passed, so caching only one of them would
+        still leave a query per association.
+        """
+        from nautobot.extras.models.relationships import RelationshipAssociation
+
+        objects_by_pk = {obj.pk: obj for obj in self.objects}
+        attached = {}
+        for key, records in grouped.items():
+            object_pk = key[0]
+            updated = []
+            for record in records:
+                peer = peers.get((record.peer_type_id, record.peer_id))
+                _cache_endpoint(
+                    RelationshipAssociation, record.association, record.matched_side, objects_by_pk.get(object_pk)
+                )
+                _cache_endpoint(RelationshipAssociation, record.association, record.peer_side, peer)
+                updated.append(record.with_peer(peer))
+            attached[key] = updated
+        return attached
+
+    def peer_position(self, content_type_id, pk):
+        """
+        Return the position of a peer within its content type's default ordering.
+
+        Used to reproduce the peer ordering that the previous join-based implementation produced, which came from
+        the peer model's `Meta.ordering` rather than from association order.
+        """
+        return self._peer_positions.get((content_type_id, pk), 0)
+
 
 def _filter_cache_key(filter_params):
     """Build a hashable, order-independent key for a relationship side filter dict."""
@@ -359,6 +495,43 @@ def _hashable(value):
     if isinstance(value, dict):
         return tuple(sorted((key, _hashable(item)) for key, item in value.items()))
     return value
+
+
+def _cache_endpoint(model, association, side, instance):
+    """
+    Populate one of an association's generic foreign key caches, so dereferencing it issues no query.
+
+    A None `instance` is not cached: leaving the cache empty means an unresolved peer behaves exactly as it did
+    before, dereferencing lazily and returning None through `RelationshipAssociation.get_source()` /
+    `get_destination()`.
+    """
+    if instance is None:
+        return
+    model._meta.get_field(side).set_cached_value(association, instance)
+
+
+def _sorted_by_model_ordering(instances, model):
+    """
+    Sort `instances` by `model.Meta.ordering`, or return them unchanged if that ordering is not plain field names.
+
+    Only needed when a chunked bulk fetch has broken the ordering the database would otherwise have applied.
+    """
+    ordering = list(model._meta.ordering or [])
+    if not ordering:
+        return instances
+
+    for field_name in reversed(ordering):
+        descending = field_name.startswith("-")
+        field_name = field_name.lstrip("-+")
+        if "__" in field_name or not hasattr(model, field_name):
+            logger.debug("Cannot reproduce %s ordering by %r in Python; leaving chunk order", model, field_name)
+            return instances
+        try:
+            instances.sort(key=attrgetter(field_name), reverse=descending)
+        except TypeError:
+            logger.debug("Cannot sort %s by %r in Python; leaving chunk order", model, field_name)
+            return instances
+    return instances
 
 
 class RelationshipLoadResult:
@@ -391,6 +564,62 @@ class RelationshipLoadResult:
     def associations_for(self, obj, relationship, side):
         """Return the list of associations for one object, relationship, and result side."""
         return [record.association for record in self.records_for(obj, relationship, side)]
+
+    def peers_for(self, obj, relationship, side):
+        """
+        Return the resolved peer objects for one object, relationship, and result side.
+
+        Ordered by the peer model's own default ordering and de-duplicated, matching what the previous
+        join-with-`DISTINCT` implementation returned. Peers that could not be resolved are omitted.
+        """
+        records = [record for record in self.records_for(obj, relationship, side) if record.peer is not None]
+        records.sort(key=lambda record: self.loader.peer_position(record.peer_type_id, record.peer_id))
+        peers = []
+        seen = set()
+        for record in records:
+            if record.peer.pk in seen:
+                continue
+            seen.add(record.peer.pk)
+            peers.append(record.peer)
+        return peers
+
+    def related_object_sets(self, obj):
+        """
+        Return `{side: {relationship: <peer objects>}}` for one object.
+
+        Reproduces the shape of `RelationshipModel.get_relationships_with_related_objects()`: a queryset of peer
+        objects where the far side can hold many, a single object or None where it cannot, and a descriptive string
+        where the peer model is unavailable because the App providing it is not installed.
+        """
+        result = {
+            RelationshipSideChoices.SIDE_SOURCE: {},
+            RelationshipSideChoices.SIDE_DESTINATION: {},
+            RelationshipSideChoices.SIDE_PEER: {},
+        }
+        for side in result:
+            for relationship_pk in self._definition_order.get((obj.pk, side), []):
+                relationship = self._definitions[relationship_pk]
+                if side == RelationshipSideChoices.SIDE_PEER:
+                    # Symmetric relationship: source_type and destination_type are equivalent by validation.
+                    peer_side = RelationshipSideChoices.SIDE_SOURCE
+                    remote_content_type = relationship.source_type
+                else:
+                    peer_side = RelationshipSideChoices.OPPOSITE[side]
+                    remote_content_type = getattr(relationship, f"{peer_side}_type")
+
+                remote_model = remote_content_type.model_class()
+                if remote_model is None:
+                    # Maybe an uninstalled App? We cannot provide a queryset, but we can describe the count.
+                    count = len(self.records_for(obj, relationship, side))
+                    result[side][relationship] = f"{count} {remote_content_type} object(s)"
+                    continue
+
+                peers = self.peers_for(obj, relationship, side)
+                if relationship.has_many(peer_side):
+                    result[side][relationship] = evaluated_queryset(remote_model, peers)
+                else:
+                    result[side][relationship] = peers[0] if peers else None
+        return result
 
     def association_sets(self, obj):
         """
