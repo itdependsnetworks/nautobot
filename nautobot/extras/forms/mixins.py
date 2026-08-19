@@ -417,9 +417,11 @@ class RelationshipModelBulkEditFormMixin(BulkEditForm):
         # The following query excludes already invalidated relationships (this happened above
         # by checking for the existence of required objects
         # with the call to self.Meta().model.required_related_objects_errors(output_for="ui"))
-        for relationship in Relationship.objects.get_required_for_model(self.model).exclude(
-            key__in=already_invalidated_keys
-        ):
+        # The list form is used, and `already_invalidated_keys` filtered in Python, because filtering the cached
+        # queryset would clone it and re-query.
+        for relationship in Relationship.objects.get_required_for_model(self.model, get_queryset=False):
+            if relationship.key in already_invalidated_keys:
+                continue
             required_relationships.append(
                 {
                     "key": relationship.key,

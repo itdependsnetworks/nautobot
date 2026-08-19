@@ -223,6 +223,7 @@ def invalidate_relationship_models_cache(sender, **kwargs):
     for method_name in (
         "get_for_model_source",
         "get_for_model_destination",
+        "get_required_for_model",
     ):
         with contextlib.suppress(redis.exceptions.ConnectionError):
             # TODO: *maybe* target more narrowly, e.g. only clear the cache for specific related content-types?

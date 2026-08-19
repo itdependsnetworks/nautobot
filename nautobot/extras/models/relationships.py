@@ -214,7 +214,7 @@ class RelationshipModel(models.Model):
             (list[dict]): List of field error dicts if any are found
         """
 
-        required_relationships = Relationship.objects.get_required_for_model(cls)
+        required_relationships = Relationship.objects.get_required_for_model(cls, get_queryset=False)
         relationships_field_errors = {}
         for relation in required_relationships:
             opposite_side = RelationshipSideChoices.OPPOSITE[relation.required_on]
@@ -456,15 +456,71 @@ class RelationshipManager(BaseManager.from_queryset(RestrictedQuerySet)):
             queryset, _ = cache_get_or_set(cache_key, compute_queryset, timeout=None, cache_hit_callback=hit_callback)
             return queryset
 
-    def get_required_for_model(self, model):
+    def get_required_for_model(self, model, get_queryset=True):
         """
-        Return a queryset with all required Relationships on the given model.
+        Return all required Relationships on the given model.
+
+        Cached the same way as `get_for_model_source()` and `get_for_model_destination()`, and invalidated by the
+        same signal. This runs on every form validation and every API create or update, so an uncached query here
+        is paid on every write.
+
+        Args:
+            model (Model): The django model to which relationships are registered
+            get_queryset (bool): Whether to return a queryset or an object list. Prefer the list form: filtering the
+                cached queryset clones it, which re-queries and defeats the cache.
         """
-        content_type = ContentType.objects.get_for_model(model._meta.concrete_model)
-        return self.get_queryset().filter(
-            Q(source_type=content_type, required_on=RelationshipRequiredSideChoices.SOURCE_SIDE_REQUIRED)
-            | Q(destination_type=content_type, required_on=RelationshipRequiredSideChoices.DESTINATION_SIDE_REQUIRED)
+        concrete_model = model._meta.concrete_model
+        cache_key = construct_cache_key(
+            self,
+            method_name="get_required_for_model",
+            branch_aware=True,
+            model=concrete_model._meta.label_lower,
         )
+        list_cache_key = construct_cache_key(
+            self,
+            method_name="get_required_for_model",
+            branch_aware=True,
+            model=concrete_model._meta.label_lower,
+            listing=True,
+        )
+
+        def compute_queryset():
+            content_type = ContentType.objects.get_for_model(concrete_model)
+            return (
+                self.get_queryset()
+                .filter(
+                    Q(source_type=content_type, required_on=RelationshipRequiredSideChoices.SOURCE_SIDE_REQUIRED)
+                    | Q(
+                        destination_type=content_type,
+                        required_on=RelationshipRequiredSideChoices.DESTINATION_SIDE_REQUIRED,
+                    )
+                )
+                # Callers dereference the opposite side's content type to find the required model class.
+                .select_related("source_type", "destination_type")
+            )
+
+        with traced_span(
+            "nautobot.extras.relationships",
+            "relationship_cache.get [required]",
+            **{
+                "nautobot.extras.relationship_cache.model": concrete_model._meta.label_lower,
+            },
+        ) as _span:
+
+            def hit_callback(hit):
+                _span.set_attribute("nautobot.extras.relationship_cache.hit", hit)
+
+            # cache is explicitly invalidated by nautobot.extras.signals.invalidate_relationship_models_cache
+            if not get_queryset:
+                listing, _ = cache_get_or_set(
+                    list_cache_key,
+                    lambda: list(cache_get_or_set(cache_key, compute_queryset, timeout=None)[0]),
+                    timeout=None,
+                    cache_hit_callback=hit_callback,
+                )
+                return listing
+            queryset, _ = cache_get_or_set(cache_key, compute_queryset, timeout=None, cache_hit_callback=hit_callback)
+            return queryset
 
     def populate_list_caches(self):
         """Populate all relevant caches for `get_for_model(..., get_queryset=False)` and related lookups."""

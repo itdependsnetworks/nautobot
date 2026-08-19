@@ -17,6 +17,7 @@ from nautobot.core.testing import TestCase
 from nautobot.core.utils.lookup import get_filterset_for_model
 from nautobot.dcim.models import Location, LocationType, Manufacturer
 from nautobot.extras.choices import (
+    RelationshipRequiredSideChoices,
     RelationshipSideChoices,
     RelationshipTypeChoices,
 )
@@ -787,4 +788,55 @@ class FormMixinQueryCountTest(RelationshipLoaderTestMixin, TestCase):
             2,
             "Form rendering issued more than one association query per endpoint side, so it is re-querying per "
             f"relationship ({len(association_queries)} association queries)",
+        )
+
+
+class RequiredRelationshipCacheTest(TestCase):
+    """
+    `get_required_for_model()` is cached like its `get_for_model_*` siblings.
+
+    It runs on every form validation and every API create or update, so an uncached query here is paid on every
+    write. It was the one definition lookup that was not cached.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.location_ct = ContentType.objects.get_for_model(Location)
+        cls.manufacturer_ct = ContentType.objects.get_for_model(Manufacturer)
+        cls.required = Relationship(
+            label="Required Cache Test",
+            key="required_cache_test",
+            source_type=cls.location_ct,
+            destination_type=cls.manufacturer_ct,
+            type=RelationshipTypeChoices.TYPE_MANY_TO_MANY,
+            required_on=RelationshipRequiredSideChoices.SOURCE_SIDE_REQUIRED,
+        )
+        cls.required.validated_save()
+
+    def test_repeated_lookups_hit_the_cache(self):
+        Relationship.objects.get_required_for_model(Location, get_queryset=False)  # warm
+        with CaptureQueriesContext(connection) as ctx:
+            for _ in range(5):
+                Relationship.objects.get_required_for_model(Location, get_queryset=False)
+        self.assertEqual(len(ctx.captured_queries), 0, [q["sql"] for q in ctx.captured_queries])
+
+    def test_returns_the_required_relationship(self):
+        required = Relationship.objects.get_required_for_model(Location, get_queryset=False)
+        self.assertIn(self.required.pk, [relationship.pk for relationship in required])
+
+    def test_queryset_form_still_supported(self):
+        queryset = Relationship.objects.get_required_for_model(Location)
+        self.assertIn(self.required.pk, [relationship.pk for relationship in queryset])
+
+    def test_saving_a_relationship_invalidates_the_cache(self):
+        self.assertIn(
+            self.required.pk,
+            [r.pk for r in Relationship.objects.get_required_for_model(Location, get_queryset=False)],
+        )
+        self.required.required_on = RelationshipRequiredSideChoices.NEITHER_SIDE_REQUIRED
+        self.required.validated_save()
+        self.assertNotIn(
+            self.required.pk,
+            [r.pk for r in Relationship.objects.get_required_for_model(Location, get_queryset=False)],
+            "The cache was not invalidated when required_on changed",
         )
