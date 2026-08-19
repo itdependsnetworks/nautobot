@@ -529,7 +529,11 @@ class RelationshipModelFormMixin(forms.ModelForm):
                 # if the object already exists, populate the field with existing values
                 if self.instance.present_in_database:
                     if relationship.has_many(peer_side):
-                        initial = [association.get_peer(self.instance) for association in queryset.all()]
+                        # Iterate the queryset directly rather than calling `.all()`. `get_relationships()`
+                        # returns already-evaluated querysets whose associations carry populated peer caches;
+                        # `.all()` clones, which discards both and puts `get_peer()` back to two queries per
+                        # association. See `nautobot.extras.relationships.evaluated_queryset`.
+                        initial = [association.get_peer(self.instance) for association in queryset]
                         self.fields[field_name].initial = initial
                     else:
                         association = queryset.first()

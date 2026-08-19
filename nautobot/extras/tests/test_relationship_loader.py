@@ -734,3 +734,57 @@ class PeerResolutionTest(RelationshipLoaderTestMixin, TestCase):
         )
         association_queries = [q for q in ctx.captured_queries if "extras_relationshipassociation" in q["sql"]]
         self.assertEqual(len(association_queries), 2)
+
+
+class EvaluatedQuerysetCloneHazardTest(RelationshipLoaderTestMixin, TestCase):
+    """
+    Cloning a loaded queryset silently undoes the loader's work.
+
+    `get_relationships()` returns querysets whose results are loaded and whose associations carry populated peer
+    caches. Any clone - `.all()`, `.filter()`, `.order_by()` - discards both. A `.all()` call in
+    `RelationshipModelFormMixin._append_relationships()` cost 216 queries per form render for exactly this reason;
+    removing it took the same render to 14.
+    """
+
+    def test_iterating_directly_costs_nothing(self):
+        queryset = self._first_non_empty_queryset()
+        with CaptureQueriesContext(connection) as ctx:
+            [association.get_peer(self.location) for association in queryset]
+        self.assertEqual(len(ctx.captured_queries), 0, [q["sql"] for q in ctx.captured_queries])
+
+    def test_cloning_discards_the_loaded_results(self):
+        """Characterizes the hazard, so the cost of cloning is visible rather than surprising."""
+        queryset = self._first_non_empty_queryset()
+        with CaptureQueriesContext(connection) as ctx:
+            [association.get_peer(self.location) for association in queryset.all()]
+        self.assertGreater(
+            len(ctx.captured_queries),
+            0,
+            "Cloning no longer discards the loaded results; if QuerySet.all() became cache-preserving, the warning "
+            "in evaluated_queryset() and _append_relationships() can be relaxed",
+        )
+
+    def _first_non_empty_queryset(self):
+        for side_relationships in self.location.get_relationships(include_hidden=True).values():
+            for relationship, queryset in side_relationships.items():
+                if queryset.count() > 0 and relationship.has_many(RelationshipSideChoices.SIDE_DESTINATION):
+                    return queryset
+        self.fail("Fixture produced no non-empty many-valued association queryset")
+
+
+class FormMixinQueryCountTest(RelationshipLoaderTestMixin, TestCase):
+    """The form path that the `.all()` clone used to make expensive."""
+
+    def test_form_render_does_not_requery_per_relationship(self):
+        from nautobot.dcim.forms import LocationForm
+
+        LocationForm(instance=self.location)  # warm the definition cache
+        with CaptureQueriesContext(connection) as ctx:
+            LocationForm(instance=self.location)
+        association_queries = [q for q in ctx.captured_queries if "extras_relationshipassociation" in q["sql"]]
+        self.assertLessEqual(
+            len(association_queries),
+            2,
+            "Form rendering issued more than one association query per endpoint side, so it is re-querying per "
+            f"relationship ({len(association_queries)} association queries)",
+        )
