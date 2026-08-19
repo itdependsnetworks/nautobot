@@ -353,25 +353,27 @@ class RelationshipDefinitionSweepTest(RelationshipBenchmarkMixin, TestCase):
             "fixture alone",
         )
 
-    def test_baseline_query_count_grows_with_definition_count(self):
+    def test_query_count_is_flat_across_definition_count(self):
         """
-        Characterize TRD acceptance criterion 1 in its *current*, failing state.
+        TRD acceptance criterion 1: query count must not grow with the number of relationship definitions.
 
-        Retrieval today issues one association query per relationship definition, so raising the definition count
-        raises the query count one-for-one.
-
-        PLACEHOLDER: characterizes current behavior; core-3 Object-centric loader inverts this to assert that query
-        count stays flat as definition count rises.
+        Before the object-centric loader this cost exactly one association query per definition (5 definitions
+        cost 5 queries, 25 cost 25; see `perf_runs/relationships_pr1_baseline.md`). The loader retrieves all
+        associations in two side-specific queries, so the count is now independent of definition count.
         """
         low = self._measure_definition_count(5)
         high = self._measure_definition_count(25)
 
-        self.assertEqual(low["queries"], 5, "Expected exactly one association query per definition at D=5")
-        self.assertEqual(high["queries"], 25, "Expected exactly one association query per definition at D=25")
-        self.assertGreater(
+        self.assertEqual(
             high["queries"],
             low["queries"],
-            "Query count did not grow with definition count; retrieval is no longer definition-centric",
+            f"Query count grew with definition count ({low['queries']} at D=5 vs {high['queries']} at D=25); "
+            "retrieval is still definition-centric",
+        )
+        self.assertLessEqual(
+            high["queries"],
+            LOADER_MAX_ASSOCIATION_QUERIES + RELATIONSHIP_BENCH_SCENARIOS["S0"].peer_content_type_count,
+            "Loading should cost at most one query per endpoint side plus one per peer content type",
         )
 
 

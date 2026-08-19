@@ -29,6 +29,7 @@ from nautobot.core.utils.otel import traced_span
 from nautobot.extras.choices import RelationshipRequiredSideChoices, RelationshipSideChoices, RelationshipTypeChoices
 from nautobot.extras.models import ChangeLoggedModel
 from nautobot.extras.models.mixins import ContactMixin, DynamicGroupsModelMixin, NotesMixin, SavedViewMixin
+from nautobot.extras.relationships import RelationshipAssociationLoader
 from nautobot.extras.utils import check_if_key_is_graphql_safe, extras_features, FeatureQuery
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,14 @@ class RelationshipModel(models.Model):
         """
         Return a dictionary of RelationshipAssociation querysets for all custom relationships
 
+        Retrieval is object-centric: all associations involving this object are fetched in two queries (one per
+        endpoint side) by `nautobot.extras.relationships.RelationshipAssociationLoader`, rather than one query per
+        relationship definition. Two consequences for callers:
+
+        - The returned querysets are already evaluated, so reading them issues no further query. They remain real
+          querysets, so `delete()` and re-filtering behave as before.
+        - The queries happen when this method is called, not when a returned queryset is first read.
+
         Returns:
             (dict): `{
                     "source": {
@@ -85,57 +94,8 @@ class RelationshipModel(models.Model):
                     },
                 }`
         """
-        src_relationships, dst_relationships = Relationship.objects.get_for_model(self)
-        if advanced_ui is not None:
-            src_relationships = src_relationships.filter(advanced_ui=advanced_ui)
-            dst_relationships = dst_relationships.filter(advanced_ui=advanced_ui)
-        content_type = ContentType.objects.get_for_model(self)
-
-        sides = {
-            RelationshipSideChoices.SIDE_SOURCE: src_relationships,
-            RelationshipSideChoices.SIDE_DESTINATION: dst_relationships,
-        }
-
-        resp = {
-            RelationshipSideChoices.SIDE_SOURCE: {},
-            RelationshipSideChoices.SIDE_DESTINATION: {},
-            RelationshipSideChoices.SIDE_PEER: {},
-        }
-        for side, relationships in sides.items():
-            for relationship in relationships:
-                if getattr(relationship, f"{side}_hidden") and not include_hidden:
-                    continue
-
-                # Determine if the relationship is applicable to this object based on the filter
-                # To resolve the filter we are using the FilterSet for the given model
-                # If there is no match when we query our id along with the filter
-                # Then the relationship is not applicable to this object
-                if getattr(relationship, f"{side}_filter"):
-                    filterset = get_filterset_for_model(self._meta.model)
-                    if filterset:
-                        filter_params = getattr(relationship, f"{side}_filter")
-                        if not filterset(filter_params, self._meta.model.objects.filter(id=self.id)).qs.exists():
-                            continue
-
-                # Construct the queryset to query all RelationshipAssociation for this object and this relationship
-                query_params = {"relationship": relationship}
-                if not relationship.symmetric:
-                    # Query for RelationshipAssociations that this object is on the expected side of
-                    query_params[f"{side}_id"] = self.pk
-                    query_params[f"{side}_type"] = content_type
-
-                    resp[side][relationship] = RelationshipAssociation.objects.filter(**query_params)
-                else:
-                    # Query for RelationshipAssociations involving this object, regardless of side
-                    resp[RelationshipSideChoices.SIDE_PEER][relationship] = RelationshipAssociation.objects.filter(
-                        (
-                            Q(source_id=self.pk, source_type=content_type)
-                            | Q(destination_id=self.pk, destination_type=content_type)
-                        ),
-                        **query_params,
-                    )
-
-        return resp
+        loader = RelationshipAssociationLoader.for_object(self, include_hidden=include_hidden, advanced_ui=advanced_ui)
+        return loader.load().association_sets(self)
 
     def get_relationships_data(self, **kwargs):
         """

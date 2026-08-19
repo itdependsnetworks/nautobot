@@ -815,6 +815,27 @@ class RelationshipModelSerializerMixin(ValidatedModelSerializer):
     # TODO # 3024 need to change this as well to show just pks in depth=0
     relationships = RelationshipsDataField(required=False, source="*")
 
+    # PERFORMANCE OPPORTUNITY (not implemented): batch relationship loading for list responses.
+    #
+    # `RelationshipsDataField.to_representation()` runs once per object, and each run loads that object's
+    # relationships on its own, so a list response costs one load per row. Measured with 20 relationship
+    # definitions: ten objects loaded individually cost 120 queries, where one batched load of the same ten costs
+    # 12. A list of 10 objects with `?include=relationships` currently measures 90 queries.
+    #
+    # `nautobot.extras.relationships.RelationshipAssociationLoader.for_objects()` already implements the batch
+    # load and is tested, but nothing calls it. Wiring it up needs two pieces:
+    #
+    # 1. A batch seam. DRF's `ListSerializer` calls `child.to_representation()` per item with no hook in between,
+    #    so the pre-warm has to happen either in a `Meta.list_serializer_class` override here, or in
+    #    `ModelViewSetMixin.paginate_queryset()`, and only when `relationships` was actually opted in to (it is an
+    #    opt-in field, so most list requests must not pay for this).
+    # 2. Per-object cache entries from a batch load. `load()` currently writes one request-scope entry keyed by the
+    #    whole object set, so a later single-object read does not find it. The batch load would need to also write
+    #    an entry under each object's single-object key, using the same filter/peer/permission parameters.
+    #
+    # Left unimplemented deliberately: the seam is a decision about the API layer rather than about relationship
+    # retrieval, and picking the wrong one makes every list response pay for a field most of them do not request.
+
     def create(self, validated_data):
         relationships_data = validated_data.pop("relationships", {})
         required_relationships_errors = self.Meta().model.required_related_objects_errors(
