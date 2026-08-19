@@ -19,11 +19,13 @@ queryset whose results are already loaded, which satisfies those consumers witho
 
 from collections import defaultdict
 from dataclasses import dataclass
+from hashlib import sha256
 import logging
 from operator import attrgetter
 
 from django.contrib.contenttypes.models import ContentType
 
+from nautobot.core.utils.cache import construct_cache_key, get_request_cache
 from nautobot.core.utils.lookup import get_filterset_for_model
 from nautobot.core.utils.otel import traced_span
 from nautobot.extras.choices import RelationshipSideChoices
@@ -38,6 +40,29 @@ ENDPOINT_SIDES = (RelationshipSideChoices.SIDE_SOURCE, RelationshipSideChoices.S
 #: no measurement so far shows a large `IN` predicate causing trouble, and a public setting is a permanent
 #: commitment. Promote it to a setting if a deployment is found that needs to tune it.
 PEER_QUERY_CHUNK_SIZE = 1000
+
+#: Prefix on every request-scope cache key this module writes, so that all of them can be dropped at once when a
+#: RelationshipAssociation changes. See `invalidate_request_cache()`.
+REQUEST_CACHE_KEY_PREFIX = "nautobot.extras.relationships.load"
+
+
+def invalidate_request_cache():
+    """
+    Drop every relationship load cached in the current request scope.
+
+    Association data is mutable, so anything that writes a RelationshipAssociation must invalidate, or a later read
+    in the same request would serve a stale answer. Called from
+    `nautobot.extras.signals.invalidate_relationship_load_request_cache`.
+
+    That signal fires on `post_save` and `post_delete`, so the bulk write paths are **not** covered:
+    `bulk_create()`, `bulk_update()`, and `queryset.update()` emit no signals. Code that writes associations that way
+    inside a request and then reads relationships back must call this function itself.
+    """
+    request_cache = get_request_cache()
+    if not request_cache:
+        return
+    for key in [key for key in request_cache if str(key).startswith(REQUEST_CACHE_KEY_PREFIX)]:
+        del request_cache[key]
 
 
 @dataclass(frozen=True)
@@ -174,15 +199,59 @@ class RelationshipAssociationLoader:
             self._content_type = ContentType.objects.get_for_model(self.concrete_model)
         return self._content_type
 
+    def _request_cache_key(self):
+        """
+        Build the request-scope cache key for this load.
+
+        The key covers everything that changes what a load returns: the model, which objects, the definition
+        filters, whether peers were resolved, and the permission context they were resolved under.
+
+        The permission context is the user's identity plus the flags that change what `restrict()` returns. A load
+        performed with no user, and therefore unrestricted, must never be served to a caller that asked for
+        restriction, or that caller would see peers permissions should have hidden. The two therefore get
+        different keys; an under-specified key here would be a permission bug rather than a performance bug.
+        """
+        if self.user is None:
+            permission_scope = "unrestricted"
+        else:
+            permission_scope = f"{self.user.pk}:{bool(self.user.is_superuser)}:{bool(self.user.is_authenticated)}"
+        object_pks = sorted(str(obj.pk) for obj in self.objects)
+        # Hash rather than inline, so a batch of hundreds of objects does not produce an enormous key.
+        objects_key = object_pks[0] if len(object_pks) == 1 else sha256(",".join(object_pks).encode()).hexdigest()
+        # `construct_cache_key` supplies branch-awareness; the prefix goes in front of it so that
+        # `invalidate_request_cache()` can find every key this module wrote.
+        key = construct_cache_key(
+            self.concrete_model,
+            method_name="relationship_load",
+            branch_aware=True,
+            objects=objects_key,
+            count=len(object_pks),
+            hidden=self.include_hidden,
+            advanced_ui=self.advanced_ui,
+            peers=self.resolve_peers,
+            user=permission_scope,
+        )
+        return f"{REQUEST_CACHE_KEY_PREFIX}:{key}"
+
     def load(self):
         """
         Retrieve and group all applicable associations.
+
+        Reuses an identical load already performed in this request scope, if any; see `_request_cache_key()`. Only
+        HTTP requests have such a scope (`nautobot.core.middleware` establishes it), so jobs and management
+        commands simply always load.
 
         Returns:
             (RelationshipLoadResult): Grouped associations, merged against the applicable definitions so that
                 definitions with no associations are still represented.
         """
         if self._result is not None:
+            return self._result
+
+        request_cache = get_request_cache()
+        cache_key = self._request_cache_key() if request_cache is not None else None
+        if cache_key is not None and cache_key in request_cache:
+            self._result = request_cache[cache_key]
             return self._result
 
         with traced_span(
@@ -218,6 +287,8 @@ class RelationshipAssociationLoader:
                 grouped=grouped,
                 loader=self,
             )
+        if cache_key is not None:
+            request_cache[cache_key] = self._result
         return self._result
 
     def _definitions_by_side(self):

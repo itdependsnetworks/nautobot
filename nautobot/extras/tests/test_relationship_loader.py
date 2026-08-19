@@ -13,7 +13,8 @@ from django.db import connection
 from django.db.models import Q, QuerySet
 from django.test.utils import CaptureQueriesContext
 
-from nautobot.core.testing import TestCase
+from nautobot.core.testing import create_test_user, TestCase
+from nautobot.core.utils.cache import request_cache
 from nautobot.core.utils.lookup import get_filterset_for_model
 from nautobot.dcim.models import Location, LocationType, Manufacturer
 from nautobot.extras.choices import (
@@ -735,6 +736,148 @@ class PeerResolutionTest(RelationshipLoaderTestMixin, TestCase):
         )
         association_queries = [q for q in ctx.captured_queries if "extras_relationshipassociation" in q["sql"]]
         self.assertEqual(len(association_queries), 2)
+
+
+class RequestScopedReuseTest(RelationshipLoaderTestMixin, TestCase):
+    """
+    Reuse of a load within one request scope, and the invalidation that makes it safe.
+
+    Association data is mutable, so a cache that outlived a write would serve stale answers. These tests cover both
+    halves: that reuse happens, and that a write ends it.
+    """
+
+    def test_second_load_in_request_scope_issues_no_queries(self):
+        with request_cache():
+            self.location.get_relationships(include_hidden=True)
+            with CaptureQueriesContext(connection) as ctx:
+                self.location.get_relationships(include_hidden=True)
+            self.assertEqual(len(ctx.captured_queries), 0, [q["sql"] for q in ctx.captured_queries])
+
+    def test_differing_filters_do_not_share_a_cache_entry(self):
+        """
+        Loads are cached per definition-filter combination, so the two detail tabs do not share one.
+
+        A superset load that both tabs could share was tried and rejected: it made every caller outside an HTTP
+        request pay for definitions it did not want, and only HTTP requests have a request scope (jobs and
+        management commands do not). See perf_runs/relationships_progress.md.
+        """
+        with request_cache():
+            self.location.get_relationships(advanced_ui=False)
+            # A load asking for a different definition subset must not be served the previous one.
+            with CaptureQueriesContext(connection) as ctx:
+                self.location.get_relationships(advanced_ui=True)
+            self.assertGreater(len(ctx.captured_queries), 0)
+
+    def test_repeated_identical_call_is_free(self):
+        """
+        The pattern that reuse actually helps: one caller reading the same relationships twice in a request.
+
+        `RelationshipModelFormMixin` does exactly this, calling `get_relationships()` in `_append_relationships()`
+        and again in `clean()` with identical arguments.
+        """
+        with request_cache():
+            self.location.get_relationships()
+            with CaptureQueriesContext(connection) as ctx:
+                self.location.get_relationships()
+            self.assertEqual(len(ctx.captured_queries), 0, [q["sql"] for q in ctx.captured_queries])
+
+    def test_no_reuse_outside_a_request_scope(self):
+        """Outside a request scope there is no cache, so every load must go to the database."""
+        self.location.get_relationships(include_hidden=True)
+        with CaptureQueriesContext(connection) as ctx:
+            self.location.get_relationships(include_hidden=True)
+        self.assertGreater(len(ctx.captured_queries), 0)
+
+    def test_creating_an_association_invalidates_the_cache(self):
+        relationship = next(
+            definition
+            for definition in self.fixture.definitions
+            if definition.type == RelationshipTypeChoices.TYPE_MANY_TO_MANY
+            and definition.source_type_id == ContentType.objects.get_for_model(Location).pk
+            and definition.destination_type.model_class() is not Location
+        )
+        peer_model = relationship.destination_type.model_class()
+        unused_peer = (
+            peer_model.objects.exclude(
+                pk__in=RelationshipAssociation.objects.filter(relationship=relationship).values_list(
+                    "destination_id", flat=True
+                )
+            )
+            .order_by("pk")
+            .first()
+        )
+        self.assertIsNotNone(unused_peer, "No unused peer available to create a new association with")
+
+        with request_cache():
+            before = self.location.get_relationships(include_hidden=True)[RelationshipSideChoices.SIDE_SOURCE][
+                relationship
+            ].count()
+
+            RelationshipAssociation.objects.create(
+                relationship=relationship,
+                source_type=relationship.source_type,
+                source_id=self.location.pk,
+                destination_type=relationship.destination_type,
+                destination_id=unused_peer.pk,
+            )
+
+            after = self.location.get_relationships(include_hidden=True)[RelationshipSideChoices.SIDE_SOURCE][
+                relationship
+            ].count()
+
+        self.assertEqual(after, before + 1, "A newly created association was not visible; the cache went stale")
+
+    def test_deleting_an_association_invalidates_the_cache(self):
+        with request_cache():
+            relationships = self.location.get_relationships(include_hidden=True)
+            target = next(
+                (relationship, queryset)
+                for side_relationships in relationships.values()
+                for relationship, queryset in side_relationships.items()
+                if queryset.count() > 0
+            )
+            relationship, queryset = target
+            side = next(
+                side for side, side_relationships in relationships.items() if relationship in side_relationships
+            )
+            before = queryset.count()
+            RelationshipAssociation.objects.filter(pk=queryset.first().pk).delete()
+
+            after = self.location.get_relationships(include_hidden=True)[side][relationship].count()
+
+        self.assertEqual(after, before - 1, "A deleted association was still visible; the cache went stale")
+
+    def test_restricted_and_unrestricted_loads_do_not_share_a_cache_entry(self):
+        """
+        A load performed with no user must never be served to one that asked for permission filtering.
+
+        Sharing them would expose peers that `restrict()` should have hidden, which is the failure mode the TRD
+        calls out as a permission bug rather than a performance bug.
+        """
+        user = create_test_user("relbench_restricted")
+        with request_cache():
+            RelationshipAssociationLoader.for_object(self.location).load()
+            # The restricted load must still hit the database rather than reusing the unrestricted result.
+            with CaptureQueriesContext(connection) as ctx:
+                RelationshipAssociationLoader.for_object(self.location, user=user).load()
+            self.assertGreater(
+                len(ctx.captured_queries),
+                0,
+                "A restricted load reused an unrestricted one, which would expose peers permissions should hide",
+            )
+
+    def test_resolve_peers_variants_do_not_share_a_cache_entry(self):
+        with request_cache():
+            RelationshipAssociationLoader.for_object(self.location, resolve_peers=False).load()
+            # A peer-resolving load must not be served a result that never resolved peers.
+            result = RelationshipAssociationLoader.for_object(self.location).load()
+        peers = [
+            peer
+            for side, relationships in result.association_sets(self.location).items()
+            for relationship in relationships
+            for peer in result.peers_for(self.location, relationship, side)
+        ]
+        self.assertGreater(len(peers), 0, "Peers were not resolved; a resolve_peers=False result was reused")
 
 
 class EvaluatedQuerysetCloneHazardTest(RelationshipLoaderTestMixin, TestCase):

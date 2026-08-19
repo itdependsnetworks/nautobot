@@ -3,10 +3,11 @@ Baseline and regression measurements for Relationship retrieval performance.
 
 These tests do two things:
 
-1. **Characterize** today's retrieval cost. Some assertions here deliberately encode the *current*, undesirable
-   behavior, notably that query count grows with the number of relationship definitions. They are marked
-   PLACEHOLDER with the story that inverts them, so the improvement shows up in a diff rather than only in a
-   benchmark log.
+1. **Assert** the bounds the effort exists to establish: query count independent of relationship definition count,
+   and at most one bulk query per peer content type. Several of these assertions began life as characterizations of
+   the *old*, undesirable behavior and were inverted as each step landed, so the improvement is visible in the
+   diff rather than only in a benchmark log. `perf_runs/relationships_pr1_baseline.md` records what they used to
+   assert.
 2. **Record** per-surface measurements (query count, database time, median and p95 wall time) so that each step of
    the effort can publish a before/after table. Set `NAUTOBOT_RELATIONSHIP_BENCH_OUT` to a file path to collect
    them; `nautobot.extras.tests.relationship_fixtures.format_bench_table()` renders the result as Markdown.
@@ -26,6 +27,7 @@ from django.urls import reverse
 from nautobot.core.settings_funcs import is_truthy
 from nautobot.core.testing import APITestCase, AssertNoRepeatedQueries, create_test_user, TestCase
 from nautobot.core.tests.test_graphql import execute_query_on_rebuilt_schema
+from nautobot.core.utils.cache import request_cache
 from nautobot.dcim.forms import LocationForm
 from nautobot.dcim.models import Location
 from nautobot.dcim.tables import LocationTable
@@ -33,6 +35,7 @@ from nautobot.extras.choices import RelationshipTypeChoices
 from nautobot.extras.models import Relationship
 from nautobot.extras.tests.relationship_fixtures import (
     build_relationship_benchmark_fixture,
+    capture_db_time,
     peer_models,
     RELATIONSHIP_BENCH_SCENARIOS,
     RelationshipBenchmarkMixin,
@@ -262,6 +265,62 @@ class RelationshipBaselineTest(RelationshipFixtureTestMixin, RelationshipBenchma
             surface="detail_render_both_tabs",
         )
         self.assertGreater(measurement["queries"], 1)
+
+    def test_detail_render_both_tabs_in_request_scope(self):
+        """
+        Both detail tabs as a real request renders them, inside the request scope the middleware provides.
+
+        Measured with a single cold pass rather than through `measure()`, because `measure()` warms the callable
+        before capturing and the whole point here is what a *fresh* request costs.
+        """
+        self._render_both_tabs()  # warm the definition cache, which is not what this measures
+        with request_cache():
+            with capture_db_time() as db_time, CaptureQueriesContext(connection) as ctx:
+                self._render_both_tabs()
+        self.record(
+            scenario=self.scenario_name,
+            surface="detail_render_both_tabs_request_scope",
+            queries=len(ctx.captured_queries),
+            db_time_ms=round(db_time["ms"], 2),
+        )
+        self.assertGreater(len(ctx.captured_queries), 0)
+
+    def test_bound_form_reuses_relationship_load(self):
+        """
+        A form submission reads relationships twice with identical arguments, so the second read is free.
+
+        `RelationshipModelFormMixin` calls `get_relationships()` in `_append_relationships()` to build the fields,
+        and `clean()` calls it again. This is the one end-to-end path in the codebase that request-scoped reuse
+        measurably helps, and it only happens on a bound form: an unbound form never reaches `clean()`.
+        """
+        data = {
+            "name": self.location.name,
+            "location_type": self.location.location_type.pk,
+            "status": self.location.status.pk,
+        }
+        LocationForm(data=data, instance=self.location).is_valid()  # warm the definition cache
+
+        with request_cache():
+            with CaptureQueriesContext(connection) as scoped:
+                form = LocationForm(data=data, instance=self.location)
+                form.is_valid()
+        with CaptureQueriesContext(connection) as unscoped:
+            form = LocationForm(data=data, instance=self.location)
+            form.is_valid()
+
+        self.record(
+            scenario=self.scenario_name,
+            surface="bound_form_request_scope",
+            queries=len(scoped.captured_queries),
+            unscoped_queries=len(unscoped.captured_queries),
+        )
+        self.assertLess(
+            len(scoped.captured_queries),
+            len(unscoped.captured_queries),
+            "Request-scoped reuse saved nothing on a bound form, where relationships are read twice with "
+            f"identical arguments (scoped: {len(scoped.captured_queries)}, unscoped: "
+            f"{len(unscoped.captured_queries)})",
+        )
 
     def test_baseline_form_render(self):
         measurement = self.measure(

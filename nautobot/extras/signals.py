@@ -46,6 +46,7 @@ from nautobot.extras.models import (
     MetadataType,
     ObjectChange,
     Relationship,
+    RelationshipAssociation,
 )
 from nautobot.extras.models.approvals import (
     ApprovalWorkflow,
@@ -54,6 +55,7 @@ from nautobot.extras.models.approvals import (
     ApprovalWorkflowStageDefinition,
 )
 from nautobot.extras.querysets import NotesQuerySet
+from nautobot.extras.relationships import invalidate_request_cache
 from nautobot.extras.utils import (
     get_change_logged_m2m_through_side_field_names,
     get_explicit_m2m_through_side_field_names,
@@ -213,6 +215,25 @@ def invalidate_choices_cache(sender, instance, **kwargs):
         else:
             cache_key = construct_cache_key(instance.custom_field, method_name="choices", branch_aware=True)
         cache.delete(cache_key)
+
+
+@receiver(post_save, sender=RelationshipAssociation)
+@receiver(post_delete, sender=RelationshipAssociation)
+@receiver(post_save, sender=Relationship)
+@receiver(m2m_changed, sender=Relationship)
+@receiver(post_delete, sender=Relationship)
+def invalidate_relationship_load_request_cache(sender, **kwargs):
+    """
+    Drop request-scoped relationship loads whenever relationship data changes.
+
+    `RelationshipAssociationLoader` reuses a load across a request, which is only safe as long as nothing has
+    written an association since. Writes are rare relative to reads, and the invalidation is a dictionary prune,
+    so clearing all of them is cheaper than tracking which objects each write affected.
+
+    Only `post_save` and `post_delete` are covered, so the bulk write paths are not: `bulk_create()`,
+    `bulk_update()`, and `queryset.update()` emit no signals. See `invalidate_request_cache()`.
+    """
+    invalidate_request_cache()
 
 
 @receiver(post_save, sender=Relationship)
