@@ -1,0 +1,9 @@
+Added composite indexes on `RelationshipAssociation` for object-centric endpoint lookups (`source_type`/`source_id`/`relationship` and `destination_type`/`destination_id`/`relationship`).
+Added a reproducible relationship benchmark fixture and per-surface baseline measurements (`nautobot.extras.tests.test_relationship_performance`), including query-count characterization of the current definition-centric retrieval.
+Added a `generate_relationship_test_data` management command for generating relationship data at production-like volumes in a development database.
+Added `RelationshipAssociationLoader`, which retrieves all of an object's relationship associations in two queries rather than one per relationship definition; `RelationshipModel.get_relationships()` now delegates to it and returns already-evaluated querysets.
+Changed relationship peer objects to be resolved in bulk, one query per related content type, rather than one generic-foreign-key lookup per association; `RelationshipModel.get_relationships_with_related_objects()` now uses this instead of one reverse-generic-join per relationship definition.
+Fixed a large N+1 in list views displaying relationship columns: `BaseTable` now prefetches relationship associations, their definitions, and their peers, reducing a single-row render with 21 relationship columns from 2182 queries to 14.
+Added request-scoped reuse of relationship loads, so a second identical read within one request issues no queries; writing a RelationshipAssociation invalidates it.
+Fixed relationship form fields re-querying once per relationship when populating initial values, reducing a form render with 20 relationships from 230 queries to 14.
+Added caching of `Relationship.objects.get_required_for_model()`, which previously issued a query on every form validation and every REST create or update.
