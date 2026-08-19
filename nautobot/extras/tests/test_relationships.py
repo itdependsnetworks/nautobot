@@ -6,6 +6,7 @@ import uuid
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.urls import reverse
 from django.utils.html import format_html
 import redis.exceptions
@@ -1265,6 +1266,39 @@ class RelationshipAssociationTest(RelationshipBaseTest, ModelTestCases.BaseModel
         self.assertEqual(1, RelationshipAssociation.objects.filter(destination_ipam_vlan=self.vlans[0]).count())
         self.assertEqual(1, RelationshipAssociation.objects.filter(destination_ipam_vlan=self.vlans[1]).count())
         self.assertEqual(1, RelationshipAssociation.objects.filter(destination_dcim_location=self.locations[0]).count())
+
+
+class RelationshipAssociationIndexTest(TestCase):
+    """
+    The object-centric endpoint indexes must exist in the database, with the expected column order.
+
+    Asserted against database introspection rather than against `Meta.indexes`, so this covers the migration having
+    actually run, not merely the model declaring the index. Column order is asserted because it is the whole point:
+    a generic endpoint lookup filters on content type *and* object id, so those have to lead for the index to serve
+    it, and the trailing `relationship` column is what removes the recheck filter.
+    """
+
+    expected_indexes = {
+        "relassoc_src_obj_rel_idx": ["source_type_id", "source_id", "relationship_id"],
+        "relassoc_dst_obj_rel_idx": ["destination_type_id", "destination_id", "relationship_id"],
+    }
+
+    def test_endpoint_indexes_exist_with_expected_columns(self):
+        with connection.cursor() as cursor:
+            constraints = connection.introspection.get_constraints(cursor, RelationshipAssociation._meta.db_table)
+        for name, expected_columns in self.expected_indexes.items():
+            with self.subTest(index=name):
+                self.assertIn(name, constraints, f"{name} is missing; has migration 0146 been applied?")
+                self.assertEqual(
+                    list(constraints[name]["columns"]),
+                    expected_columns,
+                    f"{name} column order changed, which changes which lookups it can serve",
+                )
+
+    def test_endpoint_indexes_are_declared_on_the_model(self):
+        """The database and the model must agree, or `makemigrations` will report a pending change."""
+        declared = {index.name for index in RelationshipAssociation._meta.indexes}
+        self.assertEqual(declared, set(self.expected_indexes))
 
 
 class RelationshipTableTest(RelationshipBaseTest, TestCase):

@@ -946,6 +946,15 @@ class RelationshipAssociation(BaseModel):
             "destination_type",
             "destination_id",
         )
+        indexes = [
+            # Object-centric endpoint lookups: "which associations involve this object, on this side?".
+            # The `unique_together` index above already covers relationship-leading lookups via its
+            # (relationship, source_type, source_id, ...) prefix, so only the object-leading order is added here.
+            models.Index(fields=["source_type", "source_id", "relationship"], name="relassoc_src_obj_rel_idx"),
+            models.Index(
+                fields=["destination_type", "destination_id", "relationship"], name="relassoc_dst_obj_rel_idx"
+            ),
+        ]
 
     def __str__(self):
         arrow = "<->" if self.relationship.symmetric else "->"
