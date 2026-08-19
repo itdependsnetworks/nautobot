@@ -331,6 +331,38 @@ class BaseTable(django_tables2.Table):
             self.data.set_table(self)
             self.rows = BoundRows(data=self.data, table=self, pinned_data=self.pinned_data)
 
+        self._prefetch_relationship_columns()
+
+    def _prefetch_relationship_columns(self):
+        """
+        Prefetch what `RelationshipColumn` reads, so its cost does not scale with row count.
+
+        The column reads the `associations` property, which the generic prefetch pass above cannot follow because it
+        is not a model field. Left alone, one row with 20 relationship columns costs over 2,000 queries, nearly all
+        of them `association.relationship` dereferenced one row at a time, which is what `select_related` removes.
+        Both endpoints' generic foreign keys are prefetched, not just the far one, because `get_peer()` dereferences
+        source and destination to work out which end the caller passed.
+        """
+        relationship_columns = [
+            name
+            for name in self.base_columns
+            if name.startswith("cr_") and name in self.columns and self.columns[name].visible
+        ]
+        if not relationship_columns:
+            return
+
+        # Any one visible relationship column is enough to justify the prefetch; they all read `associations`.
+        anchor = relationship_columns[0]
+        for relation in ("source_for_associations", "destination_for_associations"):
+            self.add_conditional_prefetch(
+                anchor,
+                prefetch=Prefetch(
+                    relation, queryset=models.RelationshipAssociation.objects.select_related("relationship")
+                ),
+            )
+            for endpoint in ("source", "destination"):
+                self.add_conditional_prefetch(anchor, db_column=f"{relation}__{endpoint}")
+
     @property
     def configurable_columns(self):
         selected_columns = [

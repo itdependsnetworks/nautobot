@@ -18,7 +18,9 @@ generating 10,000 associations is far too slow to belong in every CI run.
 import os
 import unittest
 
+from django.db import connection
 from django.test import tag
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from nautobot.core.settings_funcs import is_truthy
@@ -31,6 +33,7 @@ from nautobot.extras.choices import RelationshipTypeChoices
 from nautobot.extras.models import Relationship
 from nautobot.extras.tests.relationship_fixtures import (
     build_relationship_benchmark_fixture,
+    peer_models,
     RELATIONSHIP_BENCH_SCENARIOS,
     RelationshipBenchmarkMixin,
 )
@@ -540,6 +543,101 @@ class RelationshipLargeScaleBaselineTest(RelationshipBenchmarkMixin, TestCase):
     def test_baseline_s3_many_associations(self):
         fixture = self._measure_scenario("S3")
         self.assertEqual(fixture.association_count, 10000)
+
+
+@tag("performance")
+class RelationshipListTableTest(RelationshipBenchmarkMixin, TestCase):
+    """
+    TRD acceptance criterion 10: a list view's query count must not grow with the number of rows.
+
+    Uses its own fixture (S5: 50 objects, 5 definitions, 5 associations each) because this is the one surface whose
+    cost is per-row.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.fixture = build_relationship_benchmark_fixture(scenario="S5", seed="rowcount")
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("relbench_rowcount")
+        self.relationship_columns = [
+            name for name in LocationTable(Location.objects.none()).base_columns if name.startswith("cr_")
+        ]
+        self.assertTrue(self.relationship_columns)
+        self.user.set_config("tables.LocationTable.columns", ["name", *self.relationship_columns], commit=True)
+
+    def _render(self, row_limit):
+        queryset = Location.objects.filter(location_type=self.fixture.location_type)[:row_limit]
+        table = LocationTable(queryset, user=self.user)
+        visible = [name for name in self.relationship_columns if table.columns[name].visible]
+        self.assertTrue(visible, "Relationship columns are not visible; the measurement would be meaningless")
+        rows = [list(row) for row in table.rows]
+        self.assertEqual(len(rows), row_limit)
+        return rows
+
+    def _relationship_query_count(self, captured_queries):
+        """Count queries attributable to relationship rendering: associations, definitions, and peer models."""
+        tables = ["extras_relationshipassociation", "extras_relationship"] + [
+            model._meta.db_table for model in peer_models()
+        ]
+        return len([q for q in captured_queries if any(f'"{table}"' in q["sql"] for table in tables)])
+
+    def test_relationship_query_count_is_independent_of_row_count(self):
+        """
+        TRD acceptance criterion 10, scoped to what this effort controls.
+
+        Relationship rendering must cost the same for 50 rows as for 1. The *total* query count is not flat, and
+        deliberately is not asserted to be: `LocationTable` renders a tree hierarchy link that issues one
+        child-existence check per row (`SELECT 1 FROM dcim_location WHERE parent_id = ...`). That is an unrelated
+        N+1 in the location tree column, outside this effort's scope, and folding it into this assertion would
+        either hide it or block this change on fixing it.
+        """
+        self._render(1)  # warm the definition cache so it does not skew the first measurement
+        with CaptureQueriesContext(connection) as single:
+            self._render(1)
+        with CaptureQueriesContext(connection) as fifty:
+            self._render(50)
+
+        single_relationship = self._relationship_query_count(single.captured_queries)
+        fifty_relationship = self._relationship_query_count(fifty.captured_queries)
+        self.assertGreater(single_relationship, 0, "No relationship queries were issued at all")
+        self.assertEqual(
+            fifty_relationship,
+            single_relationship,
+            "Relationship query count grew with row count; relationship data is not being prefetched "
+            f"(1 row: {single_relationship}, 50 rows: {fifty_relationship})",
+        )
+        self.record(
+            scenario="S5",
+            surface="list_table_relationship_queries_50_rows",
+            queries=fifty_relationship,
+            total_queries=len(fifty.captured_queries),
+            relationship_columns=len(self.relationship_columns),
+        )
+
+    def test_unrelated_tree_hierarchy_queries_scale_with_rows(self):
+        """
+        Characterize the non-relationship N+1 that the test above deliberately excludes.
+
+        `LocationTable`'s tree link column issues one child-existence check per row. Recorded here so that the
+        exclusion in `test_relationship_query_count_is_independent_of_row_count` is documented by a test rather
+        than only by a comment, and so that fixing it produces a visible failure.
+        """
+        with CaptureQueriesContext(connection) as fifty:
+            self._render(50)
+        child_checks = [
+            q
+            for q in fifty.captured_queries
+            if 'SELECT 1 AS "a" FROM "dcim_location"' in q["sql"] and "parent_id" in q["sql"]
+        ]
+        self.assertEqual(
+            len(child_checks),
+            50,
+            "The location tree column's per-row child-existence query appears to have been fixed or changed; "
+            "update this characterization and the exclusion it documents",
+        )
 
 
 @tag("performance")
