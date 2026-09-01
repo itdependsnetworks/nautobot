@@ -7,6 +7,20 @@ from nautobot.core.choices import ChoiceSet
 #
 
 
+class ChangelogArchivePeriodChoices(ChoiceSet):
+    """Granularity of the calendar period that a retained record is filed under."""
+
+    PERIOD_YEAR = "year"
+    PERIOD_QUARTER = "quarter"
+    PERIOD_MONTH = "month"
+
+    CHOICES = (
+        (PERIOD_YEAR, "Year"),
+        (PERIOD_QUARTER, "Quarter"),
+        (PERIOD_MONTH, "Month"),
+    )
+
+
 class ApprovalWorkflowStateChoices(ChoiceSet):
     """
     Choices for:

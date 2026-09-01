@@ -14,6 +14,7 @@ from django.core.management import CommandError, CommandParser, execute_from_com
 from django.core.management.utils import get_random_secret_key
 from jinja2 import BaseLoader, Environment
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.events import load_event_brokers
 from nautobot.core.settings_funcs import is_truthy
 from nautobot.extras.plugins.utils import load_plugins
@@ -97,6 +98,29 @@ def _preprocess_settings(settings_module, config_path):
     settings_module.DATABASES["job_logs"] = deepcopy(settings_module.DATABASES["default"])
     # When running unit tests, treat it as a mirror of the default test DB, not a separate test DB of its own
     settings_module.DATABASES["job_logs"]["TEST"] = {"MIRROR": "default"}
+
+    # Create the connection the changelog long-term retention tables are pinned to. By default this is
+    # another connection onto the same physical database as "default", so the capability needs no separate
+    # provisioning to turn on. Nothing in the read path spans retention periods, so no query ever needs
+    # warm and retained rows in one statement -- which is what leaves this repointable at its own host
+    # purely through the environment variables below.
+    settings_module.DATABASES[CHANGELOG_ARCHIVE] = deepcopy(settings_module.DATABASES["default"])
+    for _setting, _env_var in (
+        ("NAME", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME"),
+        ("USER", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_USER"),
+        ("PASSWORD", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_PASSWORD"),
+        ("HOST", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST"),
+        ("PORT", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_PORT"),
+    ):
+        if os.environ.get(_env_var):
+            settings_module.DATABASES[CHANGELOG_ARCHIVE][_setting] = os.environ[_env_var]
+    settings_module.CHANGELOG_ARCHIVE_SEPARATE_DATABASE = any(
+        settings_module.DATABASES[CHANGELOG_ARCHIVE].get(_key) != settings_module.DATABASES["default"].get(_key)
+        for _key in ("NAME", "HOST", "PORT")
+    )
+    if not settings_module.CHANGELOG_ARCHIVE_SEPARATE_DATABASE:
+        # Same physical database, so under test it is the same test database, not one of its own.
+        settings_module.DATABASES[CHANGELOG_ARCHIVE]["TEST"] = {"MIRROR": "default"}
 
     #
     # Plugins

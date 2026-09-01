@@ -116,6 +116,22 @@ CONFIG_SETTING_SEPARATOR = ","
 
 CHARFIELD_MAX_LENGTH = 255
 
+# Connection alias the changelog long-term retention tables are pinned to by `ChangelogArchiveRouter`.
+#
+# Set up in `nautobot.core.cli._preprocess_settings` as a second connection onto the same physical
+# database as `default`, the way `job_logs` is. Nothing in the read path spans periods, so no query ever
+# needs warm and retained rows in one statement, which is what leaves this repointable at a separate host
+# by configuration alone.
+#
+# Defined here rather than alongside the models so that the router and the settings machinery can import
+# it without pulling in a models module before the app registry is ready.
+CHANGELOG_ARCHIVE = "changelog_archive"
+
+# The single permission gating every read of retained change history. One grant covering all covered
+# models, rather than one per model: the default view permission on the period registry, so it appears in
+# the existing object-permission UI and API with no new machinery.
+COLD_STORAGE_PERMISSION = "extras.view_archivesegment"
+
 # Default values for pagination settings.
 MAX_PAGE_SIZE_DEFAULT = 1000
 PAGINATE_COUNT_DEFAULT = 50
@@ -128,6 +144,13 @@ GLOBAL_SEARCH_EXCLUDE_LIST = [
     "approvalworkflowstage",
     "approvalworkflowstagedefinition",
     "approvalworkflowstageresponse",
+    # Retained change history is reached one period at a time from the change log views, not through
+    # global search, and the period registry is bookkeeping rather than something to search for.
+    "archivedjobconsoleentry",
+    "archivedjoblogentry",
+    "archivedjobresult",
+    "archivedobjectchange",
+    "archivesegment",
     "cablepath",
     "cabletocabletermination",
     "circuittermination",
@@ -195,6 +218,7 @@ GLOBAL_SEARCH_EXCLUDE_LIST = [
     "rearporttemplate",
     "relationship",
     "relationshipassociation",
+    "retentionrule",
     "rir",
     "role",
     "routetarget",

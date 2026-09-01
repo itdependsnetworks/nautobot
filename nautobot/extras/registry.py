@@ -27,6 +27,11 @@ registry = Registry(
     datasource_contents=defaultdict(list),
     secrets_providers={},
     job_modal_buttons={},
+    # Maps a warm model's label_lower (e.g. "extras.objectchange") to the `Archived*` model holding its
+    # long-term retention. `ChangelogArchiveRouter` uses this to decide which models are pinned to the
+    # archive connection alias, and the read surfaces use it to resolve a warm model to its mirror.
+    # Apps register their own covered models here from `AppConfig.ready()`.
+    changelog_archive_models={},
 )
 
 registry_jobs_lock = threading.RLock()

@@ -525,6 +525,37 @@ properties:
     environment_variable: "NAUTOBOT_CELERY_WORKER_REDIRECT_STDOUTS_LEVEL"
     type: "string"
     version_added: "2.0.0"
+  CHANGELOG_ARCHIVE_ENABLED:
+    default: false
+    description: >-
+      Whether long-term retention of change and job history is enabled. While disabled, all reads and
+      writes behave exactly as they do without the capability.
+    is_constance_config: true
+    type: "boolean"
+    version_added: "3.3.0"
+  CHANGELOG_ARCHIVE_PERIOD:
+    default: "year"
+    description: >-
+      The calendar period each retained record is filed under. Narrow this if periods grow unwieldy;
+      periods already created keep the granularity they were created with.
+    enum:
+    - "year"
+    - "quarter"
+    - "month"
+    is_constance_config: true
+    type: "string"
+    version_added: "3.3.0"
+  CHANGELOG_ARCHIVE_SEPARATE_DATABASE:
+    default: false
+    description: >-
+      Whether the `changelog_archive` database connection addresses a different physical database than
+      `default`. Recomputed at startup from the `NAUTOBOT_CHANGELOG_ARCHIVE_DB_*` environment variables;
+      setting it directly has no effect.
+    details: |-
+      This governs migration routing. Two connections onto one database also share one migration history,
+      so when they are the same database the retention tables are built by the `default` migrate run.
+    type: "boolean"
+    version_added: "3.3.0"
   CHANGELOG_LEGACY_OBJECT_DATA:
     default: true
     description: >-
@@ -554,6 +585,14 @@ properties:
     environment_variable: "NAUTOBOT_CHANGELOG_RETENTION"
     is_constance_config: true
     type: "integer"
+  CHANGELOG_WARM_WINDOW_DAYS:
+    default: 90
+    description: >-
+      The number of days of change and job history kept in warm storage. Records older than this are
+      eligible for the changelog rotation job to move into long-term retention.
+    is_constance_config: true
+    type: "integer"
+    version_added: "3.3.0"
   CONFIG_CONTEXT_DYNAMIC_GROUPS_ENABLED:
     default: false
     description: >-
@@ -649,10 +688,11 @@ properties:
       "Django documentation for CSRF protection": "https://docs.djangoproject.com/en/stable/ref/csrf/#how-it-works"
     type: "array"
   DATABASE_ROUTERS:
-    default: []
+    default: ["nautobot.core.models.routers.ChangelogArchiveRouter"]
     description: >-
-      Custom database router to generate the before & after queries for generating diffs.
-      Used for Nautobot Version Control App.
+      Database routers. Nautobot ships `ChangelogArchiveRouter`, which pins the changelog long-term
+      retention tables to the `changelog_archive` connection. Apps may append their own; the Nautobot
+      Version Control App uses this to generate the before and after queries for diffs.
     items:
       type: "string"
     type: "array"

@@ -1,6 +1,18 @@
 # Webhook content types
 HTTP_CONTENT_TYPE_JSON = "application/json"
 
+# Models whose history can be moved into long-term retention. Each has a mirrored `Archived*` model
+# registered in `registry["changelog_archive_models"]`.
+CHANGELOG_ARCHIVE_COVERED_MODELS = (
+    "extras.objectchange",
+    "extras.jobresult",
+    "extras.joblogentry",
+    "extras.jobconsoleentry",
+)
+
+# Longest `ArchiveSegment.period_key` we generate, e.g. "2024-Q3" or "2024-07".
+CHANGELOG_ARCHIVE_MAX_PERIOD_KEY = 16
+
 # Registerable extras features
 EXTRAS_FEATURES = [
     "cable_terminations",

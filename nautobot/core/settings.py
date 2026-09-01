@@ -570,6 +570,17 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
     DATABASES["default"].setdefault("TEST", {})["CHARSET"] = "utf8mb4"
     DATABASES["default"]["TEST"]["COLLATION"] = "utf8mb4_0900_ai_ci"
 
+# The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
+# alongside `job_logs`.
+DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]
+
+# Whether `changelog_archive` points at a different physical database than `default`. Recomputed in
+# `nautobot.core.cli._preprocess_settings` from the NAUTOBOT_CHANGELOG_ARCHIVE_DB_* environment
+# variables. This governs migration routing, because two aliases onto one database also share one
+# `django_migrations` table: when they are the same database the retention tables have to be built by
+# the `default` run, since the archive-alias run would see every migration already recorded and skip it.
+CHANGELOG_ARCHIVE_SEPARATE_DATABASE = False
+
 # The secret key is used to encrypt session keys and salt passwords.
 SECRET_KEY = os.getenv("NAUTOBOT_SECRET_KEY", "")
 
@@ -899,6 +910,18 @@ CONSTANCE_CONFIG = {
         default="",
         help_text="Custom Markdown or limited HTML to display in a banner at the top of all pages.",
     ),
+    "CHANGELOG_ARCHIVE_ENABLED": ConstanceConfigItem(
+        default=False,
+        help_text="Enable long-term retention of change and job history.\n"
+        "While this is disabled, all reads and writes behave exactly as they do without the capability.",
+        field_type=bool,
+    ),
+    "CHANGELOG_ARCHIVE_PERIOD": ConstanceConfigItem(
+        default="year",
+        help_text="Calendar period each retained record is filed under: 'year', 'quarter', or 'month'.\n"
+        "Narrow this if periods grow unwieldy; existing periods keep the granularity they were created with.",
+        field_type=str,
+    ),
     "CHANGELOG_LEGACY_OBJECT_DATA": ConstanceConfigItem(
         default=True,
         help_text="Store the legacy `object_data` snapshot on each change record, alongside `object_data_v2`.\n"
@@ -907,6 +930,12 @@ CONSTANCE_CONFIG = {
         "change record stores. Records written while it is off leave `object_data` empty, which is visible "
         "to REST API clients reading that field directly.",
         field_type=bool,
+    ),
+    "CHANGELOG_WARM_WINDOW_DAYS": ConstanceConfigItem(
+        default=90,
+        help_text="Number of days of change and job history kept in warm storage.\n"
+        "Records older than this are eligible for the rotation job to move into long-term retention.",
+        field_type=int,
     ),
     "CHANGELOG_RETENTION": ConstanceConfigItem(
         default=90,
@@ -1054,6 +1083,9 @@ CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
     "Change Logging": [
         "CHANGELOG_RETENTION",
+        "CHANGELOG_ARCHIVE_ENABLED",
+        "CHANGELOG_WARM_WINDOW_DAYS",
+        "CHANGELOG_ARCHIVE_PERIOD",
         "CHANGELOG_LEGACY_OBJECT_DATA",
     ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],
