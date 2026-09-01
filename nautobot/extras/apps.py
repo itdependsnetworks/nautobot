@@ -31,6 +31,8 @@ class ExtrasConfig(NautobotConfig):
 
         nautobot_database_ready.connect(refresh_job_models, sender=self)
 
+        self.register_changelog_archive_models()
+
         from graphene_django.converter import convert_django_field
 
         from nautobot.core.models.fields import TagsField
@@ -76,3 +78,28 @@ class ExtrasConfig(NautobotConfig):
 
         register_secrets_provider(EnvironmentVariableSecretsProvider)
         register_secrets_provider(TextFileSecretsProvider)
+
+    def register_changelog_archive_models(self):
+        """
+        Map each covered warm model to the `Archived*` model holding its long-term retention.
+
+        `ChangelogArchiveRouter` reads this to decide which models are pinned to the archive connection
+        alias, and the read surfaces read it to resolve a warm model to its mirror. Apps with their own
+        covered models register them the same way from their `ready()`.
+        """
+        from nautobot.extras.models import (
+            ArchivedJobConsoleEntry,
+            ArchivedJobLogEntry,
+            ArchivedJobResult,
+            ArchivedObjectChange,
+        )
+        from nautobot.extras.registry import registry
+
+        registry["changelog_archive_models"].update(
+            {
+                "extras.objectchange": ArchivedObjectChange,
+                "extras.jobresult": ArchivedJobResult,
+                "extras.joblogentry": ArchivedJobLogEntry,
+                "extras.jobconsoleentry": ArchivedJobConsoleEntry,
+            }
+        )

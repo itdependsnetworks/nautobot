@@ -237,6 +237,12 @@ class CustomFieldModel(models.Model):
 
     _custom_field_data = models.JSONField(encoder=DjangoJSONEncoder, blank=True, default=dict)
 
+    # Whether custom fields may be defined on this model. The feature registry finds custom field models by
+    # looking for `_custom_field_data`, which a changelog retention mirror carries because it copies its
+    # warm counterpart field for field. A mirror sets this False, since retained records are immutable and
+    # nothing should offer to define a custom field on them or sweep their data.
+    is_custom_field_model = True
+
     class Meta:
         abstract = True
 

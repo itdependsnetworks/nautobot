@@ -80,8 +80,108 @@ class ChangeLoggedModel(models.Model):
         return None
 
 
+class ObjectChangeSnapshotsMixin:
+    """
+    Neighbour lookup and diffing, shared by `ObjectChange` and its retained mirror.
+
+    A change record's diff is not stored; it is derived by comparing the record against the previous
+    change to the same object. Everything here needs only `action`, `object_data`, `object_data_v2`, and a
+    `get_related_changes()` returning the other changes to this object -- which each class defines for its
+    own storage. Retained records are diffed and navigated exactly as warm ones are, so the detail view
+    needs no branch.
+    """
+
+    @property
+    def snapshot_data(self):
+        """
+        This record's serialized copy of the object, whichever generation of it exists.
+
+        `object_data_v2` for anything written since Nautobot 1.3, and the legacy `object_data` for older
+        records or for records written with `CHANGELOG_LEGACY_OBJECT_DATA` on and v2 unavailable. Readers
+        want "the snapshot" rather than a particular generation of it, and a mirror inherits this too.
+        """
+        return self.object_data_v2 or self.object_data
+
+    def get_next_change(self, user=None, only=None):
+        """Return next change for this changed object, optionally restricting by user view permission"""
+        related_changes = self.get_related_changes(user=user)
+        if only:
+            related_changes = related_changes.only(*only)
+        return related_changes.filter(time__gt=self.time).order_by("time").first()
+
+    def get_prev_change(self, user=None, only=None):
+        """Return previous change for this changed object, optionally restricting by user view permission"""
+        related_changes = self.get_related_changes(user=user)
+        if only:
+            related_changes = related_changes.only(*only)
+        return related_changes.filter(time__lt=self.time).order_by("-time").first()
+
+    def get_snapshots(self, pre_object_data=None, pre_object_data_v2=None):
+        """
+        Return a dictionary with the changed object's serialized data before and after this change
+        occurred and a key with a shallow diff of those dictionaries.
+
+        Returns:
+        {
+            "prechange": dict(),
+            "postchange": dict(),
+            "differences": {
+                "removed": dict(),
+                "added": dict(),
+            }
+        }
+        """
+        prechange = None
+        postchange = None
+        prior_change = None
+
+        # Populate the prechange field, create actions do not need to have a prechange field
+        if self.action != ObjectChangeActionChoices.ACTION_CREATE:
+            prior_change = self.get_prev_change(only=["object_data_v2", "object_data"])
+            # Deal with the cases where we are trying to capture an object deletion/update and there is no prior change record.
+            # This can happen when the object is first created and the changelog for that object creation action is deleted.
+            if prior_change is not None:
+                prechange = prior_change.object_data_v2 or prior_change.object_data
+            elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+                prechange = self.object_data_v2 or self.object_data
+            else:
+                prechange = pre_object_data_v2 or pre_object_data
+
+        # Populate the postchange field, delete actions do not need to have a postchange field
+        if self.action != ObjectChangeActionChoices.ACTION_DELETE:
+            postchange = self.object_data_v2
+            if postchange is None:
+                postchange = self.object_data
+
+        if prechange and postchange:
+            # Both sides fall back to the legacy snapshot when either lacks v2, so the two are comparable
+            # rather than one of each generation. Only possible when both legacy snapshots exist: they are
+            # absent on records written with CHANGELOG_LEGACY_OBJECT_DATA off, and `prior_change` is None
+            # when the prechange came from the pre-save cache rather than an earlier record.
+            if (
+                prior_change is not None
+                and (self.object_data_v2 is None or prior_change.object_data_v2 is None)
+                and self.object_data is not None
+                and prior_change.object_data is not None
+            ):
+                prechange = prior_change.object_data
+                postchange = self.object_data
+            diff_added = shallow_compare_dict(prechange, postchange, exclude=["last_updated"])
+            diff_removed = {x: prechange.get(x) for x in diff_added}
+        elif prechange and not postchange:
+            diff_added, diff_removed = None, prechange
+        else:
+            diff_added, diff_removed = postchange, None
+
+        return {
+            "prechange": prechange,
+            "postchange": postchange,
+            "differences": {"removed": diff_removed, "added": diff_added},
+        }
+
+
 @extras_features("graphql")
-class ObjectChange(SavedViewMixin, BaseModel):
+class ObjectChange(ObjectChangeSnapshotsMixin, SavedViewMixin, BaseModel):
     """
     Record a change to an object and the user account associated with that change. A change record may optionally
     indicate an object related to the one being changed. For example, a change to an interface may also indicate the
@@ -187,34 +287,6 @@ class ObjectChange(SavedViewMixin, BaseModel):
 
         return super().save(*args, **kwargs)
 
-    def get_action_class(self):
-        return ObjectChangeActionChoices.CSS_CLASSES.get(self.action)
-
-    @property
-    def snapshot_data(self):
-        """
-        This record's serialized copy of the object, whichever generation of it exists.
-
-        `object_data_v2` for anything written since Nautobot 1.3, and the legacy `object_data` for older
-        records or for records written with `CHANGELOG_LEGACY_OBJECT_DATA` on and v2 unavailable. Readers
-        want "the snapshot" rather than a particular generation of it.
-        """
-        return self.object_data_v2 or self.object_data
-
-    def get_next_change(self, user=None, only=None):
-        """Return next change for this changed object, optionally restricting by user view permission"""
-        related_changes = self.get_related_changes(user=user)
-        if only:
-            related_changes = related_changes.only(*only)
-        return related_changes.filter(time__gt=self.time).order_by("time").first()
-
-    def get_prev_change(self, user=None, only=None):
-        """Return previous change for this changed object, optionally restricting by user view permission"""
-        related_changes = self.get_related_changes(user=user)
-        if only:
-            related_changes = related_changes.only(*only)
-        return related_changes.filter(time__lt=self.time).order_by("-time").first()
-
     def get_related_changes(self, user=None, permission="view"):
         """Return queryset of all ObjectChanges for this changed object, excluding this ObjectChange"""
         related_changes = ObjectChange.objects.filter(
@@ -225,65 +297,5 @@ class ObjectChange(SavedViewMixin, BaseModel):
             return related_changes.restrict(user, permission)
         return related_changes
 
-    def get_snapshots(self, pre_object_data=None, pre_object_data_v2=None):
-        """
-        Return a dictionary with the changed object's serialized data before and after this change
-        occurred and a key with a shallow diff of those dictionaries.
-
-        Returns:
-        {
-            "prechange": dict(),
-            "postchange": dict(),
-            "differences": {
-                "removed": dict(),
-                "added": dict(),
-            }
-        }
-        """
-        prechange = None
-        postchange = None
-        prior_change = None
-
-        # Populate the prechange field, create actions do not need to have a prechange field
-        if self.action != ObjectChangeActionChoices.ACTION_CREATE:
-            prior_change = self.get_prev_change(only=["object_data_v2", "object_data"])
-            # Deal with the cases where we are trying to capture an object deletion/update and there is no prior change record.
-            # This can happen when the object is first created and the changelog for that object creation action is deleted.
-            if prior_change is not None:
-                prechange = prior_change.object_data_v2 or prior_change.object_data
-            elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-                prechange = self.object_data_v2 or self.object_data
-            else:
-                prechange = pre_object_data_v2 or pre_object_data
-
-        # Populate the postchange field, delete actions do not need to have a postchange field
-        if self.action != ObjectChangeActionChoices.ACTION_DELETE:
-            postchange = self.object_data_v2
-            if postchange is None:
-                postchange = self.object_data
-
-        if prechange and postchange:
-            # Both sides fall back to the legacy snapshot when either lacks v2, so the two are comparable
-            # rather than one of each generation. Only possible when both legacy snapshots exist: they are
-            # absent on records written with CHANGELOG_LEGACY_OBJECT_DATA off, and `prior_change` is None
-            # when the prechange came from the pre-save cache rather than an earlier record.
-            if (
-                prior_change is not None
-                and (self.object_data_v2 is None or prior_change.object_data_v2 is None)
-                and self.object_data is not None
-                and prior_change.object_data is not None
-            ):
-                prechange = prior_change.object_data
-                postchange = self.object_data
-            diff_added = shallow_compare_dict(prechange, postchange, exclude=["last_updated"])
-            diff_removed = {x: prechange.get(x) for x in diff_added}
-        elif prechange and not postchange:
-            diff_added, diff_removed = None, prechange
-        else:
-            diff_added, diff_removed = postchange, None
-
-        return {
-            "prechange": prechange,
-            "postchange": postchange,
-            "differences": {"removed": diff_removed, "added": diff_added},
-        }
+    def get_action_class(self):
+        return ObjectChangeActionChoices.CSS_CLASSES.get(self.action)

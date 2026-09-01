@@ -23,6 +23,7 @@ from nautobot.circuits import models as circuits_models
 from nautobot.core import exceptions, forms, settings_funcs
 from nautobot.core.api import utils as api_utils
 from nautobot.core.celery.encoders import NautobotKombuJSONEncoder
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.forms.utils import compress_range
 from nautobot.core.models import fields as core_fields, utils as models_utils, validators
 from nautobot.core.testing import TestCase
@@ -1559,6 +1560,11 @@ class TestQuerySetUtils(TestCase):
 
 
 class TestSerializeObjectV2(TestCase):
+    # Sweeps every model, which includes the changelog retention mirrors. Those are routed to their own
+    # database, and reading one is the point rather than an accident: the REST API serializes retained
+    # records through this same function.
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     def test_serialize_object_v2_json_only(self):
         """Make sure serialize_object_v2() returns a JSON-serializable dict and no lazy/deferred queryset data."""
         for model_class in apps.get_models():
