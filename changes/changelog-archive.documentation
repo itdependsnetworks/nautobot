@@ -1,0 +1,2 @@
+Added documentation for changelog long-term retention: how records are stored, reading one period at a time, the filters unavailable within a period, the cold-storage permission, the REST API parameter, the four system jobs, retention rules, and where the retained tables live.
+Added upgrade notes covering the schema check to run after every upgrade and the effect of truncation on integrations that read the changelog tables directly.
