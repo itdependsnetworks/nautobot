@@ -277,6 +277,15 @@ menu_items = (
                         ],
                         buttons=(),
                     ),
+                    NavMenuItem(
+                        link="extras:archivesegment_list",
+                        name="Archive Segments",
+                        weight=300,
+                        permissions=[
+                            "extras.view_archivesegment",
+                        ],
+                        buttons=(),
+                    ),
                 ),
             ),
             NavMenuGroup(

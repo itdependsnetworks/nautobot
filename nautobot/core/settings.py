@@ -164,6 +164,10 @@ EXEMPT_EXCLUDE_MODELS = (
     # The UI list view always requires `extras.view_savedview` regardless of this setting.
     ("extras", "savedview"),
     ("extras", "usersavedviewassociation"),
+    # The cold-storage gate. `permission_is_exempt` short-circuits view permissions when a deployment sets
+    # EXEMPT_VIEW_PERMISSIONS = ["*"], which would silently open retained change history on exactly those
+    # deployments.
+    ("extras", "archivesegment"),
 )
 
 # Models to exempt from the enforcement of view permissions

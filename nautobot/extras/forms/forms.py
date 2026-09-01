@@ -48,6 +48,7 @@ from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, De
 from nautobot.extras.choices import (
     ApprovalWorkflowStateChoices,
     ButtonClassChoices,
+    ChangelogArchivePeriodChoices,
     ComputedFieldTypeChoices,
     CustomFieldFilterLogicChoices,
     DynamicGroupTypeChoices,
@@ -70,6 +71,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -147,6 +149,7 @@ __all__ = (
     "ApprovalWorkflowStageDefinitionFormSet",
     "ApprovalWorkflowStageFilterForm",
     "ApprovalWorkflowStageResponseFilterForm",
+    "ArchiveSegmentFilterForm",
     "BaseDynamicGroupMembershipFormSet",
     "ComputedFieldBulkEditForm",
     "ComputedFieldFilterForm",
@@ -2918,3 +2921,15 @@ class WebhookFilterForm(BootstrapMixin, forms.Form):
     type_update = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     type_delete = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     enabled = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+
+
+class ArchiveSegmentFilterForm(NautobotFilterForm):
+    model = ArchiveSegment
+    q = forms.CharField(required=False, label="Search")
+    model_label = forms.CharField(required=False, label="Object Type")
+    period_granularity = forms.ChoiceField(
+        choices=add_blank_choice(ChangelogArchivePeriodChoices), required=False, label="Granularity"
+    )
+    is_period_closed = forms.NullBooleanField(
+        required=False, label="Closed", widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES)
+    )

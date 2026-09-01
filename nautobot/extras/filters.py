@@ -67,6 +67,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1754,4 +1755,29 @@ class RoleFilterSet(NautobotFilterSet):
             "weight",
             "created",
             "last_updated",
+        ]
+
+
+class ArchiveSegmentFilterSet(BaseFilterSet):
+    q = SearchFilter(
+        filter_predicates={
+            "model_label": "icontains",
+            "period_key": "icontains",
+            "label": "icontains",
+        },
+    )
+
+    class Meta:
+        model = ArchiveSegment
+        fields = [
+            "id",
+            "model_label",
+            "period_key",
+            "label",
+            "period_granularity",
+            "row_count",
+            "last_rotated_time",
+            "is_period_closed",
+            "time_start",
+            "time_end",
         ]

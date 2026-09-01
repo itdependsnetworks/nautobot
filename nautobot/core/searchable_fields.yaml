@@ -457,6 +457,12 @@ extras:
     - state
     name: Approval Workflow Stage Response
   - fields:
+    - id
+    - label
+    - model_label
+    - period_key
+    name: Archive Segment
+  - fields:
     - content_type__app_label
     - content_type__model
     - description

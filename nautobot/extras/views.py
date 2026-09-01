@@ -139,6 +139,7 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -5162,6 +5163,46 @@ class WebhookUIViewSet(NautobotUIViewSet):
                 weight=100,
                 object_field="body_template",
                 render_as=object_detail.BaseTextPanel.RenderOptions.CODE,
+            ),
+        ]
+    )
+
+
+class ArchiveSegmentUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
+    """
+    Read-only view of the retention period registry.
+
+    Periods are created and maintained by the rotation job, never by hand, so there is no create, edit,
+    or delete here. Its `view` permission is the single cold-storage gate for every covered model.
+    """
+
+    filterset_class = filters.ArchiveSegmentFilterSet
+    filterset_form_class = forms.ArchiveSegmentFilterForm
+    queryset = ArchiveSegment.objects.all()
+    serializer_class = serializers.ArchiveSegmentSerializer
+    table_class = tables.ArchiveSegmentTable
+    action_buttons = ("export",)
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=[
+            object_detail.ObjectFieldsPanel(
+                label="Period",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=(
+                    "label",
+                    "model_label",
+                    "period_key",
+                    "period_granularity",
+                    "time_start",
+                    "time_end",
+                ),
+            ),
+            object_detail.ObjectFieldsPanel(
+                label="Rotation Status",
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                fields=("row_count", "last_rotated_time", "is_period_closed"),
             ),
         ]
     )

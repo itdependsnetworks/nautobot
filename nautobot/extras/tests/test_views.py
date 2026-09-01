@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from http import HTTPStatus
 import re
 from unittest import mock
@@ -71,6 +71,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -7851,3 +7852,58 @@ class RoleTestCase(ViewTestCases.OrganizationalObjectViewTestCase, ViewTestCases
                         self.assertNotIn(f"<strong>{result}</strong>", response_body)
                 else:
                     self.assertInHTML(f"<strong>{result}</strong>", response_body)
+
+
+class ArchiveSegmentTestCase(ViewTestCases.GetObjectViewTestCase, ViewTestCases.ListObjectsViewTestCase):
+    """
+    Read-only: retention periods are created by the rotation job, never through the UI.
+
+    `ArchiveSegment.view` is the cold-storage gate, and it is listed in `EXEMPT_EXCLUDE_MODELS` so a
+    deployment setting `EXEMPT_VIEW_PERMISSIONS = ["*"]` does not open retained history by accident. The
+    generic suite assumes that exemption grants access, so the tests relying on it are overridden here to
+    grant the permission explicitly, and the exemption's refusal is asserted directly.
+    """
+
+    model = ArchiveSegment
+
+    @classmethod
+    def setUpTestData(cls):
+        for year in (2022, 2023, 2024):
+            ArchiveSegment.objects.create(
+                model_label="extras.objectchange",
+                period_key=str(year),
+                label=str(year),
+                time_start=datetime(year, 1, 1, tzinfo=dt_timezone.utc),
+                time_end=datetime(year + 1, 1, 1, tzinfo=dt_timezone.utc),
+                row_count=year,
+            )
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_exempt_view_permissions_do_not_open_the_cold_storage_gate(self):
+        """
+        The reason `("extras", "archivesegment")` is in `EXEMPT_EXCLUDE_MODELS`.
+
+        Without the exclusion, every deployment that globally exempts view permissions would silently
+        expose retained change history.
+        """
+        self.client.logout()
+        response = self.client.get(self._get_url("list"))
+        self.assertNotEqual(response.status_code, 200, "the cold-storage gate must survive a global exemption")
+
+    def test_list_objects_anonymous(self):
+        self.skipTest("ArchiveSegment is excluded from EXEMPT_VIEW_PERMISSIONS; see the test above")
+
+    def test_get_object_anonymous(self):
+        self.skipTest("ArchiveSegment is excluded from EXEMPT_VIEW_PERMISSIONS; see the test above")
+
+    def test_list_objects_filtered(self):
+        self.add_permissions("extras.view_archivesegment")
+        super().test_list_objects_filtered()
+
+    def test_list_objects_unknown_filter_no_strict_filtering(self):
+        self.add_permissions("extras.view_archivesegment")
+        super().test_list_objects_unknown_filter_no_strict_filtering()
+
+    def test_list_objects_unknown_filter_strict_filtering(self):
+        self.add_permissions("extras.view_archivesegment")
+        super().test_list_objects_unknown_filter_strict_filtering()
