@@ -1,3 +1,4 @@
+import datetime
 import os
 import sys
 import tempfile
@@ -11,9 +12,12 @@ from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
+from django.db import connections, DEFAULT_DB_ALIAS
 from django.db.models import Q
 from django.http import QueryDict
 from django.test import override_settings, tag
+from django.utils import timezone
 
 from nautobot.circuits import models as circuits_models
 from nautobot.core import exceptions, forms, settings_funcs
@@ -1564,3 +1568,166 @@ class TestSerializeObjectV2(TestCase):
             data = models_utils.serialize_object_v2(instance)
             with self.assertNumQueries(0):  # make sure we're not leaving a time bomb by including a lazy QuerySet
                 NautobotKombuJSONEncoder(ensure_ascii=False).encode(data)
+
+
+class ChangelogComparisonTest(TestCase):
+    """
+    The pure half of no-op change record suppression.
+
+    A wrong answer here is asymmetric: reporting "changed" when nothing did writes a redundant record, which
+    is what the old behaviour did anyway, while reporting "unchanged" when something did erases a change
+    from the audit trail. Everything indeterminate therefore has to come back as None, and the caller logs.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.location = dcim_models.Location.objects.first()
+        self.connection = connections[DEFAULT_DB_ALIAS]
+
+    def compare(self, instance, stored_values, update_fields=None):
+        fields = models_utils.changelog_comparable_fields(instance, update_fields=update_fields)
+        if fields is None:
+            return None
+        return models_utils.changelog_values_unchanged(instance, stored_values, fields, self.connection)
+
+    def stored_values_for(self, instance, update_fields=None):
+        """The row as the database holds it, keyed the way `QuerySet.values()` returns it."""
+        fields = models_utils.changelog_comparable_fields(instance, update_fields=update_fields)
+        return type(instance)._base_manager.filter(pk=instance.pk).values(*[f.name for f in fields]).first()
+
+    def test_untouched_instance_is_unchanged(self):
+        self.assertIs(self.compare(self.location, self.stored_values_for(self.location)), True)
+
+    def test_a_changed_field_is_detected(self):
+        stored = self.stored_values_for(self.location)
+        self.location.description = "something else entirely"
+
+        self.assertIs(self.compare(self.location, stored), False)
+
+    def test_a_changed_foreign_key_is_detected(self):
+        stored = self.stored_values_for(self.location)
+        other = dcim_models.LocationType.objects.exclude(pk=self.location.location_type_id).first()
+        self.location.location_type_id = other.pk
+
+        self.assertIs(self.compare(self.location, stored), False)
+
+    def test_last_updated_alone_is_not_a_change(self):
+        """`auto_now`, so it moves on every save; the rendered diff already ignores it."""
+        stored = self.stored_values_for(self.location)
+        self.location.last_updated = timezone.now() + datetime.timedelta(days=1)
+
+        self.assertIs(self.compare(self.location, stored), True)
+        self.assertNotIn(
+            "last_updated",
+            [f.name for f in models_utils.changelog_comparable_fields(self.location)],
+        )
+
+    def test_created_is_compared(self):
+        """
+        `auto_now_add` writes the in-memory value on an update rather than stamping a new one.
+
+        So `created` really can change, and it shows up in rendered diffs when it does.
+        """
+        self.assertIn("created", [f.name for f in models_utils.changelog_comparable_fields(self.location)])
+
+        stored = self.stored_values_for(self.location)
+        self.location.created = timezone.now() + datetime.timedelta(days=1)
+
+        self.assertIs(self.compare(self.location, stored), False)
+
+    def test_primary_key_is_not_compared(self):
+        names = [f.name for f in models_utils.changelog_comparable_fields(self.location)]
+        self.assertNotIn("id", names)
+
+    def test_json_key_order_is_not_a_change(self):
+        """
+        The database reorders JSON object keys, so comparing serialized forms would report a change on
+        every save of every object carrying custom field data -- silently disabling suppression.
+        """
+        instance = dcim_models.Location.objects.first()
+        instance._custom_field_data = {"a": 1, "b": 2}
+        instance.save()
+        instance.refresh_from_db()
+        stored = self.stored_values_for(instance)
+
+        instance._custom_field_data = {"b": 2, "a": 1}
+
+        self.assertIs(self.compare(instance, stored), True)
+
+    def test_custom_field_value_changes_are_detected(self):
+        instance = dcim_models.Location.objects.first()
+        instance._custom_field_data = {"a": 1}
+        instance.save()
+        instance.refresh_from_db()
+        stored = self.stored_values_for(instance)
+
+        for label, new_value in (
+            ("added", {"a": 1, "b": 2}),
+            ("changed", {"a": 2}),
+            ("cleared", {}),
+        ):
+            with self.subTest(change=label):
+                instance._custom_field_data = new_value
+                self.assertIs(self.compare(instance, stored), False)
+
+    def test_unnormalized_value_is_not_a_change(self):
+        """A string UUID assigned to a foreign key's attname is the same value the row already holds."""
+        stored = self.stored_values_for(self.location)
+        self.location.location_type_id = str(self.location.location_type_id)
+
+        self.assertIs(self.compare(self.location, stored), True)
+
+    def test_missing_row_is_indeterminate(self):
+        self.assertIsNone(self.compare(self.location, None))
+
+    def test_deferred_field_is_indeterminate(self):
+        """Reading it through the descriptor would query, which is what the comparison exists to avoid."""
+        deferred = dcim_models.Location.objects.only("id", "name").get(pk=self.location.pk)
+        stored = self.stored_values_for(self.location)
+
+        fields = models_utils.changelog_comparable_fields(self.location)
+        with self.assertNumQueries(0):
+            verdict = models_utils.changelog_values_unchanged(deferred, stored, fields, self.connection)
+
+        self.assertIsNone(verdict)
+
+    def test_update_fields_narrows_the_comparison(self):
+        stored = self.stored_values_for(self.location, update_fields=["description"])
+        self.location.description = "changed"
+        self.assertIs(self.compare(self.location, stored, update_fields=["description"]), False)
+
+        self.location.refresh_from_db()
+        self.assertIs(self.compare(self.location, stored, update_fields=["description"]), True)
+
+    def test_update_fields_of_only_last_updated_is_unchanged(self):
+        """Nothing left to compare once `auto_now` is excluded, and nothing a reader would see."""
+        self.assertEqual(models_utils.changelog_comparable_fields(self.location, update_fields=["last_updated"]), [])
+        self.assertIs(self.compare(self.location, {}, update_fields=["last_updated"]), True)
+
+    def test_update_fields_restricted_to_a_derived_field_is_indeterminate(self):
+        """
+        `_name` is written by `NaturalOrderingField.pre_save` from `name`, after this comparison runs.
+
+        With `name` excluded from the restriction, the `_name` we would compare is stale, so there is no
+        honest answer -- `save(update_fields=["_name"])` after changing `name` in memory must still log.
+        """
+        device = dcim_models.Device.objects.first()
+        self.assertIsNone(models_utils.changelog_comparable_fields(device, update_fields=["_name"]))
+        self.assertIsNone(self.compare(device, {}, update_fields=["_name"]))
+
+    def test_unrestricted_save_compares_derived_fields_normally(self):
+        """Unrestricted, `name` is in the set too, so a stale `_name` implies its source differs as well."""
+        device = dcim_models.Device.objects.first()
+        fields = models_utils.changelog_comparable_fields(device)
+
+        self.assertIsNotNone(fields)
+        self.assertIn("_name", [f.name for f in fields])
+        self.assertIn("name", [f.name for f in fields])
+
+    def test_uncommitted_file_counts_as_changed(self):
+        """Resolving its stored name means calling `pre_save`, which uploads it."""
+        device_type = dcim_models.DeviceType.objects.first()
+        stored = self.stored_values_for(device_type)
+        device_type.front_image = ContentFile(b"x", name="probe.png")
+
+        self.assertIs(self.compare(device_type, stored), False)

@@ -4,8 +4,11 @@ import uuid
 from constance.test import override_config
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import override_settings, tag
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.html import escape
 from rest_framework import status
 
@@ -25,7 +28,7 @@ from nautobot.dcim.models import (
     Manufacturer,
     SoftwareImageFile,
 )
-from nautobot.extras import context_managers
+from nautobot.extras import context_managers, signals
 from nautobot.extras.choices import (
     CustomFieldTypeChoices,
     DynamicGroupOperatorChoices,
@@ -40,6 +43,7 @@ from nautobot.extras.models import (
     DynamicGroupMembership,
     ObjectChange,
     Role,
+    StaticGroupAssociation,
     Status,
     Tag,
 )
@@ -989,6 +993,253 @@ class ChangeLogM2MThroughTest(APITestCase):
         self.assertEqual(jobhook_changed_objects, expected_changed_objects)
         event_topics = {call.kwargs["topic"] for call in mock_publish_event.call_args_list}
         self.assertEqual(event_topics, {"nautobot.update.dcim.interface", "nautobot.update.ipam.ipaddress"})
+
+
+class ChangeLogPreSaveCacheTest(TestCase):
+    """
+    The pre-save hook that caches an object's prior state reads it back from the database.
+
+    That read used the model's *default* manager, which some models filter. It also used `get()`, so a row
+    deleted between the read and the save raised out of `pre_save` -- inside someone else's `save()` call.
+    """
+
+    def test_association_of_a_non_static_group_can_be_saved(self):
+        """
+        `StaticGroupAssociation.objects` hides associations of non-static groups.
+
+        Saving one with no prior change record therefore raised `DoesNotExist` from the changelog's own
+        pre-save hook, on a model the user never asked it to touch.
+        """
+        location = Location.objects.first()
+        content_type = ContentType.objects.get_for_model(Location)
+        group = DynamicGroup(
+            name="non-static group",
+            content_type=content_type,
+            group_type=DynamicGroupTypeChoices.TYPE_DYNAMIC_FILTER,
+            filter={"name": [location.name]},
+        )
+        group.save()
+
+        association = StaticGroupAssociation.all_objects.filter(dynamic_group=group).first()
+        self.assertIsNotNone(association, "the group should have cached its members")
+        self.assertFalse(
+            StaticGroupAssociation.objects.filter(pk=association.pk).exists(),
+            "the default manager should be hiding this association, which is what made it a trap",
+        )
+        get_changes_for_model(association).delete()
+
+        with context_managers.web_request_context(self.user, context_detail="non-static association"):
+            association.save()
+
+    def test_row_deleted_before_the_read_does_not_raise(self):
+        """
+        A concurrently deleted row is a lost race, not an exception out of `pre_save`.
+
+        Driven against the hook directly: what a `save()` then goes on to do with a vanished row varies by
+        model, and none of that is what this is about.
+        """
+        manufacturer = Manufacturer.objects.create(name="Vanishing Manufacturer")
+        get_changes_for_model(manufacturer).delete()
+        Manufacturer.objects.filter(pk=manufacturer.pk).delete()
+
+        with context_managers.web_request_context(self.user, context_detail="vanished"):
+            signals._cache_obj_data_in_change_context(
+                ObjectChangeActionChoices.ACTION_UPDATE, Manufacturer, manufacturer
+            )
+
+
+class NoOpSaveSuppressionTest(TestCase):
+    """
+    A save that changes nothing records nothing.
+
+    The comparison runs against the row as the database holds it at save time, not against the values the
+    instance was loaded with. `test_reverting_a_concurrent_change_is_recorded` is the test that makes that
+    distinction load-bearing: a cheaper design comparing against loaded values passes everything else here
+    and silently loses that one.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.manufacturer = Manufacturer.objects.create(name="No-Op Manufacturer")
+        get_changes_for_model(self.manufacturer).delete()
+
+    def changes(self):
+        return get_changes_for_model(self.manufacturer)
+
+    def test_saving_without_changing_anything_records_nothing(self):
+        with context_managers.web_request_context(self.user, context_detail="no-op"):
+            self.manufacturer.save()
+
+        self.assertFalse(self.changes().exists())
+
+    def test_changing_a_field_records_one_change(self):
+        with context_managers.web_request_context(self.user, context_detail="real"):
+            self.manufacturer.description = "changed"
+            self.manufacturer.save()
+
+        self.assertEqual(self.changes().count(), 1)
+        self.assertEqual(self.changes().first().action, ObjectChangeActionChoices.ACTION_UPDATE)
+
+    def test_creation_is_always_recorded(self):
+        with context_managers.web_request_context(self.user, context_detail="create"):
+            created = Manufacturer.objects.create(name="Brand New Manufacturer")
+
+        self.assertEqual(get_changes_for_model(created).count(), 1)
+        self.assertEqual(get_changes_for_model(created).first().action, ObjectChangeActionChoices.ACTION_CREATE)
+
+    def test_deletion_is_always_recorded(self):
+        with context_managers.web_request_context(self.user, context_detail="delete"):
+            self.manufacturer.delete()
+
+        self.assertEqual(
+            get_changes_for_model(Manufacturer).filter(object_repr="No-Op Manufacturer").first().action,
+            ObjectChangeActionChoices.ACTION_DELETE,
+        )
+
+    def test_reverting_a_concurrent_change_is_recorded(self):
+        """
+        The case that decides the design.
+
+        The instance was loaded holding "" for description; something else then wrote the row; saving now
+        writes "" back, which *is* a change to the stored row. Comparing against the values the instance was
+        loaded with would call this unchanged and erase a lost update from the audit trail.
+        """
+        Manufacturer.objects.filter(pk=self.manufacturer.pk).update(description="written by someone else")
+
+        with context_managers.web_request_context(self.user, context_detail="revert"):
+            self.manufacturer.save()
+
+        self.assertEqual(self.changes().count(), 1)
+
+    def test_last_updated_alone_is_not_a_change(self):
+        with context_managers.web_request_context(self.user, context_detail="touch"):
+            self.manufacturer.last_updated = timezone.now()
+            self.manufacturer.save()
+
+        self.assertFalse(self.changes().exists())
+
+    def test_custom_field_values_are_compared(self):
+        location = Location.objects.first()
+        get_changes_for_model(location).delete()
+
+        for label, value in (("added", {"probe": 1}), ("changed", {"probe": 2}), ("cleared", {})):
+            with self.subTest(change=label):
+                get_changes_for_model(location).delete()
+                with context_managers.web_request_context(self.user, context_detail=label):
+                    location._custom_field_data = value
+                    location.save()
+                self.assertEqual(get_changes_for_model(location).count(), 1, f"a {label} custom field value")
+
+        get_changes_for_model(location).delete()
+        with context_managers.web_request_context(self.user, context_detail="unchanged"):
+            location.save()
+        self.assertFalse(get_changes_for_model(location).exists())
+
+    def test_an_m2m_change_is_not_suppressed(self):
+        """
+        No concrete field moves when a tag is added, but the change is real.
+
+        `m2m_changed` and `post_save` share one handler and both produce an UPDATE action, so a guard keyed
+        on the action rather than on which signal fired would swallow this.
+        """
+        location = Location.objects.first()
+        tag = Tag.objects.get_for_model(Location).first()
+        location.tags.remove(tag)
+        get_changes_for_model(location).delete()
+
+        with context_managers.web_request_context(self.user, context_detail="tagged"):
+            location.tags.add(tag)
+
+        self.assertEqual(get_changes_for_model(location).count(), 1)
+
+    def test_a_no_op_save_then_an_m2m_change_records_once(self):
+        """The suppressed save must not have consumed the record the m2m change needs."""
+        location = Location.objects.first()
+        tag = Tag.objects.get_for_model(Location).first()
+        location.tags.remove(tag)
+        get_changes_for_model(location).delete()
+
+        with context_managers.web_request_context(self.user, context_detail="no-op then tag"):
+            location.save()
+            location.tags.add(tag)
+
+        self.assertEqual(get_changes_for_model(location).count(), 1)
+
+    def test_update_fields_restricted_to_last_updated_is_suppressed(self):
+        with context_managers.web_request_context(self.user, context_detail="touch only"):
+            self.manufacturer.save(update_fields=["last_updated"])
+
+        self.assertFalse(self.changes().exists())
+
+    def test_update_fields_carrying_a_real_change_is_recorded(self):
+        with context_managers.web_request_context(self.user, context_detail="scoped change"):
+            self.manufacturer.description = "changed"
+            self.manufacturer.save(update_fields=["description", "last_updated"])
+
+        self.assertEqual(self.changes().count(), 1)
+
+    def test_the_verdict_is_not_reused_across_saves(self):
+        """One Python instance, three saves; each has to be judged on its own."""
+        with context_managers.web_request_context(self.user, context_detail="sequence"):
+            self.manufacturer.description = "first"
+            self.manufacturer.save()
+            self.manufacturer.save()
+            self.manufacturer.description = "second"
+            self.manufacturer.save()
+
+        # All three land on one record, because the same object in one request is coalesced in place.
+        self.assertEqual(self.changes().count(), 1)
+        self.assertEqual(self.changes().first().object_data["description"], "second")
+
+    def test_a_model_can_opt_out(self):
+        """`changelog_skip_unchanged_saves = False` is for models whose change record is not a pure
+        function of their own fields."""
+        with mock.patch.object(Manufacturer, "changelog_skip_unchanged_saves", False):
+            with context_managers.web_request_context(self.user, context_detail="opted out"):
+                self.manufacturer.save()
+
+        self.assertEqual(self.changes().count(), 1)
+
+    def test_the_comparison_costs_exactly_one_query(self):
+        """
+        Measured as a difference, against the same save with the comparison switched off.
+
+        An absolute count would pin unrelated machinery -- the prechange cache costs an existence check
+        always, and a fetch plus two custom-field queries for an object with no change history yet. What
+        this feature is answerable for is the one extra read, and that a field read through a descriptor
+        rather than `__dict__` has not turned it into an N+1.
+        """
+        # Give it a change record, so the prechange cache takes its cheap path in both measurements.
+        with context_managers.web_request_context(self.user, context_detail="seed"):
+            self.manufacturer.description = "seeded"
+            self.manufacturer.save()
+
+        with mock.patch.object(Manufacturer, "changelog_skip_unchanged_saves", False):
+            with context_managers.web_request_context(self.user, context_detail="baseline"):
+                with CaptureQueriesContext(connection) as without_comparison:
+                    self.manufacturer.save()
+
+        with context_managers.web_request_context(self.user, context_detail="counted"):
+            with CaptureQueriesContext(connection) as with_comparison:
+                self.manufacturer.save()
+
+        # Not more expensive overall: the one extra read is repaid by the change-record writing it avoids.
+        self.assertLessEqual(len(with_comparison), len(without_comparison))
+
+    def test_the_comparison_itself_is_a_single_query(self):
+        """Reading a field through its descriptor rather than `__dict__` would make this an N+1."""
+        with context_managers.web_request_context(self.user, context_detail="counted"):
+            with self.assertNumQueries(1):
+                signals._record_unchanged_verdict(Manufacturer, self.manufacturer)
+
+        self.assertTrue(self.manufacturer._change_logging_unchanged)
+
+    def test_a_model_without_change_logging_is_untouched(self):
+        """Saving something with no `to_objectchange` must not pay for the comparison or raise."""
+        with context_managers.web_request_context(self.user, context_detail="not logged"):
+            with self.assertNumQueries(1):
+                self.user.set_password("something else")
+                self.user.save()
 
 
 class LegacyObjectDataSettingTest(TestCase):

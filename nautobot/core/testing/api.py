@@ -1047,6 +1047,12 @@ class APIViewTestCases:
         bulk_update_data: Optional[dict] = None
         validation_excluded_fields = []
         choices_fields = None
+        #: Whether an empty PATCH is expected to produce a change record for this model.
+        #:
+        #: Normally it is not: nothing changed, so nothing is recorded. Set this to True for a model that
+        #: normalizes itself on save -- one whose `save()` or `clean()` rewrites its own fields -- where the
+        #: row genuinely does change and the record is correct.
+        empty_patch_creates_objectchange = False
 
         def test_update_object_without_permission(self):
             """
@@ -1120,6 +1126,11 @@ class APIViewTestCases:
             obj_perm.actions = ["change"]
             obj_perm.save()
 
+            # Clear any change records the fixture data already carries for this object, so what follows
+            # measures this request and nothing else. Without this the assertion below is satisfied by a
+            # factory-generated record and never sees what the PATCH did.
+            lookup.get_changes_for_model(instance).delete()
+
             # Send empty PATCH request
             response = self.client.patch(url, {}, format="json", **self.header)
             self.assertHttpStatus(response, status.HTTP_200_OK)
@@ -1127,11 +1138,19 @@ class APIViewTestCases:
             strip_serialized_object(serialized_object)
             self.assertEqual(initial_serialized_object, serialized_object)
 
-            # Verify ObjectChange creation -- yes, even though nothing actually changed
-            # TODO: This may change (hah) at some point -- see https://github.com/nautobot/nautobot/issues/3321
+            # An empty PATCH changes nothing, so it records nothing. A model that rewrites its own fields
+            # on save is the exception: the row really does change, and the record is correct.
             if hasattr(self.model, "to_objectchange"):
                 objectchanges = lookup.get_changes_for_model(instance)
-                self.assertEqual(objectchanges[0].action, extras_choices.ObjectChangeActionChoices.ACTION_UPDATE)
+                if self.empty_patch_creates_objectchange:
+                    self.assertEqual(objectchanges[0].action, extras_choices.ObjectChangeActionChoices.ACTION_UPDATE)
+                else:
+                    self.assertFalse(
+                        objectchanges.exists(),
+                        f"An empty PATCH of {self.model._meta.label} recorded a change. Either the comparison "
+                        "missed something, or this model normalizes itself on save and should set "
+                        "empty_patch_creates_objectchange = True.",
+                    )
                 objectchanges.delete()
 
             # Verify that a PATCH with some data updates that data correctly.

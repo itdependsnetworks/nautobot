@@ -478,3 +478,134 @@ class BulkEditDeleteChangeLogging(TestCase):
             self.assertEqual(oc_list[0].change_context, ObjectChangeEventContextChoices.CONTEXT_ORM)
         with self.subTest():
             self.assertEqual(oc_list[0].change_context_detail, "test_change_log_context")
+
+
+class NoOpSaveCoalescingTestCase(TestCase):
+    """
+    How a suppressed save interacts with the coalescing that folds repeat saves of one object into one row.
+
+    A suppressed save registers nothing, so a later real save in the same request takes the insert branch
+    rather than the overwrite branch. These pin that the record count and its final data come out the same
+    either way.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="coalescing-user")
+        self.manufacturer = Manufacturer.objects.create(name="Coalescing Manufacturer")
+        get_changes_for_model(self.manufacturer).delete()
+
+    def changes(self):
+        return get_changes_for_model(self.manufacturer)
+
+    def test_no_op_then_real_records_once(self):
+        with web_request_context(self.user, context_detail="no-op then real"):
+            self.manufacturer.save()
+            self.manufacturer.description = "changed"
+            self.manufacturer.save()
+
+        self.assertEqual(self.changes().count(), 1)
+        self.assertEqual(self.changes().first().action, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual(self.changes().first().object_data["description"], "changed")
+
+    def test_real_then_no_op_records_once(self):
+        with web_request_context(self.user, context_detail="real then no-op"):
+            self.manufacturer.description = "changed"
+            self.manufacturer.save()
+            self.manufacturer.save()
+
+        self.assertEqual(self.changes().count(), 1)
+        self.assertEqual(self.changes().first().object_data["description"], "changed")
+
+    def test_create_then_no_op_stays_a_create(self):
+        with web_request_context(self.user, context_detail="create then no-op"):
+            created = Manufacturer.objects.create(name="Created Then Resaved")
+            created.save()
+
+        changes = get_changes_for_model(created)
+        self.assertEqual(changes.count(), 1)
+        self.assertEqual(changes.first().action, ObjectChangeActionChoices.ACTION_CREATE)
+
+    def test_no_op_then_delete_keeps_its_prechange(self):
+        """
+        The suppressed save must not have consumed the prior-state cache the delete's diff needs.
+
+        That cache is populated in `pre_save` for objects with no change history, and the delete's rendered
+        diff falls back to it. Decoupling the two would leave webhook consumers a null prechange here.
+        """
+        with web_request_context(self.user, context_detail="no-op then delete"):
+            self.manufacturer.save()
+            self.manufacturer.delete()
+
+        change = get_changes_for_model(Manufacturer).filter(object_repr="Coalescing Manufacturer").first()
+        self.assertEqual(change.action, ObjectChangeActionChoices.ACTION_DELETE)
+        self.assertIsNotNone(change.get_snapshots()["prechange"])
+
+    def test_a_round_trip_within_one_request_still_records(self):
+        """
+        Documented, not desired: A -> B -> A in one request leaves one record whose diff is empty.
+
+        The second save really does change the stored row, so it is recorded, and the coalescing then
+        rewrites the row's data back to A. Suppression is per-save; it does not reconcile a request's net
+        effect. Here so the behaviour is not mistaken for a bug in no-op suppression.
+        """
+        with web_request_context(self.user, context_detail="round trip"):
+            self.manufacturer.description = "B"
+            self.manufacturer.save()
+            self.manufacturer.description = ""
+            self.manufacturer.save()
+
+        self.assertEqual(self.changes().count(), 1)
+        self.assertEqual(self.changes().first().object_data["description"], "")
+
+    def test_bulk_operation_of_no_ops_records_nothing(self):
+        """The case worth the most: a bulk edit setting fields to the values they already hold."""
+        manufacturers = [Manufacturer.objects.create(name=f"Bulk No-Op {index}") for index in range(5)]
+        for manufacturer in manufacturers:
+            get_changes_for_model(manufacturer).delete()
+
+        with web_request_context(self.user, context_detail="bulk no-op"):
+            with deferred_change_logging_for_bulk_operation():
+                for manufacturer in manufacturers:
+                    manufacturer.save()
+
+        for manufacturer in manufacturers:
+            with self.subTest(manufacturer=manufacturer.name):
+                self.assertFalse(get_changes_for_model(manufacturer).exists())
+
+    def test_bulk_operation_records_only_what_changed(self):
+        manufacturers = [Manufacturer.objects.create(name=f"Bulk Mixed {index}") for index in range(4)]
+        for manufacturer in manufacturers:
+            get_changes_for_model(manufacturer).delete()
+
+        with web_request_context(self.user, context_detail="bulk mixed"):
+            with deferred_change_logging_for_bulk_operation():
+                for index, manufacturer in enumerate(manufacturers):
+                    if index % 2:
+                        manufacturer.description = "changed"
+                    manufacturer.save()
+
+        for index, manufacturer in enumerate(manufacturers):
+            with self.subTest(manufacturer=manufacturer.name):
+                self.assertEqual(get_changes_for_model(manufacturer).count(), 1 if index % 2 else 0)
+
+    @mock.patch("nautobot.extras.context_managers.enqueue_webhooks")
+    @mock.patch("nautobot.extras.context_managers.publish_event")
+    def test_a_no_op_dispatches_nothing(self, mock_publish_event, mock_enqueue_webhooks):
+        """No record means no webhook and no event -- the consequence that needs documenting."""
+        with web_request_context(self.user, context_detail="silent"):
+            self.manufacturer.save()
+
+        mock_enqueue_webhooks.assert_not_called()
+        mock_publish_event.assert_not_called()
+
+    @mock.patch("nautobot.extras.context_managers.enqueue_webhooks")
+    @mock.patch("nautobot.extras.context_managers.publish_event")
+    def test_a_real_change_still_dispatches(self, mock_publish_event, mock_enqueue_webhooks):
+        """The comparison that makes the previous test mean something."""
+        with web_request_context(self.user, context_detail="dispatched"):
+            self.manufacturer.description = "changed"
+            self.manufacturer.save()
+
+        mock_enqueue_webhooks.assert_called_once()
+        mock_publish_event.assert_called_once()

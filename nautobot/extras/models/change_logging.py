@@ -29,6 +29,13 @@ class ChangeLoggedModel(models.Model):
     created = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     last_updated = models.DateTimeField(auto_now=True, blank=True, null=True)
 
+    #: Whether a save that changes no field value should be left unrecorded.
+    #:
+    #: Set this to False on a model whose `to_objectchange()` builds `object_data_extra` out of something
+    #: other than its own concrete fields; such a record can differ from its predecessor even when the row
+    #: did not, and the comparison would not see it.
+    changelog_skip_unchanged_saves = True
+
     class Meta:
         abstract = True
 

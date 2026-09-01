@@ -191,6 +191,113 @@ def serialize_object(obj, extra=None, exclude=None):
     return data
 
 
+def changelog_comparable_fields(instance, update_fields=None):
+    """
+    Return the concrete fields of `instance` whose values decide whether a save changed anything.
+
+    Excludes fields that cannot change on an update (primary keys, multi-table-inheritance parent links,
+    database-generated fields) and fields guaranteed to change on every save (`auto_now`, i.e.
+    `last_updated`, which the rendered diff already ignores).
+
+    `auto_now_add` fields are deliberately *included*: on an update, `DateTimeField.pre_save` falls through
+    and writes whatever is on the instance, so `created` really can change -- and it shows up in a rendered
+    diff when it does.
+
+    Returns None when no trustworthy comparison is possible, which the caller must treat the same way as an
+    indeterminate comparison. That happens when `update_fields` restricts the save to a field whose value is
+    produced by `Field.pre_save()`, such as the `_name` of a `NaturalOrderingField`: that value is derived
+    after this runs, from a source field the restriction has excluded, so the in-memory value we would
+    compare is stale. Unrestricted saves are safe, because the source field is then in the set too and a
+    stale derived value implies its source differs as well.
+
+    Args:
+        instance (Model): The instance being saved.
+        update_fields (iterable, optional): The `update_fields` Django is applying to this save, if any.
+            Django derives this itself for instances loaded with `only()`/`defer()`, so honoring it both
+            narrows the comparison and keeps it accurate.
+    """
+    fields = []
+    # Note: KC, This is not well tested.
+    restrict_to = set(update_fields) if update_fields is not None else None
+    for field in instance._meta.concrete_fields:
+        if field.primary_key or getattr(field.remote_field, "parent_link", False):
+            continue
+        if getattr(field, "generated", False):
+            continue
+        # By attribute rather than by name, so an App's own auto_now field is covered too.
+        if getattr(field, "auto_now", False):
+            continue
+        if restrict_to is not None and field.name not in restrict_to and field.attname not in restrict_to:
+            continue
+        if restrict_to is not None and _value_comes_from_pre_save(field):
+            return None
+        fields.append(field)
+    return fields
+
+
+def _value_comes_from_pre_save(field):
+    """Whether this field's stored value is produced by `Field.pre_save()` rather than held on the instance.
+
+    `auto_now` / `auto_now_add` datetimes override `pre_save` too, but predictably, and are handled by the
+    caller, so they do not count here.
+    """
+    from django.db.models import Field
+
+    if type(field).pre_save is Field.pre_save:
+        return False
+    return not (getattr(field, "auto_now", False) or getattr(field, "auto_now_add", False))
+
+
+def changelog_values_unchanged(instance, stored_values, fields, connection):
+    """
+    Whether `instance` holds the same values as `stored_values` for every field in `fields`.
+
+    Returns True (nothing changed), False (something changed), or None when it cannot be determined -- in
+    which case the caller must assume a change occurred, since suppressing a real change record is worse
+    than writing a redundant one.
+
+    Args:
+        instance (Model): The instance being saved.
+        stored_values (dict): The database row as it is now, keyed by field *name* (as `QuerySet.values()`
+            returns it). None if the row could not be read.
+        fields (list): Fields to compare, from `changelog_comparable_fields`.
+        connection: The database connection the save is going to, for value preparation.
+    """
+    if stored_values is None:
+        return None
+
+    for field in fields:
+        # A field absent from __dict__ was deferred or never loaded. Reading it through the descriptor
+        # would issue a query and defeat the point, so this is simply not knowable.
+        if field.attname not in instance.__dict__:
+            return None
+        new_value = instance.__dict__[field.attname]
+        if field.name not in stored_values:
+            return None
+        old_value = stored_values[field.name]
+
+        # An uncommitted file has not been written to storage yet, and finding out what its stored name
+        # would be means calling `pre_save`, which uploads it. Treat it as changed instead.
+        if getattr(new_value, "_committed", True) is False:
+            return False
+
+        if old_value == new_value:
+            continue
+
+        # Equality is checked first because it tolerates representations the database normalizes:
+        # JSON objects compare key-order-independently, and Decimal("1.0") == Decimal("1.00"). Preparing
+        # the values catches the reverse case, where an unnormalized value was assigned in memory -- a
+        # string date on a DateTimeField, a string UUID in a foreign key's attname.
+        try:
+            if field.get_db_prep_save(new_value, connection) == field.get_db_prep_save(old_value, connection):
+                continue
+        except Exception:  # any preparation failure means we cannot tell
+            return None
+        return False
+
+    return True
+
+
 def serialize_object_v2(obj):
     """
     Return a JSON serialized representation of an object using obj's serializer.

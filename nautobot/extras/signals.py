@@ -13,6 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.storage import storages
+from django.db import connections, DEFAULT_DB_ALIAS
 from django.db.models.signals import m2m_changed, post_delete, post_migrate, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -22,6 +23,7 @@ import redis.exceptions
 from nautobot.core.branching import BranchContext
 from nautobot.core.celery import app, import_jobs
 from nautobot.core.models import BaseModel
+from nautobot.core.models.utils import changelog_comparable_fields, changelog_values_unchanged
 from nautobot.core.utils.cache import construct_cache_key
 from nautobot.core.utils.logging import sanitize
 from nautobot.extras.choices import (
@@ -106,7 +108,7 @@ def prevent_delete_stage_definition_with_pending_stages(sender, instance, **kwar
 #
 
 
-def _cache_obj_data_in_change_context(action, sender, instance):
+def _cache_obj_data_in_change_context(action, sender, instance, using=None):
     """
     If this is an existing object that should have a change log entry,
     we need to retrieve the existing object from the database and cache its data in the change context.
@@ -136,11 +138,21 @@ def _cache_obj_data_in_change_context(action, sender, instance):
 
     # Retrieve the existing object from the database.
     if action == ObjectChangeActionChoices.ACTION_UPDATE:
-        instance = sender.objects.get(pk=instance.pk)
+        # `_base_manager`, not `objects`: a model's default manager may filter rows out of view.
+        # `StaticGroupAssociation.objects` hides associations of non-static groups, so `objects.get()`
+        # raised `DoesNotExist` out of `pre_save` for exactly those. `first()` rather than `get()` so a
+        # row deleted concurrently is a no-op here rather than an exception from inside someone's save().
+        instance = sender._base_manager.using(using).filter(pk=instance.pk).first()
+        if instance is None:
+            return
 
     change = instance.to_objectchange(
         action=action,
     )
+    # A model may decline to be change-logged for a particular instance -- `StaticGroupAssociation` does so
+    # for non-static groups -- in which case there is no prior state worth caching either.
+    if change is None:
+        return
     change.request_id = uuid.uuid4()
     change.user = change_context.get_user(instance)
     # cache the previous object data in the change context
@@ -242,18 +254,64 @@ def invalidate_openapi_schema_cache(sender, **kwargs):
 
 
 @receiver(pre_save)
-def _handle_changed_object_pre_save(sender, instance, raw=False, **kwargs):
+def _handle_changed_object_pre_save(sender, instance, raw=False, using=None, update_fields=None, **kwargs):
     """
     Fires before an object is created or updated.
     It caches the current object data to capture the current state of the object.
     This is used to ensure that a previous changelog entry exists for this object when this object is updated.
+    It also records whether this save is about to change anything, which `_handle_changed_object` acts on.
     """
     if raw:
         return
 
+    _record_unchanged_verdict(sender, instance, using=using, update_fields=update_fields)
+
     # Ensure that a changelog entry exists for this object that is being updated
     if not kwargs.get("created"):
-        _cache_obj_data_in_change_context(ObjectChangeActionChoices.ACTION_UPDATE, sender, instance)
+        _cache_obj_data_in_change_context(ObjectChangeActionChoices.ACTION_UPDATE, sender, instance, using=using)
+
+
+def _record_unchanged_verdict(sender, instance, using=None, update_fields=None):
+    """
+    Record on `instance` whether this save leaves every value a reader would see exactly as it was.
+
+    The comparison is against the row as the database holds it *now*, not against the values the instance
+    was loaded with. Those differ whenever something else wrote the row in between, and comparing against
+    the stale loaded values would suppress the record for a save that reverted someone else's change --
+    losing precisely the edit an audit trail exists to capture.
+
+    The verdict is written unconditionally, so a `True` left over from an earlier save of the same Python
+    object can never be read a second time. `_handle_changed_object` pops it.
+
+    Anything indeterminate leaves the verdict False: a redundant change record is a far smaller problem
+    than a missing one.
+    """
+    instance._change_logging_unchanged = False
+
+    change_context = change_context_state.get()
+    if change_context is None:
+        return
+    if not hasattr(instance, "to_objectchange"):
+        return
+    if not getattr(instance, "changelog_skip_unchanged_saves", True):
+        return
+    # A brand-new object is a create, which is always recorded.
+    if not getattr(instance, "present_in_database", False):
+        return
+
+    fields = changelog_comparable_fields(instance, update_fields=update_fields)
+    if fields is None:
+        return
+    if not fields:
+        # `update_fields` restricted the save to nothing a reader would see -- `last_updated` alone.
+        instance._change_logging_unchanged = True
+        return
+
+    stored_values = (
+        sender._base_manager.using(using).filter(pk=instance.pk).values(*[field.name for field in fields]).first()
+    )
+    connection = connections[using or DEFAULT_DB_ALIAS]
+    instance._change_logging_unchanged = changelog_values_unchanged(instance, stored_values, fields, connection) is True
 
 
 @receiver(post_save, sender=GitRepository)
@@ -309,6 +367,14 @@ def _handle_changed_object(sender, instance, raw=False, **kwargs):
         action = ObjectChangeActionChoices.ACTION_CREATE
     elif "created" in kwargs:
         action = ObjectChangeActionChoices.ACTION_UPDATE
+        # Only `post_save` sends `created`, so this cannot swallow an m2m_changed update, where nothing
+        # about the instance's own fields moved but the change is real. `pop` either way, so the verdict
+        # is never read twice.
+        if instance.__dict__.pop("_change_logging_unchanged", False):
+            # The row was written -- `last_updated` moved -- so the counter still reflects it. There is
+            # simply nothing for a reader to see, and so nothing to record.
+            model_updates.labels(instance._meta.model_name).inc()
+            return
     elif kwargs.get("action") in ["post_add", "post_remove"] and kwargs["pk_set"]:
         # m2m_changed with objects added or removed
         action = ObjectChangeActionChoices.ACTION_UPDATE
