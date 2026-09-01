@@ -146,6 +146,33 @@ can specify additional apps with ease.  Similarly, additional `MIDDLEWARE` can b
 
 ---
 
+### `NAUTOBOT_CHANGELOG_ARCHIVE_DB_*`
+
+Default: Unset, in which case retained change history lives in the same database as everything else.
+
++++ 3.3.0
+
+Where the changelog long-term retention tables live. Nautobot always creates a database connection named `changelog_archive`; by default it addresses the same database as `default`, so [long-term retention](../../platform-functionality/change-logging.md#long-term-retention) needs no separate provisioning to enable.
+
+To put retained history on its own database server, set any of:
+
+* `NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME`
+* `NAUTOBOT_CHANGELOG_ARCHIVE_DB_USER`
+* `NAUTOBOT_CHANGELOG_ARCHIVE_DB_PASSWORD`
+* `NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST`
+* `NAUTOBOT_CHANGELOG_ARCHIVE_DB_PORT`
+
+Anything not set is inherited from the `default` database. After pointing the connection elsewhere, create its tables:
+
+```no-highlight
+nautobot-server migrate --database changelog_archive
+```
+
+!!! warning
+    This _must_ be specified as environment variables. The `changelog_archive` entry in `DATABASES` is assembled at startup, so editing `DATABASES` in `nautobot_config.py` will not have the desired effect.
+
+---
+
 ### `GIT_SSL_NO_VERIFY`
 
 Default: Unset

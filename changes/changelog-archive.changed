@@ -1,0 +1,1 @@
+Changed object change logging to record nothing for a save that changes no value. Submitting an edit form with no edits, or a REST API request carrying the values an object already holds, previously wrote a change record whose difference display read "No changes"; it now writes nothing, and fires no webhook, job hook, or event.
