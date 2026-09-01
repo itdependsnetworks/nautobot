@@ -4208,7 +4208,10 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
                 label="Object Data",
                 section=SectionChoices.LEFT_HALF,
                 weight=200,
-                object_field="object_data",
+                # `snapshot_data`, not `object_data`: the latter is the pre-1.3 snapshot, which is empty on
+                # records written with CHANGELOG_LEGACY_OBJECT_DATA off and is the older representation
+                # even when present.
+                object_field="snapshot_data",
                 render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
             ),
             object_detail.TextPanel(

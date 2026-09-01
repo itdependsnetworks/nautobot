@@ -899,6 +899,15 @@ CONSTANCE_CONFIG = {
         default="",
         help_text="Custom Markdown or limited HTML to display in a banner at the top of all pages.",
     ),
+    "CHANGELOG_LEGACY_OBJECT_DATA": ConstanceConfigItem(
+        default=True,
+        help_text="Store the legacy `object_data` snapshot on each change record, alongside `object_data_v2`.\n"
+        "Deprecated: `object_data_v2` supersedes it and every reader prefers it, falling back to the legacy "
+        "snapshot only for records written before Nautobot 1.3. Turning this off halves the data each new "
+        "change record stores. Records written while it is off leave `object_data` empty, which is visible "
+        "to REST API clients reading that field directly.",
+        field_type=bool,
+    ),
     "CHANGELOG_RETENTION": ConstanceConfigItem(
         default=90,
         help_text="Number of days to retain object changelog history.\nSet this to 0 to retain changes indefinitely.",
@@ -1043,7 +1052,10 @@ CONSTANCE_CONFIG = {
 
 CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
-    "Change Logging": ["CHANGELOG_RETENTION"],
+    "Change Logging": [
+        "CHANGELOG_RETENTION",
+        "CHANGELOG_LEGACY_OBJECT_DATA",
+    ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],
     "Installation Metrics": ["DEPLOYMENT_ID"],
     "Natural Keys": ["DEVICE_UNIQUENESS", "LOCATION_NAME_AS_NATURAL_KEY"],
