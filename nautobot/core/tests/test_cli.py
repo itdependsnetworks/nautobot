@@ -4,6 +4,7 @@ from unittest import mock
 
 from nautobot.core import settings as core_settings
 from nautobot.core.cli import _preprocess_settings, migrate_deprecated_templates
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
 
 
@@ -92,6 +93,17 @@ class TestPreprocessSettings(TestCase):
             if key == "TEST":
                 continue
             self.assertEqual(value, settings_module.DATABASES["job_logs"][key])
+
+        # changelog_archive database connection should exist, defaulting to the same physical database
+        self.assertIn(CHANGELOG_ARCHIVE, settings_module.DATABASES)
+        self.assertIn("TEST", settings_module.DATABASES[CHANGELOG_ARCHIVE])
+        self.assertEqual(settings_module.DATABASES[CHANGELOG_ARCHIVE]["TEST"], {"MIRROR": "default"})
+        for key, value in settings_module.DATABASES["default"].items():
+            if key == "TEST":
+                continue
+            self.assertEqual(value, settings_module.DATABASES[CHANGELOG_ARCHIVE][key])
+        # Same physical database, so the retention tables are built by the "default" migrate run
+        self.assertFalse(settings_module.CHANGELOG_ARCHIVE_SEPARATE_DATABASE)
 
         # STORAGES should remain as default
         self.assertEqual(
