@@ -32,6 +32,7 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1979,3 +1980,24 @@ class ContactAssociationTable(StatusTableMixin, RoleTableMixin, BaseTable):
     class Meta(BaseTable.Meta):
         model = ContactAssociation
         fields = ("role", "status", "associated_object_type", "associated_object")
+
+
+class ArchiveSegmentTable(BaseTable):
+    label = tables.Column(linkify=True)
+    period_granularity = tables.Column(verbose_name="Granularity")
+    is_period_closed = BooleanColumn(verbose_name="Closed")
+
+    class Meta(BaseTable.Meta):
+        model = ArchiveSegment
+        fields = (
+            "label",
+            "model_label",
+            "period_key",
+            "period_granularity",
+            "row_count",
+            "last_rotated_time",
+            "is_period_closed",
+            "time_start",
+            "time_end",
+        )
+        default_columns = ("label", "model_label", "row_count", "last_rotated_time", "is_period_closed")

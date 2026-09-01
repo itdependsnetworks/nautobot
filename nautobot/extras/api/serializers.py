@@ -53,6 +53,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1411,3 +1412,11 @@ class GitRepositorySyncResponseSerializer(serializers.Serializer):
 
     message = serializers.CharField(read_only=True)
     job_result = JobResultSerializer(read_only=True)
+
+
+class ArchiveSegmentSerializer(BaseModelSerializer):
+    """Read-only: periods are created and maintained by the rotation job, never through the API."""
+
+    class Meta:
+        model = ArchiveSegment
+        fields = "__all__"
