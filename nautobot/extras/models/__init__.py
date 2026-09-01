@@ -6,6 +6,14 @@ from .approvals import (  # isort: skip
     ApprovalWorkflowStage,
     ApprovalWorkflowStageResponse,
 )
+from .archive import (
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
+    ArchiveSegment,
+    CHANGELOG_ARCHIVE,
+)
 from .contacts import Contact, ContactAssociation, Team
 from .customfields import ComputedField, CustomField, CustomFieldChoice, CustomFieldModel
 from .datasources import GitRepository
@@ -48,11 +56,17 @@ from .statuses import Status, StatusField
 from .tags import Tag, TaggedItem
 
 __all__ = (
+    "CHANGELOG_ARCHIVE",
     "ApprovalWorkflow",
     "ApprovalWorkflowDefinition",
     "ApprovalWorkflowStage",
     "ApprovalWorkflowStageDefinition",
     "ApprovalWorkflowStageResponse",
+    "ArchiveSegment",
+    "ArchivedJobConsoleEntry",
+    "ArchivedJobLogEntry",
+    "ArchivedJobResult",
+    "ArchivedObjectChange",
     "ChangeLoggedModel",
     "ComputedField",
     "ConfigContext",
