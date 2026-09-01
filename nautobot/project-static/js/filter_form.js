@@ -122,9 +122,34 @@ const syncDynamicToDefault = (name) => {
  * @param {string} text - Filter display text.
  * @param {object[]} value - Array of objects containing `text` and `value` key-value pairs.
  */
-const manageDynamicFilter = ({action, name, text, value}) => {
+/**
+ * Get the container holding the applied-filter badges.
+ *
+ * The object list drawer keeps it inside the advanced tab. The scope filter card puts it above the tabs
+ * instead, so the applied filter shows on both, which means looking in the enclosing card as well.
+ *
+ * @returns {Element|null} The container, or `null` when this page has no filter form on it.
+ */
+const getDynamicFilterItems = () => {
   const {dynamicFilterForm} = getFilterForms();
-  const items = dynamicFilterForm.querySelector('.nb-dynamic-filter-items');
+  if (!dynamicFilterForm) {
+    return null;
+  }
+  return (
+    dynamicFilterForm.querySelector('.nb-dynamic-filter-items') ||
+    dynamicFilterForm.closest('#nb-scope-filter-form-container')?.querySelector('.nb-dynamic-filter-items') ||
+    null
+  );
+};
+
+const manageDynamicFilter = ({action, name, text, value}) => {
+  const items = getDynamicFilterItems();
+  if (!items) {
+    // Nothing to add the filter to. Returning beats throwing from under a click handler, which would
+    // take the rest of that handler with it.
+    console.warn('nb: no applied-filter container found; not adding the filter.');
+    return;
+  }
 
   const group = (() => {
     const existing = items.querySelector(`.nb-multi-badge[data-nb-field="${name}"]`);

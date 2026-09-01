@@ -1749,3 +1749,186 @@ class ObjectBulkRenameViewMixin(NautobotViewSetMixin):
                 "parent_name": self.get_selected_objects_parents_name(selected_objects),
             }
         )
+
+
+class ScopedFilterViewMixin:
+    """
+    Edit a `ScopedFilterMixin` model's scope with the standard filter builder.
+
+    The scope is a filter over another model, so it is edited the way a filter is edited everywhere else in
+    Nautobot: the Basic and Advanced tabs of the filter form for whichever model is selected. Changing that
+    selection re-renders the card over HTMX, since a different model has different filters.
+
+    A view using this needs `scope_filter_content_type_field` naming the form field that selects the target
+    model, a `scope-filter-fields` route (the router builds it from the action below), and a template
+    including `inc/scope_filter_card.html`.
+    """
+
+    #: Prefix on the filter form's field names, keeping them clear of the model's own form fields.
+    scope_filter_prefix = "scope"
+    #: The form field that selects the model being filtered over.
+    scope_filter_content_type_field = "content_type"
+    #: Heading on the card.
+    scope_filter_label = "Scope Filter"
+    #: Shown before a target model is selected, since the available filters depend on it.
+    scope_filter_prompt_message = "Please select an object type first to load the available filter fields."
+    scope_filter_card_template = "inc/scope_filter_card.html"
+
+    def get_scope_filter_card_context(self):
+        """Labels the card renders, so the page include and the HTMX response cannot word them differently."""
+        return {
+            "scope_filter_label": self.scope_filter_label,
+            "prompt_message": self.scope_filter_prompt_message,
+        }
+
+    def scope_filter_model_class_from_data(self, data):
+        """
+        The model the scope filters over, read from submitted form data.
+
+        Returns None when nothing is selected yet, which the card renders as a prompt rather than an empty
+        filter form. Override where the selection is not a single content type.
+        """
+        from django.contrib.contenttypes.models import ContentType
+
+        value = data.get(self.scope_filter_content_type_field)
+        if not value:
+            return None
+        content_type = ContentType.objects.filter(pk=value).first()
+        return content_type.model_class() if content_type else None
+
+    @staticmethod
+    def _as_query_dict(data):
+        """`data` as a mutable QueryDict, whether it arrived as one or as a stored dict."""
+        from django.http import QueryDict
+
+        if hasattr(data, "getlist"):
+            return data.copy()
+        query_dict = QueryDict(mutable=True)
+        for key, value in (data or {}).items():
+            query_dict.setlist(key, list(value) if isinstance(value, (list, tuple)) else [value])
+        return query_dict
+
+    def get_scope_filter_context(self, model_class, scope_filter_data=None):
+        """
+        Context for the scope filter card: the filterset, both filter forms, and the applied filters.
+
+        `scope_filter_data` is either a stored filter keyed for the form (`scope_filter_prefixed`) or raw
+        submitted data, so the same call serves rendering a saved rule and re-rendering a submitted one.
+        """
+        from nautobot.core.forms.forms import DynamicFilterFormSet
+        from nautobot.core.utils.lookup import get_filterset_for_model, get_form_for_model
+        from nautobot.core.views.utils import check_filter_for_display
+
+        prefix = self.scope_filter_prefix
+        # A QueryDict either way, whether the filter came from a form submission or out of storage. The
+        # distinction matters both directions: `dict(querydict.items())` keeps only the last value per key,
+        # collapsing a multi-value filter into one the form then rejects; and a plain dict hands a
+        # single-value field its whole list, so a stored `{"action": ["delete"]}` renders as
+        # "Select a valid choice. ['delete'] is not one of the available choices." Submitted data has
+        # neither problem, so storage is normalized to look the same.
+        scope_filter_data = self._as_query_dict(scope_filter_data)
+
+        # Some filters reject an empty value outright rather than ignoring it, so empties are dropped here.
+        # TODO: remove once NaturalKeyOrPKMultipleChoiceFilter and friends tolerate them.
+        for key in list(scope_filter_data):
+            if not key.startswith(f"{prefix}-"):
+                continue
+            values = scope_filter_data.getlist(key) if hasattr(scope_filter_data, "getlist") else scope_filter_data[key]
+            if values in ("", None, [], [""], ()):
+                scope_filter_data.pop(key)
+
+        filterset_class = get_filterset_for_model(model_class)
+        filterset = filterset_class(data=scope_filter_data, queryset=model_class.objects.all(), prefix=prefix)
+        filterset_form_class = get_form_for_model(model_class, form_prefix="Filter")
+        return {
+            "filterset": filterset,
+            # Prefixed so the scope filter's inputs cannot collide with the model's own form fields.
+            "filter_params": [
+                check_filter_for_display(filterset.filters, field_name, values, prefix=prefix)
+                for field_name, values in scope_filter_data.items()
+                if field_name.startswith(f"{prefix}-")
+            ],
+            "dynamic_filter_form": DynamicFilterFormSet(filterset=filterset)(
+                form_kwargs={"filter_fields_prefix": prefix}
+            ),
+            "filter_form": filterset_form_class(scope_filter_data, prefix=prefix),
+            "content_type_selected": True,
+        }
+
+    def get_scope_filter_unavailable_message(self, data, instance=None):
+        """
+        Why a scope filter cannot be set at all for this submission, or None if it can.
+
+        Distinct from "no target model selected yet": that is a prompt to pick one, this is a statement
+        that no filter is possible. A required custom field is the case that needs it.
+        """
+        return None
+
+    def get_scope_filter_form_context(self, request, instance):
+        """
+        The scope filter card's context for a create or update view, from POST data or the saved filter.
+
+        Returns an empty context when no target model is selected, which the card renders as a prompt.
+        """
+        saved = instance is not None and instance.present_in_database
+        data = request.POST if request.POST else (instance.scope_filter_prefixed if saved else None)
+
+        context = self.get_scope_filter_card_context()
+
+        message = self.get_scope_filter_unavailable_message(request.POST if request.POST else {}, instance)
+        if message:
+            return {**context, "unavailable_message": message}
+
+        if request.POST:
+            model_class = self.scope_filter_model_class_from_data(request.POST)
+        else:
+            model_class = instance.scope_filter_model_class if saved else None
+        if model_class is None:
+            return context
+        return {**context, **self.get_scope_filter_context(model_class, data)}
+
+    def save_scope_filter(self, obj, context):
+        """Write the submitted filter onto `obj`, refusing an invalid one rather than saving a partial scope."""
+        filterset = context.get("filterset")
+        if filterset is None:
+            return
+        if not filterset.form.is_valid():
+            raise ValidationError(filterset.form.errors)
+        obj.set_scope_filter(filterset.form.cleaned_data)
+        obj.save()
+
+    @drf_action(
+        detail=False,
+        methods=["GET"],
+        url_path="scope-filter-fields",
+        url_name="scope_filter_fields",
+        custom_view_base_action="change",
+    )
+    def scope_filter_fields(self, request, *args, **kwargs):
+        """
+        HTMX endpoint re-rendering the scope filter card when the target model changes.
+
+        Renders the card partial rather than the whole page: this action has no page of its own -- it is
+        registered on the list route -- so there is no `template_name` to render, and the request's
+        `hx-select` wants only this element anyway.
+
+        `scope_filter_partial` tells the card to leave its `<script>` tags out. They are already on the page
+        that is being swapped into, and re-running them would redeclare their `const`s and throw. The
+        callers' `hx-select` happens to discard them too, but a caller that omitted it would break, so this
+        does not depend on that.
+        """
+        from django.http import HttpResponse
+        from django.template.loader import render_to_string
+
+        context = self.get_scope_filter_card_context()
+        context["scope_filter_partial"] = True
+        message = self.get_scope_filter_unavailable_message(request.GET)
+        if message:
+            context["unavailable_message"] = message
+        else:
+            model_class = self.scope_filter_model_class_from_data(request.GET)
+            if model_class:
+                context.update(self.get_scope_filter_context(model_class))
+        return HttpResponse(
+            render_to_string(template_name=self.scope_filter_card_template, context=context, request=request)
+        )

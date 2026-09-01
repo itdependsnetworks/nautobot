@@ -283,3 +283,92 @@ class DataComplianceModelMixin:
                 continue
 
         return None
+
+
+class ScopedFilterMixin:
+    """
+    A model whose scope is expressed as a stored FilterSet query against another model.
+
+    Two models need this: a custom field, whose scope is the objects allowed to carry it, and a retention
+    rule, whose scope is the records it applies to. Both mean "the set of objects this thing applies to",
+    both express it as filter parameters resolved through the target model's own FilterSet, and both edit
+    it with the same filter builder -- so a rule selects exactly what the same filter would select in the
+    UI or REST API.
+
+    A model using this declares a `scope_filter` JSONField and implements `scope_filter_model_class`, which
+    is the only part that differs: what the scope is a filter *over*.
+    """
+
+    #: Prefix on the filter form's field names, keeping them clear of the model's own form fields.
+    scope_filter_prefix = "scope"
+
+    @property
+    def scope_filter_model_class(self):
+        """The model this instance's scope filters over."""
+        raise NotImplementedError
+
+    @property
+    def scope_filter_prefixed(self):
+        """The stored filter keyed for the filter form, so a saved scope round-trips back into it."""
+        if self.scope_filter:
+            return {f"{self.scope_filter_prefix}-{name}": value for name, value in self.scope_filter.items()}
+        return {}
+
+    def set_scope_filter(self, form_data):
+        """
+        Store the filter a filter form produced, normalized to what the FilterSet recognizes.
+
+        Args:
+            form_data (dict): Filter parameters, generally a filter form's cleaned data.
+        """
+        from nautobot.core.utils.filtering import build_filter_dict_from_filterset
+        from nautobot.core.utils.lookup import get_filterset_for_model
+
+        filterset_class = get_filterset_for_model(self.scope_filter_model_class)
+        self.scope_filter = build_filter_dict_from_filterset(filterset_class, form_data)
+
+    def get_in_scope_queryset(self, queryset, job_logger=None):
+        """
+        Narrow `queryset` to the objects this instance's scope filter selects.
+
+        An empty filter selects everything, so `queryset` comes back unchanged. So does a filter that
+        cannot be resolved -- no FilterSet for the model, or stored parameters the FilterSet rejects --
+        which is the safe direction for a custom field, where the alternative is hiding a field from
+        everything.
+
+        A caller for whom widening is the unsafe direction must not use this. `ChangelogTruncation` is
+        exactly that case: widening there means deleting records the operator did not select, so it
+        refuses an unresolvable filter instead.
+        """
+        import logging
+
+        from nautobot.core.utils.lookup import get_filterset_for_model
+
+        if job_logger is None:
+            # The declaring model's own channel, not this module's, so these warnings stay where they were.
+            job_logger = logging.getLogger(type(self).__module__)
+
+        if not self.scope_filter:
+            return queryset
+
+        model = queryset.model
+        filterset_class = get_filterset_for_model(model)
+        if not filterset_class:
+            job_logger.warning(
+                "`%s` has a scope filter set but no filterset exists for %s; treating all objects as in-scope.",
+                self,
+                model._meta.label,
+            )
+            return queryset
+
+        filterset = filterset_class(data=self.scope_filter, queryset=queryset)
+        if not filterset.form.is_valid():
+            job_logger.warning(
+                "`%s` has an invalid scope filter for %s: %s; treating all objects as in-scope.",
+                self,
+                model._meta.label,
+                filterset.form.errors.as_text(),
+            )
+            return queryset
+
+        return filterset.qs

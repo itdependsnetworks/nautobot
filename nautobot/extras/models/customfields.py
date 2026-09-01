@@ -40,12 +40,17 @@ from nautobot.core.settings_funcs import is_truthy
 from nautobot.core.templatetags.helpers import render_markdown
 from nautobot.core.utils.cache import cache_get_or_set, construct_cache_key
 from nautobot.core.utils.data import render_jinja2, validate_jinja2
-from nautobot.core.utils.filtering import build_filter_dict_from_filterset
 from nautobot.core.utils.lookup import get_filterset_for_model
 from nautobot.core.utils.otel import traced_span
 from nautobot.extras.choices import ComputedFieldTypeChoices, CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from nautobot.extras.models import ChangeLoggedModel
-from nautobot.extras.models.mixins import ContactMixin, DynamicGroupsModelMixin, NotesMixin, SavedViewMixin
+from nautobot.extras.models.mixins import (
+    ContactMixin,
+    DynamicGroupsModelMixin,
+    NotesMixin,
+    SavedViewMixin,
+    ScopedFilterMixin,
+)
 from nautobot.extras.utils import check_if_key_is_graphql_safe, extras_features, FeatureQuery
 
 logger = logging.getLogger(__name__)
@@ -600,6 +605,7 @@ class CustomField(
     DynamicGroupsModelMixin,
     NotesMixin,
     SavedViewMixin,
+    ScopedFilterMixin,
     BaseModel,
 ):
     content_types = models.ManyToManyField(
@@ -733,39 +739,6 @@ class CustomField(
             # cache is explicitly invalidated by nautobot.extras.signals.invalidate_choices_cache
             cache.set(cache_key, choices, timeout=None)
         return choices
-
-    def get_in_scope_queryset(self, queryset, job_logger=logger):
-        """
-        Return a filtered version of `queryset` containing only objects in scope for this field.
-
-        If `self.scope_filter` is empty, `queryset` is returned unchanged.  Falls back to returning
-        `queryset` unchanged if no filterset class exists for the model or the stored filter is invalid,
-        so that any pre-filtering applied by the caller is always preserved.
-        """
-        if not self.scope_filter:
-            return queryset
-
-        model = queryset.model
-        filterset_class = get_filterset_for_model(model)
-        if not filterset_class:
-            job_logger.warning(
-                "Custom field `%s` has scope_filter set but no filterset exists for %s; treating all objects as in-scope.",
-                self.key,
-                model._meta.label,
-            )
-            return queryset
-
-        filterset = filterset_class(data=self.scope_filter, queryset=queryset)
-        if not filterset.form.is_valid():
-            job_logger.warning(
-                "Custom field `%s` has an invalid scope_filter for %s: %s; treating all objects as in-scope.",
-                self.key,
-                model._meta.label,
-                filterset.form.errors.as_text(),
-            )
-            return queryset
-
-        return filterset.qs
 
     def save(self, *args, **kwargs):
         self.clean()
@@ -1092,18 +1065,12 @@ class CustomField(
     @property
     def scope_filter_model_class(self):
         """
-        Property to fetch model class from first content types assigned to this field.
+        The model this field's scope filters over: the first content type assigned to it.
+
+        A field assigned to several content types can only have one scope filter, so the filter is built
+        against the first and `clean` rejects a scope filter with more than one content type.
         """
         return self.content_types.all()[0].model_class()
-
-    @property
-    def scope_filter_prefixed(self):
-        """
-        Property to get the scope filter data with `scope-` prefix for forms usage.
-        """
-        if self.scope_filter:
-            return {f"scope-{name}": value for name, value in self.scope_filter.items()}
-        return {}
 
     def should_render(self, instance: Model) -> bool:
         """
@@ -1143,19 +1110,6 @@ class CustomField(
             return True
 
         return filterset.qs.exists()
-
-    def set_scope_filter(self, form_data):
-        """
-        Set all desired fields from `form_data` into `scope_filter` dict.
-
-        Args:
-            form_data (dict): Dictionary of filter parameters, generally from a filter form's cleaned data.
-        """
-        model_class = self.scope_filter_model_class
-        filterset_class = get_filterset_for_model(model_class)
-
-        new_filter_dict = build_filter_dict_from_filterset(filterset_class, form_data)
-        self.scope_filter = new_filter_dict
 
 
 @extras_features(

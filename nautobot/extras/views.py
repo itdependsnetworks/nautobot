@@ -37,7 +37,6 @@ from nautobot.core.choices import ButtonActionColorChoices
 from nautobot.core.constants import PAGINATE_COUNT_DEFAULT
 from nautobot.core.exceptions import CeleryWorkerNotRunningException, FilterSetFieldNotFound
 from nautobot.core.forms import ApprovalForm, restrict_form_fields
-from nautobot.core.forms.forms import DynamicFilterFormSet
 from nautobot.core.models.querysets import count_related
 from nautobot.core.models.utils import pretty_print_query
 from nautobot.core.templatetags import helpers
@@ -58,7 +57,6 @@ from nautobot.core.utils.config import get_settings_or_config
 from nautobot.core.utils.deprecation import warn_deprecated_at_caller
 from nautobot.core.utils.lookup import (
     get_filterset_for_model,
-    get_form_for_model,
     get_model_for_view_name,
     get_route_for_model,
     get_table_class_string_from_view_name,
@@ -80,10 +78,10 @@ from nautobot.core.views.mixins import (
     ObjectEditViewMixin,
     ObjectListViewMixin,
     ObjectNotesViewMixin,
+    ScopedFilterViewMixin,
 )
 from nautobot.core.views.paginator import EnhancedPaginator, get_paginate_count
 from nautobot.core.views.utils import (
-    check_filter_for_display,
     common_detail_view_context,
     get_obj_from_context,
     prepare_cloned_fields,
@@ -1339,7 +1337,7 @@ class ObjectAssignContactOrTeamView(generic.ObjectEditView):
 #
 
 
-class CustomFieldUIViewSet(NautobotUIViewSet):
+class CustomFieldUIViewSet(ScopedFilterViewMixin, NautobotUIViewSet):
     bulk_update_form_class = forms.CustomFieldBulkEditForm
     queryset = CustomField.objects.all()
     serializer_class = serializers.CustomFieldSerializer
@@ -1412,18 +1410,10 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
 
             if request.POST:
                 context["choices"] = forms.CustomFieldChoiceFormSet(data=request.POST, instance=instance)
-
-                model_class = self.get_content_type_model_class(request.POST)
-                scope_filter_context = self.get_scope_filter_context(model_class, request.POST)
-                context.update(**scope_filter_context)
             else:
                 context["choices"] = forms.CustomFieldChoiceFormSet(instance=instance)
-
-                if content_type := instance.content_types.first():
-                    scope_filter_context = self.get_scope_filter_context(
-                        content_type.model_class(), instance.scope_filter_prefixed
-                    )
-                    context.update(**scope_filter_context)
+            context["scope_filter_trigger"] = "#id_content_types"
+            context.update(**self.get_scope_filter_form_context(request, instance))
 
         if self.action == "retrieve":
             choices_data = []
@@ -1437,66 +1427,30 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
 
         return context
 
-    @staticmethod
-    def get_content_type_model_class(data):
+    scope_filter_content_type_field = "content_types"
+    scope_filter_label = "Scope filter"
+    scope_filter_prompt_message = "Please select content types first to load scope filter available fields."
+
+    def scope_filter_model_class_from_data(self, data):
         """
-        This function will validate ContentType from POST and then return proper model class
+        The first content type the field is assigned to, since a field may be assigned to several.
+
+        Goes through the form so an invalid selection is reported rather than quietly resolving to nothing.
         """
         content_type_form = forms.CustomFieldContentTypesForm(data=data)
-        if content_type_form.is_valid():
-            if content_type_form.cleaned_data["content_types"].exists():
-                content_type = content_type_form.cleaned_data["content_types"][0]
-                return content_type.model_class()
-            return None
+        if not content_type_form.is_valid():
+            raise ValidationError(content_type_form.errors)
+        content_type = content_type_form.cleaned_data["content_types"].first()
+        return content_type.model_class() if content_type else None
 
-        raise ValidationError(content_type_form.errors)
-
-    def get_scope_filter_context(self, model_class, scope_filter_data=None):
-        """
-        Function responsible for generating context for scope filter form.
-
-        `scope_filter_data` can be both: value from DB or plain request.POST
-        """
-        prefix = "scope"
-        if not scope_filter_data:
-            scope_filter_data = {}
-
-        # We need to drop empty values, because some type of fields (e.g. NaturalKeyOrPKMultipleChoiceFilter) don't accept empty list or str
-        # TODO: Remove this code after fix on NaturalKeyOrPKMultipleChoiceFilter and other
-        scope_filter_data_filtered = scope_filter_data.copy()
-        for key in list(scope_filter_data_filtered.keys()):
-            if key.startswith("scope-"):
-                if hasattr(scope_filter_data_filtered, "getlist"):
-                    values = scope_filter_data_filtered.getlist(key)
-                else:
-                    values = scope_filter_data_filtered.get(key)
-                if values in ("", None, [], [""], ()):
-                    scope_filter_data_filtered.pop(key)
-
-        filterset_class = get_filterset_for_model(model_class)
-        filterset = filterset_class(
-            data=scope_filter_data_filtered,
-            queryset=model_class.objects.all(),
-            prefix=prefix,
-        )
-        filterset_form_class = get_form_for_model(model_class, form_prefix="Filter")
-        filterset_form = filterset_form_class(scope_filter_data_filtered, prefix=prefix)
-        display_filter_params = [
-            # To avoid input name collision between scope filter fields and standard custom field form we're prefixing all the fields
-            check_filter_for_display(filterset.filters, field_name, values, prefix=prefix)
-            for field_name, values in scope_filter_data_filtered.items()
-            if field_name.startswith(f"{prefix}-")
-        ]
-
-        dynamic_filter_form = DynamicFilterFormSet(filterset=filterset)(form_kwargs={"filter_fields_prefix": prefix})
-
-        return {
-            "filterset": filterset,
-            "filter_params": display_filter_params,
-            "dynamic_filter_form": dynamic_filter_form,
-            "filter_form": filterset_form,
-            "content_type_selected": True,
-        }
+    def get_scope_filter_unavailable_message(self, data, instance=None):
+        """A required field must be carriable by every in-scope object, so it can have no scope filter."""
+        required = bool(data) and data.get("required") == "on"
+        if not data and instance is not None and instance.present_in_database:
+            required = instance.required
+        if required:
+            return "Scope filter can be set only for non-required custom fields."
+        return None
 
     def form_save(self, form, **kwargs):
         obj = super().form_save(form, **kwargs)
@@ -1509,42 +1463,9 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
         else:
             raise ValidationError(choices.errors)
 
-        # Process the data for scope filter
-        filter_form = ctx["filterset"].form
-        if filter_form.is_valid():
-            obj.set_scope_filter(filter_form.cleaned_data)
-            obj.save()
-        else:
-            raise ValidationError(filter_form.errors)
+        self.save_scope_filter(obj, ctx)
 
         return obj
-
-    @action(
-        detail=False,
-        methods=["GET"],
-        url_path="scope-filter-fields",
-        url_name="scope_filter_fields",
-        custom_view_base_action="change",
-    )
-    def scope_filter_fields_for_content_types(self, request, *args, **kwargs):
-        """
-        HTMX endpoint to re-render scope filter part of form on content type update.
-        """
-        required_checked = request.GET.get("required", None) == "on"
-        context = {"required_checked": required_checked}
-
-        model_class = self.get_content_type_model_class(request.GET)
-        if model_class and not required_checked:
-            context = self.get_scope_filter_context(model_class)
-
-        # It's rendering the whole template, but due to `hx-swap-oob` in template
-        # HTMX will swap only part of the page
-        html = render_to_string(
-            template_name=self.template_name,
-            context=context,
-            request=request,
-        )
-        return HttpResponse(html)
 
 
 #
