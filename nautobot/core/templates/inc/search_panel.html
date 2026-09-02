@@ -4,6 +4,7 @@
     <form class="h-100 vstack">
 {% endif %}
 <div class="align-content-start flex-fill pb-20">
+    {% preserved_view_state %}
     {% for field in filter_form.hidden_fields %}
         {{ field }}
     {% endfor %}

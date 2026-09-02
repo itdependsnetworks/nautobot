@@ -5,6 +5,7 @@ The read model is one period at a time behind a single permission, so the permis
 read-only guarantee are tested here rather than per view.
 """
 
+from datetime import datetime, timezone as dt_timezone
 import uuid
 
 from django.contrib.contenttypes.models import ContentType
@@ -21,11 +22,14 @@ from nautobot.extras.archive_reads import (
     user_can_read_archive,
 )
 from nautobot.extras.choices import (
+    JobResultStatusChoices,
     ObjectChangeActionChoices,
 )
 from nautobot.extras.models import (
+    ArchivedJobResult,
     ArchivedObjectChange,
     ArchiveSegment,
+    JobResult,
     ObjectChange,
 )
 from nautobot.extras.models.archive import archive_model_for
@@ -220,3 +224,61 @@ class ArchiveReadAPITestCase(ArchiveReadFixtureMixin, APITestCase):
             {entry["period_key"] for entry in response.data["results"]},
             {"2020", "2021"},
         )
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class ArchivedRecordsAreReadOnlyTestCase(ArchiveReadFixtureMixin, TestCase):
+    """
+    Retained history has no write surface, so the table must not offer one.
+
+    Row actions and the bulk-select checkbox reverse warm URLs from the record's key, so on a retained
+    record they point at a view that cannot find it. That surfaced as a delete link returning 404.
+    """
+
+    def setUp(self):
+        super().setUp()
+        ArchivedJobResult.objects.all().delete()
+        ArchiveSegment.objects.all().delete()
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        segment_start = datetime(int(PERIOD), 1, 1, tzinfo=dt_timezone.utc)
+        ArchiveSegment.objects.create(
+            model_label="extras.jobresult",
+            period_key=PERIOD,
+            label=PERIOD,
+            time_start=segment_start,
+            time_end=datetime(int(PERIOD) + 1, 1, 1, tzinfo=dt_timezone.utc),
+            row_count=1,
+            is_period_closed=True,
+        )
+        ArchivedJobResult.objects.create(
+            id=uuid.uuid4(),
+            period_key=PERIOD,
+            name="Archived Run",
+            date_created=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
+            status=JobResultStatusChoices.STATUS_SUCCESS,
+        )
+
+    def rendered(self, query=""):
+        response = self.client.get(f"{reverse('extras:jobresult_list')}{query}", headers={"hx-request": "true"})
+        self.assertHttpStatus(response, 200)
+        return response.content.decode(response.charset)
+
+    def test_archived_rows_offer_no_row_actions(self):
+        content = self.rendered(f"?archive_period={PERIOD}")
+        self.assertIn("Archived Run", content)
+        self.assertNotIn("/delete/", content)
+
+    def test_archived_rows_offer_no_bulk_select(self):
+        self.assertNotIn('name="pk"', self.rendered(f"?archive_period={PERIOD}"))
+
+    def test_warm_rows_still_offer_row_actions(self):
+        """The guard must be specific to retained history, not a blanket removal."""
+        JobResult.objects.create(name="Warm Run", status=JobResultStatusChoices.STATUS_SUCCESS)
+
+        content = self.rendered()
+
+        self.assertIn("Warm Run", content)
+        self.assertIn("/delete/", content)
+        self.assertIn('name="pk"', content)
