@@ -226,7 +226,11 @@ OBJECTCHANGE_OBJECT = """
 """
 
 OBJECTCHANGE_REQUEST_ID = """
-<a href="{% url 'extras:objectchange_list' %}?request_id={{ value }}">{{ value }}</a>
+{% comment %}
+`record.period_key` is set only on a retained record, and resolves to empty on a warm one, so this one
+template serves both. Without it, following the link from a retained row lands in warm storage.
+{% endcomment %}
+<a href="{% url 'extras:objectchange_list' %}?{% if record.period_key %}archive_period={{ record.period_key }}&amp;{% endif %}request_id={{ value }}">{{ value }}</a>
 """
 
 MEMBERS_COUNT = """
@@ -1642,7 +1646,8 @@ class ObjectChangeTable(BaseTable):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Only prefetch if all content types are valid
+        # Only prefetch if all content types are valid. `add_conditional_prefetch` skips the field on a
+        # retention mirror, which has no `changed_object` relation to follow.
         if all(ct.model_class() is not None for ct in ContentType.objects.all()):
             self.add_conditional_prefetch("object_repr", "changed_object")
         else:
