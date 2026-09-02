@@ -937,6 +937,12 @@ CONSTANCE_CONFIG = {
         "to REST API clients reading that field directly.",
         field_type=bool,
     ),
+    "CHANGELOG_TRUNCATION_BATCH_SIZE": ConstanceConfigItem(
+        default=10000,
+        help_text="Number of records the truncation job deletes per increment.\n"
+        "Truncation always runs in bounded increments, never as a single delete statement.",
+        field_type=int,
+    ),
     "CHANGELOG_WARM_WINDOW_DAYS": ConstanceConfigItem(
         default=90,
         help_text="Number of days of change and job history kept in warm storage.\n"
@@ -1093,6 +1099,7 @@ CONSTANCE_CONFIG_FIELDSETS = {
         "CHANGELOG_WARM_WINDOW_DAYS",
         "CHANGELOG_ARCHIVE_PERIOD",
         "CHANGELOG_LEGACY_OBJECT_DATA",
+        "CHANGELOG_TRUNCATION_BATCH_SIZE",
     ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],
     "Installation Metrics": ["DEPLOYMENT_ID"],

@@ -23,6 +23,7 @@ from nautobot.extras.choices import ObjectChangeActionChoices, ObjectChangeEvent
 from nautobot.extras.context_managers import (
     deferred_change_logging_for_bulk_operation,
     web_request_context,
+    without_delete_change_logging,
 )
 from nautobot.extras.models import Contact, ContactAssociation, JobHook, Note, Role, Status, Webhook
 from nautobot.extras.utils import bulk_delete_with_bulk_change_logging
@@ -478,6 +479,84 @@ class BulkEditDeleteChangeLogging(TestCase):
             self.assertEqual(oc_list[0].change_context, ObjectChangeEventContextChoices.CONTEXT_ORM)
         with self.subTest():
             self.assertEqual(oc_list[0].change_context_detail, "test_change_log_context")
+
+
+class WithoutDeleteChangeLoggingTestCase(TestCase):
+    """
+    The reconnect has to happen, including when the block raises.
+
+    This was a `try`/`finally` repeated at four call sites. Getting it wrong leaves delete change logging
+    off for the rest of the worker process -- silently, and for every model, not just the one being
+    deleted -- so the guarantee is worth asserting rather than reviewing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="signal-suppression-user")
+
+    @staticmethod
+    def _is_connected():
+        """
+        Whether the change log's `pre_delete` receiver is currently attached.
+
+        Read off `Signal.receivers`, whose entries are `(lookup_key, receiver, is_async)` and whose
+        receiver is normally a weak reference, since `@receiver` connects weakly by default.
+        """
+        import weakref
+
+        from django.db.models.signals import pre_delete
+
+        from nautobot.extras.signals import _handle_deleted_object
+
+        for entry in pre_delete.receivers:
+            receiver = entry[1]
+            if isinstance(receiver, weakref.ReferenceType):
+                receiver = receiver()
+            if receiver is _handle_deleted_object:
+                return True
+        return False
+
+    def test_disconnected_inside_and_reconnected_after(self):
+        self.assertTrue(self._is_connected())
+
+        with without_delete_change_logging():
+            self.assertFalse(self._is_connected())
+
+        self.assertTrue(self._is_connected())
+
+    def test_reconnected_when_the_block_raises(self):
+        with self.assertRaises(ValueError):
+            with without_delete_change_logging():
+                self.assertFalse(self._is_connected())
+                raise ValueError("boom")
+
+        self.assertTrue(self._is_connected())
+
+    def test_deletes_inside_the_block_are_not_change_logged(self):
+        """What the callers are actually buying: no change records for the records they are deleting."""
+        location_type = LocationType.objects.create(name="Signal Suppression LT")
+
+        with without_delete_change_logging():
+            location_type.delete()
+
+        self.assertFalse(
+            get_changes_for_model(LocationType)
+            .filter(object_repr="Signal Suppression LT", action=ObjectChangeActionChoices.ACTION_DELETE)
+            .exists()
+        )
+
+    def test_deletes_outside_the_block_are_still_change_logged(self):
+        """The comparison that makes the previous test mean something."""
+        location_type = LocationType.objects.create(name="Signal Passthrough LT")
+
+        with web_request_context(self.user):
+            location_type.delete()
+
+        self.assertTrue(
+            get_changes_for_model(LocationType)
+            .filter(object_repr="Signal Passthrough LT", action=ObjectChangeActionChoices.ACTION_DELETE)
+            .exists()
+        )
 
 
 class NoOpSaveCoalescingTestCase(TestCase):

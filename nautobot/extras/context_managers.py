@@ -1,9 +1,11 @@
 from contextlib import contextmanager
+import logging
 import uuid
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
+from django.db.models.signals import pre_delete
 from django.test.client import RequestFactory
 
 from nautobot.core.events import publish_event
@@ -308,3 +310,37 @@ def deferred_change_logging_for_bulk_operation():
         finally:
             change_context.defer_object_changes = False
             change_context.reset_deferred_object_changes()
+
+
+@contextmanager
+def without_delete_change_logging(logger=None):
+    """
+    Detach the change log's `pre_delete` receiver for the duration of the block.
+
+    Bulk deletion goes much faster without Django signals to process, and where the records being deleted
+    *are* the change log there is nothing to log about deleting them. Both changelog cleanup jobs and both
+    retention jobs want exactly this.
+
+    A `try`/`finally` per caller was the previous arrangement; a caller that forgets the `finally` leaves
+    change logging off for the rest of the process, which is silent and unbounded, so the reconnect belongs
+    somewhere it cannot be skipped.
+
+    Not for use from a request path. Signal receivers are process-global, so this suppresses delete change
+    logging for everything running in the process, not just the caller's own deletes. That is acceptable in
+    a Celery worker, which gives a task the process to itself, and is not acceptable in a web worker
+    serving other requests at the same time.
+
+    Args:
+        logger (logging.Logger, optional): Logger for the debug messages, so a job's own log records them.
+    """
+    from nautobot.extras.signals import _handle_deleted_object
+
+    logger = logger or logging.getLogger(__name__)
+
+    logger.debug("Temporarily disconnecting the _handle_deleted_object signal for performance")
+    pre_delete.disconnect(_handle_deleted_object)
+    try:
+        yield
+    finally:
+        logger.debug("Re-connecting the _handle_deleted_object signal")
+        pre_delete.connect(_handle_deleted_object)

@@ -585,6 +585,14 @@ properties:
     environment_variable: "NAUTOBOT_CHANGELOG_RETENTION"
     is_constance_config: true
     type: "integer"
+  CHANGELOG_TRUNCATION_BATCH_SIZE:
+    default: 10000
+    description: >-
+      The number of records the changelog truncation job deletes per increment. Truncation always runs in
+      bounded increments, never as a single delete statement.
+    is_constance_config: true
+    type: "integer"
+    version_added: "3.3.0"
   CHANGELOG_WARM_WINDOW_DAYS:
     default: 90
     description: >-
