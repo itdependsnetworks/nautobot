@@ -15,10 +15,12 @@ from django.urls import reverse
 from nautobot.core.constants import COLD_STORAGE_PERMISSION
 from nautobot.core.testing import TestCase
 from nautobot.extras.choices import (
+    JobResultStatusChoices,
     ObjectChangeActionChoices,
 )
 from nautobot.extras.models import (
     ArchivedJobLogEntry,
+    ArchivedJobResult,
     ArchivedObjectChange,
     ArchiveSegment,
     ObjectChange,
@@ -474,3 +476,141 @@ class ArchivedRelationRenderingTestCase(ArchiveReadFixtureMixin, TestCase):
         self.add_permissions("extras.view_objectchange", COLD_STORAGE_PERMISSION)
         response = self.client.get(f"{reverse('extras:objectchange_list')}?archive_period=1999")
         self.assertHttpStatus(response, 200)
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class ArchivedRowsLinkNowhereWarmTestCase(ArchiveReadFixtureMixin, TestCase):
+    """
+    Category test: no link in a rendered archived row may address something that cannot serve it.
+
+    Five separate bugs shared one shape -- something downstream of the period swap reversed a URL, followed
+    a relation, or resolved a permission from the warm model. A sweep for non-200 responses catches the
+    ones that raise; it cannot catch a rendered link that 404s only when clicked, which is how the
+    delete-link bug reached manual testing.
+
+    This walks every covered model with a list view, as a superuser so nothing is hidden by permissions,
+    and asserts that every link addressing a retained record resolves to a view that can serve it.
+
+    HISTORY, and a caution: this began as the blunter assertion that no link may carry a retained record's
+    key at all, with a note that it was more aggressive than the requirement and would fail if a read-only
+    detail view for retained records was ever added. That happened one commit later, and it failed exactly
+    as predicted. It is now narrowed to what actually matters -- a link must resolve and serve -- rather
+    than deleted. Keep that distinction if it fires again: the question is never "does this link mention an
+    archived record", it is "can whatever it points at serve it".
+
+    Note that a retained record's URL is its *warm* model's detail route. It keeps the primary key it had
+    before rotation, so the same URL serves it either way and a link made earlier does not rot.
+    """
+
+    def setUp(self):
+        super().setUp()
+        for model in (ArchivedObjectChange, ArchivedJobResult, ArchiveSegment):
+            model.objects.all().delete()
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        self.archived_pks = {}
+        self._build("extras.objectchange", self._archived_object_change)
+        self._build("extras.jobresult", self._archived_job_result)
+
+    def _segment(self, model_label):
+        ArchiveSegment.objects.get_or_create(
+            model_label=model_label,
+            period_key=PERIOD,
+            defaults={
+                "label": PERIOD,
+                "time_start": datetime(int(PERIOD), 1, 1, tzinfo=dt_timezone.utc),
+                "time_end": datetime(int(PERIOD) + 1, 1, 1, tzinfo=dt_timezone.utc),
+                "row_count": 1,
+                "is_period_closed": True,
+            },
+        )
+
+    def _build(self, model_label, factory):
+        self._segment(model_label)
+        self.archived_pks[model_label] = str(factory().pk)
+
+    def _archived_object_change(self):
+        return ArchivedObjectChange.objects.create(
+            id=uuid.uuid4(),
+            period_key=PERIOD,
+            time=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
+            user_name="alice",
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type_id=ContentType.objects.get_for_model(ObjectChange).pk,
+            changed_object_id=uuid.uuid4(),
+            change_context="orm",
+            object_repr="Archived Widget",
+            object_data={},
+        )
+
+    def _archived_job_result(self):
+        return ArchivedJobResult.objects.create(
+            id=uuid.uuid4(),
+            period_key=PERIOD,
+            name="Archived Run",
+            date_created=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
+            status=JobResultStatusChoices.STATUS_SUCCESS,
+        )
+
+    def covered_list_views(self):
+        """Every covered model that has a list view, paired with the key of its retained record."""
+        from django.urls import NoReverseMatch
+
+        from nautobot.core.utils.lookup import get_route_for_model
+        from nautobot.extras.registry import registry
+
+        for model_label in registry["changelog_archive_models"]:
+            if model_label not in self.archived_pks:
+                continue  # no list view, or no fixture built for it
+            try:
+                url = reverse(get_route_for_model(model_label, "list"))
+            except NoReverseMatch:
+                # No list view for this model, so there is nothing rendered to check.
+                continue
+            yield model_label, url, self.archived_pks[model_label]
+
+    def test_every_link_to_a_retained_record_resolves(self):
+        """
+        A link carrying a retained record's key must point at a view that can serve it.
+
+        The detail route can: it falls back to retention when the key is not in warm storage. An edit or
+        delete route cannot, because it has no such fallback and nothing to write to.
+        """
+        from django.urls import resolve, Resolver404
+
+        checked = 0
+        for model_label, url, archived_pk in self.covered_list_views():
+            with self.subTest(model=model_label):
+                response = self.client.get(f"{url}?archive_period={PERIOD}", headers={"hx-request": "true"})
+                self.assertHttpStatus(response, 200)
+                content = response.content.decode(response.charset)
+                hrefs = [part.split('"')[0] for part in content.split('href="')[1:]]
+                for href in hrefs:
+                    if archived_pk not in href:
+                        continue
+                    path = href.split("?")[0]
+                    try:
+                        resolve(path)
+                    except Resolver404:
+                        self.fail(f"{href} addresses retained {model_label} but resolves to no view")
+                    # It resolves; confirm it actually serves the record rather than 404ing on lookup.
+                    self.assertHttpStatus(self.client.get(href), 200)
+                    checked += 1
+        self.assertGreater(
+            checked, 0, "expected retained rows to link to their detail view; has get_absolute_url regressed?"
+        )
+
+    def test_no_write_routes_are_offered_for_retained_records(self):
+        """The narrow form of the above, and the part that is unambiguously required."""
+        checked = 0
+        for model_label, url, _pk in self.covered_list_views():
+            with self.subTest(model=model_label):
+                response = self.client.get(f"{url}?archive_period={PERIOD}", headers={"hx-request": "true"})
+                content = response.content.decode(response.charset)
+                for route in ("/edit/", "/delete/"):
+                    self.assertNotIn(route, content, f"{route} offered for retained {model_label}")
+                self.assertNotIn('name="pk"', content, f"bulk select offered for retained {model_label}")
+                checked += 1
+        self.assertGreater(checked, 0)

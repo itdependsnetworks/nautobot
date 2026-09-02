@@ -69,6 +69,7 @@ from nautobot.core.utils.requests import (
 )
 from nautobot.core.views import generic, viewsets
 from nautobot.core.views.mixins import (
+    ArchiveAwareRetrieveMixin,
     ObjectBulkCreateViewMixin,
     ObjectBulkDestroyViewMixin,
     ObjectBulkUpdateViewMixin,
@@ -3603,6 +3604,7 @@ class JobResultCancelPanel(object_detail.ObjectFieldsPanel):
 
 
 class JobResultUIViewSet(
+    ArchiveAwareRetrieveMixin,
     ObjectDetailViewMixin,
     ObjectListViewMixin,
     ObjectDestroyViewMixin,
@@ -3614,6 +3616,9 @@ class JobResultUIViewSet(
     table_class = tables.JobResultTable
     queryset = JobResult.objects.all()
     action_buttons = ()
+    # The detail page's log and console panels load through their own actions, so a retained result whose
+    # page renders needs those actions to resolve it too. All three are reads.
+    archive_aware_actions = ("retrieve", "log_table", "job_console_entries", "export_job_console_entries")
     breadcrumbs = Breadcrumbs(
         items={
             "detail": [
@@ -3683,7 +3688,15 @@ class JobResultUIViewSet(
                 icon="mdi-database-export",
                 required_permissions=["extras.view_joblogentry"],
                 link_name=lambda ctx: (
-                    reverse("extras-api:joblogentry-list") + f"?job_result={ctx['object'].pk}&format=csv"
+                    reverse("extras-api:joblogentry-list")
+                    + f"?job_result={ctx['object'].pk}&format=csv"
+                    # A retained result's log entries are not in the warm table the endpoint reads by
+                    # default, so without the period the export comes back empty rather than wrong.
+                    + (
+                        f"&archive_period={ctx['object'].period_key}"
+                        if getattr(ctx["object"], "period_key", None)
+                        else ""
+                    )
                 ),
             ),
             JobResultButton(
@@ -3828,15 +3841,18 @@ class JobResultUIViewSet(
     )
     def log_table(self, request, pk=None):
         """Custom action to return a rendered JobLogEntry table for a JobResult."""
-        instance = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+        instance = self.queryset.restrict(request.user, "view").filter(pk=pk).first()
+        if instance is None:
+            # The detail page this table loads into serves retained results, so this has to as well --
+            # otherwise the page renders and its log panel comes back 404 and empty.
+            instance = self.get_archived_object(pk)
+        if instance is None:
+            raise Http404
 
+        queryset = self.restrict_if_warm(instance.job_log_entries.all())
         filter_q = request.GET.get("q")
         if filter_q:
-            queryset = instance.job_log_entries.restrict(request.user, "view").filter(
-                Q(message__icontains=filter_q) | Q(log_level__icontains=filter_q)
-            )
-        else:
-            queryset = instance.job_log_entries.restrict(request.user, "view")
+            queryset = queryset.filter(Q(message__icontains=filter_q) | Q(log_level__icontains=filter_q))
 
         log_table = tables.JobLogEntryTable(data=queryset, user=request.user)
         paginate = {
@@ -3878,7 +3894,7 @@ class JobResultUIViewSet(
         if request.headers.get("HX-Request"):
             response = self._handle_console_poll(request, job_result)
         else:
-            entries = JobConsoleEntry.objects.restrict(user=request.user).filter(job_result=job_result)
+            entries = self._console_entries_for(job_result)
 
             # Get last entry timestamp for polling initialization
             last_entry = entries.last()
@@ -3906,6 +3922,16 @@ class JobResultUIViewSet(
         """Check if job has finished execution."""
         return job_result.status in JobResultStatusChoices.UNREADY_STATES
 
+    def _console_entries_for(self, job_result):
+        """
+        This result's console output, whether the result is warm or retained.
+
+        Both models expose the output under the same name -- a reverse foreign key warm, a queryset over
+        the stored identifier on a mirror -- so reading through the accessor serves both. Filtering
+        `JobConsoleEntry` on `job_result=<mirror instance>` does not: it is a different model.
+        """
+        return self.restrict_if_warm(job_result.job_console_entries.all())
+
     def _handle_console_poll(self, request, job_result) -> HttpResponse:
         """Handle HTMX polling request and return new log entries as HTML."""
         last_timestamp_str = request.GET.get("last_timestamp", "")
@@ -3923,9 +3949,7 @@ class JobResultUIViewSet(
                 msg = "Invalid timestamp: {}"
                 return HttpResponseBadRequest(format_html(msg, last_timestamp_str))
 
-            new_entries = JobConsoleEntry.objects.restrict(user=request.user).filter(
-                job_result=job_result, timestamp__gt=last_timestamp
-            )
+            new_entries = self._console_entries_for(job_result).filter(timestamp__gt=last_timestamp)
 
         job_is_pending = self._is_job_pending(job_result)
 
@@ -3952,7 +3976,7 @@ class JobResultUIViewSet(
         """Export all console entries for a JobResult as a plain-text file."""
         job_result = self.get_object()
 
-        entries = JobConsoleEntry.objects.restrict(user=request.user).filter(job_result=job_result)
+        entries = self._console_entries_for(job_result)
 
         lines = []
         for entry in entries:
@@ -4096,7 +4120,7 @@ class JobButtonUIViewSet(NautobotUIViewSet):
 #
 # Change logging
 #
-class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
+class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, ObjectListViewMixin):
     filterset_class = filters.ObjectChangeFilterSet
     filterset_form_class = forms.ObjectChangeFilterForm
     queryset = ObjectChange.objects.all()
@@ -4110,6 +4134,8 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
                 if value and getattr(value, "get_absolute_url", None):
                     return helpers.hyperlinked_object(value)
                 else:
+                    # PLACEHOLDER: commit 15, Link a retained record to the object it describes, resolves
+                    # the link from the identifier columns instead of falling straight through to text.
                     obj = get_obj_from_context(context, self.context_object_key)
                     return helpers.placeholder(obj.object_repr)
             return super().render_value(key, value, context)
@@ -4185,29 +4211,36 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
         """
         context = super().get_extra_context(request, instance)
 
-        if self.action == "retrieve":
-            related_changes = instance.get_related_changes(user=request.user).filter(request_id=instance.request_id)
-            related_changes_table = tables.ObjectChangeTable(
-                data=related_changes,
-                orderable=False,
-            )
-            paginate = {
-                "paginator_class": EnhancedPaginator,
-                "per_page": get_paginate_count(request),
-            }
-            RequestConfig(request, paginate).configure(related_changes_table)
-            snapshots = instance.get_snapshots()
+        if self.action != "retrieve":
+            return context
 
-            context.update(
-                {
-                    "diff_added": snapshots["differences"]["added"],
-                    "diff_removed": snapshots["differences"]["removed"],
-                    "next_change": instance.get_next_change(request.user),
-                    "prev_change": instance.get_prev_change(request.user),
-                    "related_changes_table": related_changes_table,
-                    "related_changes_count": related_changes.count(),
-                }
-            )
+        # Warm and retained records answer the same methods, so there is one path here rather than a branch
+        # per storage. A retained record's siblings and diff neighbour are found within its period --
+        # see `ArchivedObjectChange.get_related_changes` for why that is the right scope and what it costs
+        # at a period boundary.
+        related_changes = instance.get_related_changes(user=request.user).filter(request_id=instance.request_id)
+        related_changes_table = tables.ObjectChangeTable(data=related_changes, orderable=False)
+        paginate = {
+            "paginator_class": EnhancedPaginator,
+            "per_page": get_paginate_count(request),
+        }
+        RequestConfig(request, paginate).configure(related_changes_table)
+        snapshots = instance.get_snapshots()
+
+        context.update(
+            {
+                "diff_added": snapshots["differences"]["added"],
+                "diff_removed": snapshots["differences"]["removed"],
+                "next_change": instance.get_next_change(request.user),
+                "prev_change": instance.get_prev_change(request.user),
+                "related_changes_table": related_changes_table,
+                "related_changes_count": related_changes.count(),
+            }
+        )
+        if self.is_archived(instance):
+            context["archive_segment"] = ArchiveSegment.objects.filter(
+                model_label=ObjectChange._meta.label_lower, period_key=instance.period_key
+            ).first()
 
         return context
 
