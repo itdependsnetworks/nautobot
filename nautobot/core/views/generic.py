@@ -182,6 +182,17 @@ class ObjectListView(UIComponentsMixin, ObjectPermissionRequiredMixin, View):
     template_name = "generic/object_list.html"
     action_buttons = ("add", "import", "export")
     non_filter_params = NON_FILTER_PARAMS
+    non_filter_params = (
+        "export",  # trigger for CSV/export-template/YAML export # 3.0 TODO: remove, irrelevant after #4746
+        "page",  # used by django-tables2.RequestConfig
+        "per_page",  # used by get_paginate_count
+        "sort",  # table sorting
+        "saved_view",  # saved_view indicator pk or composite keys
+        "table_changes_pending",  # indicator for if there is any table changes not applied to the saved view
+        "all_filters_removed",  # indicator for if all filters have been removed from the saved view
+        "clear_view",  # indicator for if the clear view button is clicked or not
+        "archive_period",  # selects one retained-history period; see nautobot.extras.models.archive
+    )
 
     def get_filter_params(self, request):
         """Helper function - take request.GET and discard any parameters that are not used for queryset filtering."""

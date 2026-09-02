@@ -67,6 +67,9 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ArchiveSegment,
     ComputedField,
     ConfigContext,
@@ -942,6 +945,53 @@ class StaticGroupAssociationFilterSet(NautobotFilterSet):
 #
 
 
+class RetentionRuleFilterSet(NautobotFilterSet):
+    q = SearchFilter(
+        filter_predicates={
+            "name": "icontains",
+            "description": "icontains",
+            "content_type__app_label": "icontains",
+            "content_type__model": "icontains",
+        },
+    )
+    # Multi-value and OR-joined: the filter form offers several object types, and a rule has exactly one,
+    # so the default conjoined behaviour would AND them and match nothing.
+    content_type = ContentTypeMultipleChoiceFilter(
+        choices=changelog_covered_content_type_choices,
+        conjoined=False,
+        label="Object Type",
+    )
+
+    class Meta:
+        model = RetentionRule
+        fields = ["id", "name", "description", "enabled", "content_type", "mode", "max_age_days", "weight"]
+
+
+class ArchiveSegmentFilterSet(BaseFilterSet):
+    q = SearchFilter(
+        filter_predicates={
+            "model_label": "icontains",
+            "period_key": "icontains",
+            "label": "icontains",
+        },
+    )
+
+    class Meta:
+        model = ArchiveSegment
+        fields = [
+            "id",
+            "model_label",
+            "period_key",
+            "label",
+            "period_granularity",
+            "row_count",
+            "last_rotated_time",
+            "is_period_closed",
+            "time_start",
+            "time_end",
+        ]
+
+
 class ExportTemplateFilterSet(BaseFilterSet):
     q = SearchFilter(
         filter_predicates={
@@ -1760,48 +1810,117 @@ class RoleFilterSet(NautobotFilterSet):
         ]
 
 
-class ArchiveSegmentFilterSet(BaseFilterSet):
-    q = SearchFilter(
-        filter_predicates={
-            "model_label": "icontains",
-            "period_key": "icontains",
-            "label": "icontains",
-        },
-    )
-
-    class Meta:
-        model = ArchiveSegment
-        fields = [
-            "id",
-            "model_label",
-            "period_key",
-            "label",
-            "period_granularity",
-            "row_count",
-            "last_rotated_time",
-            "is_period_closed",
-            "time_start",
-            "time_end",
-        ]
+#
+# Changelog long-term retention
+#
 
 
-class RetentionRuleFilterSet(NautobotFilterSet):
-    q = SearchFilter(
-        filter_predicates={
-            "name": "icontains",
-            "description": "icontains",
-            "content_type__app_label": "icontains",
-            "content_type__model": "icontains",
-        },
-    )
-    # Multi-value and OR-joined: the filter form offers several object types, and a rule has exactly one,
-    # so the default conjoined behaviour would AND them and match nothing.
-    content_type = ContentTypeMultipleChoiceFilter(
-        choices=changelog_covered_content_type_choices,
-        conjoined=False,
-        label="Object Type",
-    )
+class ArchivedContentTypeFilter(django_filters.CharFilter):
+    """
+    Filter a retention mirror's bare content-type id column by `app_label.model`.
 
-    class Meta:
-        model = RetentionRule
-        fields = ["id", "name", "description", "enabled", "content_type", "mode", "max_age_days", "weight"]
+    The mirrors hold content types as identifier columns rather than relations, so `ContentTypeFilter`
+    has nothing to traverse. This keeps the same `?changed_object_type=dcim.device` spelling working
+    against a retained period.
+    """
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        try:
+            app_label, model = value.lower().strip().split(".")
+        except ValueError:
+            return qs.none()
+        content_type_id = (
+            ContentType.objects.filter(app_label=app_label, model=model).values_list("pk", flat=True).first()
+        )
+        if content_type_id is None:
+            return qs.none()
+        return qs.filter(**{self.field_name: content_type_id})
+
+
+# Warm filters with no direct equivalent on a mirror, and the replacement to use instead. Anything not
+# listed here and not resolvable on the mirror is dropped, and `test_archive_filtersets` pins exactly which
+# ones those are, so a capability loss is reviewed rather than discovered.
+ARCHIVE_FILTER_REPLACEMENTS = {
+    "changed_object_type": lambda: ArchivedContentTypeFilter(field_name="changed_object_type_id"),
+    "related_object_type": lambda: ArchivedContentTypeFilter(field_name="related_object_type_id"),
+}
+
+
+def _resolves_on(model, field_path):
+    """Whether the first segment of `field_path` is a real field on `model`."""
+    root = str(field_path).split("__")[0]
+    return root in {field.name for field in model._meta.get_fields()}
+
+
+def build_archive_filterset(warm_filterset_class, mirror_model):
+    """
+    Derive a filterset for a retention mirror from the one used on its warm model.
+
+    Most filters carry over untouched: the mirror is a field-for-field copy apart from foreign keys held as
+    identifier columns. The ones that traverse a relation cannot resolve, so they are either replaced by an
+    id-based equivalent from `ARCHIVE_FILTER_REPLACEMENTS` or dropped.
+
+    Generated rather than hand-written so that a filter added to a warm filterset carries over on its own,
+    and the dropped set stays small and visible instead of drifting.
+    """
+    attrs = {"_archive_dropped_filters": set()}
+
+    for name, declared in warm_filterset_class.declared_filters.items():
+        if name in ARCHIVE_FILTER_REPLACEMENTS:
+            attrs[name] = ARCHIVE_FILTER_REPLACEMENTS[name]()
+            continue
+        if isinstance(declared, SearchFilter):
+            # Rebuild `q` with only the predicates that resolve; searching within a period is the filter
+            # most worth keeping.
+            predicates = {
+                predicate: lookup
+                for predicate, lookup in declared.filter_predicates.items()
+                if _resolves_on(mirror_model, predicate)
+            }
+            if predicates:
+                attrs[name] = SearchFilter(filter_predicates=predicates)
+            else:
+                attrs[name] = None
+                attrs["_archive_dropped_filters"].add(name)
+            continue
+        if not _resolves_on(mirror_model, declared.field_name or name):
+            attrs[name] = None
+            attrs["_archive_dropped_filters"].add(name)
+
+    warm_meta = warm_filterset_class.Meta
+    meta_kwargs = {"model": mirror_model}
+    if getattr(warm_meta, "fields", None) is not None:
+        meta_fields = []
+        for field in warm_meta.fields:
+            if _resolves_on(mirror_model, field):
+                meta_fields.append(field)
+            else:
+                attrs["_archive_dropped_filters"].add(field)
+        # The column every retained read is scoped by.
+        meta_fields.append("period_key")
+        meta_kwargs["fields"] = meta_fields
+    else:
+        # A warm filterset declaring `exclude` rather than `fields` opts every model field in; the mirror
+        # has the same fields minus the demoted relations, so the same declaration carries over.
+        meta_kwargs["exclude"] = list(getattr(warm_meta, "exclude", []))
+
+    attrs["Meta"] = type("Meta", (), meta_kwargs)
+    return type(f"{mirror_model.__name__}FilterSet", (BaseFilterSet,), attrs)
+
+
+ArchivedObjectChangeFilterSet = build_archive_filterset(ObjectChangeFilterSet, ArchivedObjectChange)
+ArchivedJobResultFilterSet = build_archive_filterset(JobResultFilterSet, ArchivedJobResult)
+ArchivedJobLogEntryFilterSet = build_archive_filterset(JobLogEntryFilterSet, ArchivedJobLogEntry)
+
+ARCHIVE_FILTERSETS = {
+    "extras.archivedobjectchange": ArchivedObjectChangeFilterSet,
+    "extras.archivedjobresult": ArchivedJobResultFilterSet,
+    "extras.archivedjoblogentry": ArchivedJobLogEntryFilterSet,
+}
+
+
+def archive_filterset_for(mirror_model):
+    """The filterset to apply within a retained period, or None if the mirror has none."""
+    return ARCHIVE_FILTERSETS.get(mirror_model._meta.label_lower)
