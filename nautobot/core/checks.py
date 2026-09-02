@@ -237,3 +237,28 @@ def check_for_removed_storage_settings(app_configs, **kwargs):
             )
 
     return errors
+
+
+@register(Tags.models)
+def check_changelog_archive_schema(app_configs, **kwargs):
+    """
+    Warn when a retained-history mirror has fallen behind the model it mirrors.
+
+    Nothing in Django's migration tooling knows the mirrors are meant to track the warm models, so a field
+    added to one side only produces a clean `makemigrations --check` and a silently incomplete archive.
+    This makes that loud at startup. A warning rather than an error: an installation with retention
+    disabled is unaffected, and refusing to boot over it would be worse than saying so.
+    """
+    from nautobot.extras.management.commands.check_changelog_archive_schema import find_schema_drift
+
+    warnings = []
+    for mirror_label, warm_label, missing in find_schema_drift():
+        warnings.append(
+            Warning(
+                msg=f"{mirror_label} is missing field(s) present on {warm_label}: {', '.join(missing)}.",
+                hint="Records rotated into long-term retention will not carry these fields. Run "
+                "`nautobot-server check_changelog_archive_schema --repair` for guidance.",
+                id="nautobot.core.W011",
+            )
+        )
+    return warnings
