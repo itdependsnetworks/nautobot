@@ -520,6 +520,8 @@ SPECTACULAR_SETTINGS = {
         "PrefixTypeChoices": "nautobot.ipam.choices.PrefixTypeChoices",
         "RackTypeChoices": "nautobot.dcim.choices.RackTypeChoices",
         "RelationshipTypeChoices": "nautobot.extras.choices.RelationshipTypeChoices",
+        # Assigned to `RetentionRule.mode`, which collides with other choice sets named "mode".
+        "RetentionRuleModeChoices": "nautobot.extras.choices.RetentionRuleModeChoices",
         # These choice enums need to be overridden because they get assigned to different names with the same choice set and
         # result in this error:
         #   encountered multiple names for the same choice set

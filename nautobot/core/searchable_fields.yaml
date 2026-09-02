@@ -643,6 +643,13 @@ extras:
     - relationship__label
     name: Relationship Association
   - fields:
+    - content_type__app_label
+    - content_type__model
+    - description
+    - id
+    - name
+    name: Retention Rule
+  - fields:
     - content_types__model
     - id
     - name

@@ -95,6 +95,7 @@ router.register("notes", views.NoteViewSet)
 
 # Change logging
 router.register("archive-segments", views.ArchiveSegmentViewSet)
+router.register("retention-rules", views.RetentionRuleViewSet)
 router.register("object-changes", views.ObjectChangeViewSet)
 
 # Relationships

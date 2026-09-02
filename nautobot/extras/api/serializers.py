@@ -84,6 +84,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -99,6 +100,7 @@ from nautobot.extras.models import (
 )
 from nautobot.extras.models.mixins import NotesMixin
 from nautobot.extras.utils import (
+    changelog_covered_content_types_q,
     ChangeLoggedModelsQuery,
     FeatureQuery,
     RoleModelsQuery,
@@ -1348,3 +1350,19 @@ class ArchiveSegmentSerializer(BaseModelSerializer):
     class Meta:
         model = ArchiveSegment
         fields = "__all__"
+
+
+class RetentionRuleSerializer(NautobotModelSerializer):
+    content_type = ContentTypeField(
+        queryset=ContentType.objects.filter(changelog_covered_content_types_q()),
+    )
+
+    class Meta:
+        model = RetentionRule
+        fields = "__all__"
+        # `scope_filter` is `editable=False` on the model, since the UI writes it through the filter
+        # builder rather than as typed JSON. The API still accepts it directly -- same as a custom field's
+        # scope filter -- so a rule can be created from a script.
+        extra_kwargs = {
+            "scope_filter": {"read_only": False, "required": False},
+        }

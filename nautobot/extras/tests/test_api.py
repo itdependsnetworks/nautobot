@@ -53,6 +53,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     ObjectChangeEventContextChoices,
     RelationshipTypeChoices,
+    RetentionRuleModeChoices,
     SecretsGroupAccessTypeChoices,
     SecretsGroupSecretTypeChoices,
     WebhookHttpMethodChoices,
@@ -93,6 +94,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -5055,6 +5057,65 @@ class NoteTest(APIViewTestCases.APIViewTestCase):
         )
 
 
+class RetentionRuleTest(APIViewTestCases.APIViewTestCase):
+    model = RetentionRule
+    choices_fields = ["content_type", "mode"]
+    bulk_update_data = {"enabled": False, "description": "Bulk updated"}
+
+    @classmethod
+    def setUpTestData(cls):
+        content_type = ContentType.objects.get_for_model(ObjectChange)
+        RetentionRule.objects.create(
+            name="Rule 1", content_type=content_type, scope_filter={"action": ["delete"]}, max_age_days=30
+        )
+        RetentionRule.objects.create(name="Rule 2", content_type=content_type, max_age_days=60)
+        RetentionRule.objects.create(
+            name="Rule 3",
+            content_type=content_type,
+            mode=RetentionRuleModeChoices.MODE_EXCLUDE,
+            scope_filter={"user_name": ["admin"]},
+        )
+        cls.create_data = [
+            {
+                "name": "Rule 4",
+                "content_type": "extras.objectchange",
+                "scope_filter": {"action": ["create"]},
+                "max_age_days": 90,
+            },
+            {
+                "name": "Rule 5",
+                "content_type": "extras.jobresult",
+                "mode": RetentionRuleModeChoices.MODE_EXCLUDE,
+                "scope_filter": {"status": [JobResultStatusChoices.STATUS_FAILURE]},
+            },
+            {
+                "name": "Rule 6",
+                "content_type": "extras.joblogentry",
+                "max_age_days": 7,
+                "weight": 50,
+            },
+        ]
+        cls.update_data = {"name": "Renamed rule", "description": "Updated", "enabled": False}
+
+
+class ArchiveSegmentTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
+    """Read-only: retention periods are created by the rotation job, never through the API."""
+
+    model = ArchiveSegment
+
+    @classmethod
+    def setUpTestData(cls):
+        for year in (2022, 2023, 2024):
+            ArchiveSegment.objects.create(
+                model_label="extras.objectchange",
+                period_key=str(year),
+                label=str(year),
+                time_start=datetime(year, 1, 1, tzinfo=dt_timezone.utc),
+                time_end=datetime(year + 1, 1, 1, tzinfo=dt_timezone.utc),
+                row_count=year,
+            )
+
+
 class ObjectChangeTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
     model = ObjectChange
 
@@ -6746,21 +6807,3 @@ class RoleTest(APIViewTestCases.APIViewTestCase):
             "content_types": ["ipam.ipaddress", "ipam.vlan"],
         },
     ]
-
-
-class ArchiveSegmentTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
-    """Read-only: retention periods are created by the rotation job, never through the API."""
-
-    model = ArchiveSegment
-
-    @classmethod
-    def setUpTestData(cls):
-        for year in (2022, 2023, 2024):
-            ArchiveSegment.objects.create(
-                model_label="extras.objectchange",
-                period_key=str(year),
-                label=str(year),
-                time_start=datetime(year, 1, 1, tzinfo=dt_timezone.utc),
-                time_end=datetime(year + 1, 1, 1, tzinfo=dt_timezone.utc),
-                row_count=year,
-            )

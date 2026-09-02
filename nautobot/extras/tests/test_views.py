@@ -58,6 +58,7 @@ from nautobot.extras.choices import (
     LogLevelChoices,
     MetadataTypeDataTypeChoices,
     ObjectChangeActionChoices,
+    RetentionRuleModeChoices,
     ScheduledJobStateChoices,
     SecretsGroupAccessTypeChoices,
     SecretsGroupSecretTypeChoices,
@@ -100,6 +101,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -7045,6 +7047,305 @@ class JobHookTestCase(ViewTestCases.OrganizationalObjectViewTestCase, ViewTestCa
 
 
 # TODO: Convert to StandardTestCases.Views
+class RetentionRuleTestCase(ViewTestCases.OrganizationalObjectViewTestCase):
+    model = RetentionRule
+    bulk_edit_data = {"description": "A new description", "enabled": False}
+
+    @classmethod
+    def setUpTestData(cls):
+        content_type = ContentType.objects.get_for_model(ObjectChange)
+        RetentionRule.objects.create(
+            name="Rule 1", content_type=content_type, scope_filter={"action": ["delete"]}, max_age_days=30
+        )
+        RetentionRule.objects.create(name="Rule 2", content_type=content_type, max_age_days=60)
+        RetentionRule.objects.create(
+            name="Rule 3",
+            content_type=content_type,
+            mode=RetentionRuleModeChoices.MODE_EXCLUDE,
+            scope_filter={"user_name": ["admin"]},
+        )
+
+    def setUp(self):
+        super().setUp()
+        self.form_data = {
+            "name": "New Retention Rule",
+            "description": "Deletes old change records",
+            "content_type": ContentType.objects.get_for_model(ObjectChange).pk,
+            "mode": RetentionRuleModeChoices.MODE_INCLUDE,
+            # The scope is submitted as prefixed filter-form fields, not as typed JSON -- the same
+            # construct a custom field's scope filter uses. See `ScopedFilterViewMixin`.
+            "scope-action": [ObjectChangeActionChoices.ACTION_DELETE],
+            "max_age_days": 90,
+            "weight": 100,
+            "enabled": True,
+        }
+
+
+class RetentionRuleScopeFilterTestCase(TestCase):
+    """
+    A rule's scope is edited with the same filter builder a custom field's scope uses.
+
+    That matters beyond consistency: it means a rule selects exactly what the same filter selects in the
+    change log, so an operator can check what a rule will delete by running its filter first. A JSON
+    textarea gave no such guarantee -- it accepted parameters the FilterSet would later reject, and the
+    rule failed at truncation time instead of at save time.
+    """
+
+    user_permissions = ["extras.add_retentionrule", "extras.change_retentionrule", "extras.view_retentionrule"]
+
+    def setUp(self):
+        super().setUp()
+        self.content_type = ContentType.objects.get_for_model(ObjectChange)
+
+    def _post(self, **overrides):
+        data = {
+            "name": "Scoped Rule",
+            "content_type": self.content_type.pk,
+            "mode": RetentionRuleModeChoices.MODE_INCLUDE,
+            "max_age_days": 30,
+            "weight": 100,
+            "enabled": True,
+        }
+        data.update(overrides)
+        return self.client.post(reverse("extras:retentionrule_add"), data)
+
+    def test_filter_builder_writes_the_scope(self):
+        response = self._post(**{"scope-action": [ObjectChangeActionChoices.ACTION_DELETE]})
+
+        self.assertHttpStatus(response, 302)
+        rule = RetentionRule.objects.get(name="Scoped Rule")
+        self.assertEqual(rule.scope_filter, {"action": [ObjectChangeActionChoices.ACTION_DELETE]})
+
+    def test_multi_value_filters_survive_submission(self):
+        """A QueryDict keeps several values per key; collapsing it makes the filter form reject the field."""
+        response = self._post(
+            **{
+                "scope-action": [
+                    ObjectChangeActionChoices.ACTION_DELETE,
+                    ObjectChangeActionChoices.ACTION_UPDATE,
+                ]
+            }
+        )
+
+        self.assertHttpStatus(response, 302)
+        rule = RetentionRule.objects.get(name="Scoped Rule")
+        self.assertEqual(
+            sorted(rule.scope_filter["action"]),
+            sorted([ObjectChangeActionChoices.ACTION_DELETE, ObjectChangeActionChoices.ACTION_UPDATE]),
+        )
+
+    def test_a_filter_the_filterset_rejects_is_refused_at_save_time(self):
+        response = self._post(**{"scope-action": ["not-a-real-action"]})
+
+        self.assertHttpStatus(response, 200)
+        self.assertFalse(RetentionRule.objects.filter(name="Scoped Rule").exists())
+
+    def test_no_scope_filter_is_allowed(self):
+        """A rule bounded only by age is valid; the age bound is what keeps it from selecting everything."""
+        response = self._post()
+
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(RetentionRule.objects.get(name="Scoped Rule").scope_filter, {})
+
+    def test_a_saved_scope_renders_back_into_the_form(self):
+        rule = RetentionRule.objects.create(
+            name="Existing Rule",
+            content_type=self.content_type,
+            scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]},
+            max_age_days=30,
+        )
+
+        response = self.client.get(reverse("extras:retentionrule_edit", kwargs={"pk": rule.pk}))
+
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("nb-scope-filter-form-container", body)
+        self.assertInHTML('<select name="scope-action"', body)
+        # `getlist`, not `get`: the stored filter is normalized to a QueryDict, so a single-value form
+        # field sees a scalar and a multi-value one sees the list. See `_as_query_dict`.
+        self.assertEqual(response.context["filterset"].form.data.getlist("scope-action"), rule.scope_filter["action"])
+
+    def test_the_builder_offers_the_selected_model_s_filters(self):
+        """The available filters depend on the object type, so changing it re-renders the card over HTMX."""
+        response = self.client.get(
+            reverse("extras:retentionrule_scope_filter_fields"), {"content_type": self.content_type.pk}
+        )
+
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertInHTML('<select name="scope-action"', body)
+        self.assertInHTML('<select name="scope-user_name"', body)
+
+    def test_no_object_type_selected_prompts_rather_than_erroring(self):
+        response = self.client.get(reverse("extras:retentionrule_scope_filter_fields"))
+
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("nb-scope-filter-form-container", body)
+        self.assertNotIn('<select name="scope-action"', body)
+
+    def test_a_stored_scope_renders_without_field_errors(self):
+        """
+        A stored filter is a dict of lists; a single-value form field handed the list rejects it.
+
+        The symptom was "Select a valid choice. ['delete'] is not one of the available choices." on opening
+        a saved rule -- a rule that was valid, saved through this same form, and read back as invalid.
+        `action` is the case that shows it: the filterset takes several values but the filter form field
+        takes one.
+        """
+        rule = RetentionRule.objects.create(
+            name="Stored Scope Rule",
+            content_type=self.content_type,
+            scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]},
+            max_age_days=30,
+        )
+
+        response = self.client.get(reverse("extras:retentionrule_edit", kwargs={"pk": rule.pk}))
+
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(dict(response.context["filter_form"].errors), {})
+        self.assertEqual(dict(response.context["filterset"].form.errors), {})
+
+    def test_a_stored_scope_survives_being_resaved(self):
+        """The form is where a rule is edited, so reading it back wrong loses the scope on the next save."""
+        rule = RetentionRule.objects.create(
+            name="Resaved Rule",
+            content_type=self.content_type,
+            scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]},
+            max_age_days=30,
+        )
+
+        response = self.client.post(
+            reverse("extras:retentionrule_edit", kwargs={"pk": rule.pk}),
+            {
+                "name": rule.name,
+                "content_type": self.content_type.pk,
+                "mode": rule.mode,
+                "max_age_days": rule.max_age_days,
+                "weight": rule.weight,
+                "enabled": rule.enabled,
+                "scope-action": [ObjectChangeActionChoices.ACTION_DELETE],
+            },
+        )
+        rule.refresh_from_db()
+
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(rule.scope_filter, {"action": [ObjectChangeActionChoices.ACTION_DELETE]})
+
+    def test_stored_and_submitted_filters_are_read_the_same_way(self):
+        """
+        Both are normalized to a QueryDict, which is the only shape that serves both kinds of field.
+
+        A plain dict gives a single-value field its whole list; `dict(querydict.items())` gives a
+        multi-value field only the last value. Each failure mode is one of these two directions.
+        """
+        from django.http import QueryDict
+
+        from nautobot.core.views.mixins import ScopedFilterViewMixin
+
+        stored = ScopedFilterViewMixin._as_query_dict({"scope-action": ["delete", "update"]})
+        self.assertEqual(stored.getlist("scope-action"), ["delete", "update"])
+        self.assertEqual(stored.get("scope-action"), "update")
+
+        scalar = ScopedFilterViewMixin._as_query_dict({"scope-user_name": "carol"})
+        self.assertEqual(scalar.getlist("scope-user_name"), ["carol"])
+
+        submitted = QueryDict("scope-action=delete&scope-action=update")
+        self.assertEqual(ScopedFilterViewMixin._as_query_dict(submitted).getlist("scope-action"), ["delete", "update"])
+
+        self.assertEqual(list(ScopedFilterViewMixin._as_query_dict(None).items()), [])
+
+    def test_the_applied_filter_is_shown_outside_the_tabs(self):
+        """
+        Opening a saved rule lands on the Basic tab, so a filter shown only under Advanced looks unset.
+
+        The badges carry the hidden inputs that get submitted, so there must be exactly one copy of them.
+        """
+        rule = RetentionRule.objects.create(
+            name="Badged Rule",
+            content_type=self.content_type,
+            scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]},
+            max_age_days=30,
+        )
+
+        body = self.client.get(reverse("extras:retentionrule_edit", kwargs={"pk": rule.pk})).content.decode()
+
+        self.assertEqual(body.count("nb-dynamic-filter-items"), 1)
+        card = body[body.index("nb-scope-filter-form-container") :]
+        self.assertIn("nb-dynamic-filter-items", card[: card.index('id="filter-tabs"')])
+        self.assertInHTML(
+            f'<input name="scope-action" type="hidden" value="{ObjectChangeActionChoices.ACTION_DELETE}">', body
+        )
+
+    def test_both_models_share_one_construct(self):
+        """If these diverge, the two filter builders drift apart -- which is what sharing them prevents."""
+        from nautobot.core.views.mixins import ScopedFilterViewMixin
+        from nautobot.extras.models.mixins import ScopedFilterMixin
+        from nautobot.extras.views import CustomFieldUIViewSet, RetentionRuleUIViewSet
+
+        for model in (CustomField, RetentionRule):
+            with self.subTest(model=model.__name__):
+                self.assertTrue(issubclass(model, ScopedFilterMixin))
+        for viewset in (CustomFieldUIViewSet, RetentionRuleUIViewSet):
+            with self.subTest(viewset=viewset.__name__):
+                self.assertTrue(issubclass(viewset, ScopedFilterViewMixin))
+
+
+class ArchiveSegmentTestCase(ViewTestCases.GetObjectViewTestCase, ViewTestCases.ListObjectsViewTestCase):
+    """
+    Read-only: retention periods are created by the rotation job, never through the UI.
+
+    `ArchiveSegment.view` is the cold-storage gate, and it is listed in `EXEMPT_EXCLUDE_MODELS` so a
+    deployment setting `EXEMPT_VIEW_PERMISSIONS = ["*"]` does not open retained history by accident. The
+    generic suite assumes that exemption grants access, so the tests relying on it are overridden here to
+    grant the permission explicitly, and the exemption's refusal is asserted directly.
+    """
+
+    model = ArchiveSegment
+
+    @classmethod
+    def setUpTestData(cls):
+        for year in (2022, 2023, 2024):
+            ArchiveSegment.objects.create(
+                model_label="extras.objectchange",
+                period_key=str(year),
+                label=str(year),
+                time_start=datetime(year, 1, 1, tzinfo=dt_timezone.utc),
+                time_end=datetime(year + 1, 1, 1, tzinfo=dt_timezone.utc),
+                row_count=year,
+            )
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_exempt_view_permissions_do_not_open_the_cold_storage_gate(self):
+        """
+        The reason `("extras", "archivesegment")` is in `EXEMPT_EXCLUDE_MODELS`.
+
+        Without the exclusion, every deployment that globally exempts view permissions would silently
+        expose retained change history.
+        """
+        self.client.logout()
+        response = self.client.get(self._get_url("list"))
+        self.assertNotEqual(response.status_code, 200, "the cold-storage gate must survive a global exemption")
+
+    def test_list_objects_anonymous(self):
+        self.skipTest("ArchiveSegment is excluded from EXEMPT_VIEW_PERMISSIONS; see the test above")
+
+    def test_get_object_anonymous(self):
+        self.skipTest("ArchiveSegment is excluded from EXEMPT_VIEW_PERMISSIONS; see the test above")
+
+    def test_list_objects_filtered(self):
+        self.add_permissions("extras.view_archivesegment")
+        super().test_list_objects_filtered()
+
+    def test_list_objects_unknown_filter_no_strict_filtering(self):
+        self.add_permissions("extras.view_archivesegment")
+        super().test_list_objects_unknown_filter_no_strict_filtering()
+
+    def test_list_objects_unknown_filter_strict_filtering(self):
+        self.add_permissions("extras.view_archivesegment")
+        super().test_list_objects_unknown_filter_strict_filtering()
+
+
 class ObjectChangeTestCase(TestCase):
     user_permissions = ("extras.view_objectchange",)
 
@@ -7852,58 +8153,3 @@ class RoleTestCase(ViewTestCases.OrganizationalObjectViewTestCase, ViewTestCases
                         self.assertNotIn(f"<strong>{result}</strong>", response_body)
                 else:
                     self.assertInHTML(f"<strong>{result}</strong>", response_body)
-
-
-class ArchiveSegmentTestCase(ViewTestCases.GetObjectViewTestCase, ViewTestCases.ListObjectsViewTestCase):
-    """
-    Read-only: retention periods are created by the rotation job, never through the UI.
-
-    `ArchiveSegment.view` is the cold-storage gate, and it is listed in `EXEMPT_EXCLUDE_MODELS` so a
-    deployment setting `EXEMPT_VIEW_PERMISSIONS = ["*"]` does not open retained history by accident. The
-    generic suite assumes that exemption grants access, so the tests relying on it are overridden here to
-    grant the permission explicitly, and the exemption's refusal is asserted directly.
-    """
-
-    model = ArchiveSegment
-
-    @classmethod
-    def setUpTestData(cls):
-        for year in (2022, 2023, 2024):
-            ArchiveSegment.objects.create(
-                model_label="extras.objectchange",
-                period_key=str(year),
-                label=str(year),
-                time_start=datetime(year, 1, 1, tzinfo=dt_timezone.utc),
-                time_end=datetime(year + 1, 1, 1, tzinfo=dt_timezone.utc),
-                row_count=year,
-            )
-
-    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
-    def test_exempt_view_permissions_do_not_open_the_cold_storage_gate(self):
-        """
-        The reason `("extras", "archivesegment")` is in `EXEMPT_EXCLUDE_MODELS`.
-
-        Without the exclusion, every deployment that globally exempts view permissions would silently
-        expose retained change history.
-        """
-        self.client.logout()
-        response = self.client.get(self._get_url("list"))
-        self.assertNotEqual(response.status_code, 200, "the cold-storage gate must survive a global exemption")
-
-    def test_list_objects_anonymous(self):
-        self.skipTest("ArchiveSegment is excluded from EXEMPT_VIEW_PERMISSIONS; see the test above")
-
-    def test_get_object_anonymous(self):
-        self.skipTest("ArchiveSegment is excluded from EXEMPT_VIEW_PERMISSIONS; see the test above")
-
-    def test_list_objects_filtered(self):
-        self.add_permissions("extras.view_archivesegment")
-        super().test_list_objects_filtered()
-
-    def test_list_objects_unknown_filter_no_strict_filtering(self):
-        self.add_permissions("extras.view_archivesegment")
-        super().test_list_objects_unknown_filter_no_strict_filtering()
-
-    def test_list_objects_unknown_filter_strict_filtering(self):
-        self.add_permissions("extras.view_archivesegment")
-        super().test_list_objects_unknown_filter_strict_filtering()

@@ -15,6 +15,7 @@ from nautobot.extras.models import (
     JobLogEntry,
     JobResult,
     ObjectChange,
+    RetentionRule,
 )
 
 ARCHIVE_MODELS = (ArchivedObjectChange, ArchivedJobResult, ArchivedJobLogEntry, ArchivedJobConsoleEntry)
@@ -52,8 +53,8 @@ class ChangelogArchiveRouterTestCase(TestCase):
         self.assertIsNone(self.router.db_for_write(JobConsoleEntry))
 
     def test_registry_models_are_not_mirrors(self):
-        """`ArchiveSegment` is an ordinary model on `default`, not retained history."""
-        for model in (ArchiveSegment,):
+        """`ArchiveSegment` and `RetentionRule` are ordinary models on `default`, not retained history."""
+        for model in (ArchiveSegment, RetentionRule):
             with self.subTest(model=model.__name__):
                 self.assertIsNone(self.router.db_for_read(model))
                 self.assertIsNone(self.router.db_for_write(model))
@@ -66,7 +67,7 @@ class ChangelogArchiveRouterTestCase(TestCase):
         Not just a simplification: `allow_migrate` also decides which tables `TransactionTestCase` flushes
         between tests, so narrowing that set here broke unrelated job-logging fixtures.
         """
-        for model in (*ARCHIVE_MODELS, *WARM_MODELS, ArchiveSegment):
+        for model in (*ARCHIVE_MODELS, *WARM_MODELS, ArchiveSegment, RetentionRule):
             with self.subTest(model=model.__name__):
                 self.assertIsNone(self.router.allow_migrate("default", "extras", model._meta.model_name))
                 self.assertIsNone(self.router.allow_migrate(CHANGELOG_ARCHIVE, "extras", model._meta.model_name))
@@ -82,7 +83,7 @@ class ChangelogArchiveRouterTestCase(TestCase):
     @override_settings(CHANGELOG_ARCHIVE_SEPARATE_DATABASE=True)
     def test_allow_migrate_excludes_everything_else_from_archive_alias(self):
         """The archive database holds the retention tables and nothing else."""
-        for model in (*WARM_MODELS, ArchiveSegment):
+        for model in (*WARM_MODELS, ArchiveSegment, RetentionRule):
             with self.subTest(model=model.__name__):
                 self.assertIs(self.router.allow_migrate(CHANGELOG_ARCHIVE, "extras", model._meta.model_name), False)
                 self.assertIsNone(self.router.allow_migrate("default", "extras", model._meta.model_name))

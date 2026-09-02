@@ -6,11 +6,12 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import QueryDict
 from django.test import override_settings, RequestFactory, tag
 from django.utils.timezone import now
 
 from nautobot.core.jobs import BulkDeleteObjects
-from nautobot.core.testing import FilterTestCases
+from nautobot.core.testing import FilterTestCases, TestCase
 from nautobot.dcim.filters import DeviceFilterSet
 from nautobot.dcim.models import (
     Device,
@@ -72,6 +73,7 @@ from nautobot.extras.filters import (
     ObjectMetadataFilterSet,
     RelationshipAssociationFilterSet,
     RelationshipFilterSet,
+    RetentionRuleFilterSet,
     RoleFilterSet,
     SavedViewFilterSet,
     ScheduledJobFilterSet,
@@ -119,6 +121,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -2716,3 +2719,74 @@ class RoleTestCase(FilterTestCases.FilterTestCase):
         rack_roles = self.queryset.filter(content_types=rack_ct)
         params = {"content_types": ["dcim.rack"]}
         self.assertQuerySetEqualAndNotEmpty(self.filterset(params, self.queryset).qs, rack_roles)
+
+
+class RetentionRuleContentTypeFilterTestCase(TestCase):
+    """
+    The object-type filter is a multi-select, so it has to accept more than one value.
+
+    Paired with a single-value `ContentTypeFilter` it silently returned only the last selected type's
+    rules -- filtering by two types matched one rule where three qualified.
+    """
+
+    queryset = RetentionRule.objects.all()
+    filterset = RetentionRuleFilterSet
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.change_type = ContentType.objects.get_for_model(ObjectChange)
+        cls.result_type = ContentType.objects.get_for_model(JobResult)
+        RetentionRule.objects.create(name="filter rule 1", content_type=cls.change_type, max_age_days=1)
+        RetentionRule.objects.create(name="filter rule 2", content_type=cls.change_type, max_age_days=2)
+        RetentionRule.objects.create(name="filter rule 3", content_type=cls.result_type, max_age_days=3)
+
+    def matched(self, raw_query):
+        filterset = self.filterset(data=QueryDict(raw_query), queryset=self.queryset)
+        self.assertTrue(filterset.is_valid(), filterset.errors)
+        return set(filterset.qs.values_list("name", flat=True))
+
+    def test_the_advanced_filter_can_build_the_object_type_field(self):
+        """
+        Choosing Object Type on the Advanced tab asks the API for that field, and it used to 500.
+
+        `get_filterset_parameter_form_field` maps a `ContentTypeMultipleChoiceFilter` to a feature name,
+        then falls back to a small map of querysets keyed by the model's plural name. `retention_rules` was
+        in neither, so the lookup raised `KeyError` and the endpoint, which catches only
+        `FilterSetFieldNotFound`, returned a 500 the moment the field was selected.
+        """
+        from nautobot.core.utils.filtering import get_filterset_parameter_form_field
+        from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS
+
+        field = get_filterset_parameter_form_field(RetentionRule, "content_type", filterset=self.filterset())
+
+        labels = {label for label, _ in field.choices}
+        self.assertEqual(labels, set(CHANGELOG_ARCHIVE_COVERED_MODELS))
+
+    def test_the_object_type_field_endpoint_responds(self):
+        """The whole path the Advanced tab actually takes, since the field lookup alone was not the 500."""
+        self.add_permissions("extras.view_retentionrule")
+        url = "/api/core/filterset-fields/lookup-value-dom-element/"
+
+        response = self.client.get(f"{url}?content_type=extras.retentionrule&field_name=content_type")
+
+        self.assertHttpStatus(response, 200)
+
+    def test_one_object_type(self):
+        self.assertEqual(self.matched("content_type=extras.objectchange"), {"filter rule 1", "filter rule 2"})
+
+    def test_two_object_types(self):
+        """OR, not AND: a rule has exactly one object type, so conjoining them would match nothing."""
+        self.assertEqual(
+            self.matched("content_type=extras.objectchange&content_type=extras.jobresult"),
+            {"filter rule 1", "filter rule 2", "filter rule 3"},
+        )
+
+    def test_only_covered_types_are_offered(self):
+        """The choices come from the constant the rotation and truncation jobs read, not a second copy."""
+        from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS
+        from nautobot.extras.utils import changelog_covered_content_type_choices
+
+        self.assertEqual(
+            {value for value, _label in changelog_covered_content_type_choices()},
+            set(CHANGELOG_ARCHIVE_COVERED_MODELS),
+        )

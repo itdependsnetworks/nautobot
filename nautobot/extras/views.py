@@ -163,6 +163,7 @@ from .models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -5127,3 +5128,55 @@ class ArchiveSegmentUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
             ),
         ]
     )
+
+
+class RetentionRuleUIViewSet(ScopedFilterViewMixin, NautobotUIViewSet):
+    """
+    CRUD for the filter model that drives changelog truncation.
+
+    The rule's scope is edited with the same filter builder a custom field's scope uses, so a rule selects
+    exactly what the same filter selects in the change log -- which is how an operator checks what a rule
+    will delete before enabling it.
+    """
+
+    bulk_update_form_class = forms.RetentionRuleBulkEditForm
+    filterset_class = filters.RetentionRuleFilterSet
+    filterset_form_class = forms.RetentionRuleFilterForm
+    form_class = forms.RetentionRuleForm
+    queryset = RetentionRule.objects.all()
+    serializer_class = serializers.RetentionRuleSerializer
+    table_class = tables.RetentionRuleTable
+
+    def get_queryset(self):
+        """`content_type` is rendered on every row of the list and on the detail page."""
+        return super().get_queryset().select_related("content_type")
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=[
+            object_detail.ObjectFieldsPanel(
+                label="Retention Rule",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("name", "description", "content_type", "mode", "max_age_days", "weight", "enabled"),
+            ),
+            object_detail.ObjectTextPanel(
+                label="Scope Filter",
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                object_field="scope_filter",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+            ),
+        ]
+    )
+
+    def get_extra_context(self, request, instance):
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            context["scope_filter_trigger"] = "#id_content_type"
+            context.update(**self.get_scope_filter_form_context(request, instance))
+        return context
+
+    def form_save(self, form, **kwargs):
+        obj = super().form_save(form, **kwargs)
+        self.save_scope_filter(obj, self.get_extra_context(self.request, obj))
+        return obj

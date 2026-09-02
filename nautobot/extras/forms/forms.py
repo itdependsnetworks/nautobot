@@ -60,6 +60,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     ObjectChangeEventContextChoices,
     RelationshipTypeChoices,
+    RetentionRuleModeChoices,
     ScheduledJobStateChoices,
     WebhookHttpMethodChoices,
 )
@@ -98,6 +99,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -112,6 +114,7 @@ from nautobot.extras.models import (
 )
 from nautobot.extras.registry import registry
 from nautobot.extras.utils import (
+    changelog_covered_content_types_q,
     ChangeLoggedModelsQuery,
     FeatureQuery,
     get_worker_count,
@@ -219,6 +222,9 @@ __all__ = (
     "RelationshipBulkEditForm",
     "RelationshipFilterForm",
     "RelationshipForm",
+    "RetentionRuleBulkEditForm",
+    "RetentionRuleFilterForm",
+    "RetentionRuleForm",
     "RoleBulkEditForm",
     "RoleFilterForm",
     "RoleForm",
@@ -1187,6 +1193,77 @@ class ExportTemplateBulkEditForm(NautobotBulkEditForm):
     class Meta:
         model = ExportTemplate
         nullable_fields = ["description", "mime_type", "file_extension"]
+
+
+class RetentionRuleForm(NautobotModelForm):
+    content_type = forms.ModelChoiceField(
+        queryset=ContentType.objects.filter(changelog_covered_content_types_q()).order_by("app_label", "model"),
+        label="Object Type",
+        help_text="The covered model this rule applies to.",
+        # Changing the object type changes which filters exist, so the scope filter card is re-rendered for
+        # the new model. Same construct as the custom field form.
+        widget=StaticSelect2(
+            attrs={
+                "hx-trigger": "change",
+                "hx-get": reverse_lazy("extras:retentionrule_scope_filter_fields"),
+                "hx-select": "#nb-scope-filter-form-container",
+                "hx-target": "#nb-scope-filter-form-container",
+                "hx-swap": "outerHTML",
+            }
+        ),
+    )
+
+    class Meta:
+        model = RetentionRule
+        # `scope_filter` is absent on purpose: it is written by the filter builder in `form_save`, not
+        # typed as JSON. See `ScopedFilterMixin`.
+        fields = (
+            "name",
+            "description",
+            "content_type",
+            "mode",
+            "max_age_days",
+            "weight",
+            "enabled",
+        )
+
+
+class RetentionRuleFilterForm(NautobotFilterForm):
+    model = RetentionRule
+    q = forms.CharField(required=False, label="Search")
+    content_type = MultipleContentTypeField(
+        feature=None,
+        choices_as_strings=True,
+        required=False,
+        label="Object Type",
+        queryset=ContentType.objects.filter(changelog_covered_content_types_q()),
+    )
+    mode = forms.ChoiceField(choices=add_blank_choice(RetentionRuleModeChoices), required=False)
+    enabled = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+
+
+class ArchiveSegmentFilterForm(NautobotFilterForm):
+    model = ArchiveSegment
+    q = forms.CharField(required=False, label="Search")
+    model_label = forms.CharField(required=False, label="Object Type")
+    period_granularity = forms.ChoiceField(
+        choices=add_blank_choice(ChangelogArchivePeriodChoices), required=False, label="Granularity"
+    )
+    is_period_closed = forms.NullBooleanField(
+        required=False, label="Closed", widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES)
+    )
+
+
+class RetentionRuleBulkEditForm(NautobotBulkEditForm):
+    pk = forms.ModelMultipleChoiceField(queryset=RetentionRule.objects.all(), widget=forms.MultipleHiddenInput)
+    description = forms.CharField(max_length=CHARFIELD_MAX_LENGTH, required=False)
+    enabled = forms.NullBooleanField(required=False, widget=BulkEditNullBooleanSelect())
+    mode = forms.ChoiceField(choices=add_blank_choice(RetentionRuleModeChoices), required=False)
+    max_age_days = forms.IntegerField(min_value=0, required=False)
+    weight = forms.IntegerField(min_value=0, required=False)
+
+    class Meta:
+        nullable_fields = ["description", "max_age_days"]
 
 
 class ExportTemplateForm(BootstrapMixin, forms.ModelForm):
@@ -2921,15 +2998,3 @@ class WebhookFilterForm(BootstrapMixin, forms.Form):
     type_update = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     type_delete = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     enabled = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
-
-
-class ArchiveSegmentFilterForm(NautobotFilterForm):
-    model = ArchiveSegment
-    q = forms.CharField(required=False, label="Search")
-    model_label = forms.CharField(required=False, label="Object Type")
-    period_granularity = forms.ChoiceField(
-        choices=add_blank_choice(ChangelogArchivePeriodChoices), required=False, label="Granularity"
-    )
-    is_period_closed = forms.NullBooleanField(
-        required=False, label="Closed", widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES)
-    )

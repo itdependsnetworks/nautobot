@@ -43,6 +43,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
 )
 from nautobot.extras.constants import (
+    CHANGELOG_ARCHIVE_COVERED_MODELS,
     CHANGELOG_MAX_CHANGE_CONTEXT_DETAIL,
     EXTRAS_FEATURES,
     JOB_MAX_NAME_LENGTH,
@@ -1220,3 +1221,39 @@ def get_pending_approval_workflow_stages(user, queryset):
         .exclude(pk__in=approved_approval_workflow_stages)
         .order_by("created")
     )
+
+
+def changelog_covered_content_types_q():
+    """
+    `Q` matching the ContentTypes of the models changelog long-term retention covers.
+
+    Derived from `CHANGELOG_ARCHIVE_COVERED_MODELS` so the form, filter, and serializer that scope a
+    retention rule cannot drift from the set the rotation and truncation jobs actually act on.
+    """
+    query = Q(pk=None)
+    for label in CHANGELOG_ARCHIVE_COVERED_MODELS:
+        app_label, model = label.split(".")
+        query |= Q(app_label=app_label, model=model)
+    return query
+
+
+def changelog_covered_content_type_choices():
+    """Choices for filtering on a covered model, in the `<app_label>.<model>` form filters expect.
+
+    A callable rather than a list, so the database is not queried at import time.
+    """
+    return ChangelogArchiveCoveredModelsQuery().get_choices()
+
+
+@deconstructible
+class ChangelogArchiveCoveredModelsQuery(FeaturedQueryMixin):
+    """
+    Helper class to get ContentTypes of the models changelog long-term retention covers.
+
+    Derived from `CHANGELOG_ARCHIVE_COVERED_MODELS`, so the retention rule form, its filter, and the
+    advanced filter's field lookup cannot drift from the set the rotation and truncation jobs act on.
+    """
+
+    def list_subclasses(self):
+        """The covered models themselves, named by the constant the jobs read."""
+        return [apps.get_model(label) for label in CHANGELOG_ARCHIVE_COVERED_MODELS]
