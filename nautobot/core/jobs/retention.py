@@ -11,8 +11,10 @@ one, and the two share `CascadeDeleteMixin` rather than each carrying its own ca
 
 from datetime import timedelta
 
+from django.apps import apps
 from django.core.exceptions import PermissionDenied
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import F, Q
 from django.utils import timezone
 
 from nautobot.core.jobs.cleanup import CascadeDeleteMixin
@@ -21,14 +23,19 @@ from nautobot.core.utils.lookup import get_filterset_for_model
 from nautobot.extras.choices import RetentionRuleModeChoices
 from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS
 from nautobot.extras.context_managers import without_delete_change_logging
-from nautobot.extras.jobs import BooleanVar, IntegerVar, Job
+from nautobot.extras.jobs import BooleanVar, IntegerVar, Job, MultiChoiceVar
 from nautobot.extras.models import (
     ArchiveSegment,
     RetentionRule,
 )
 from nautobot.extras.models.archive import (
     age_field_for,
+    build_mirror_instance,
+    period_bounds_for,
+    period_key_for,
+    period_label_for,
 )
+from nautobot.extras.registry import registry
 
 name = "System Jobs"
 
@@ -41,6 +48,271 @@ ROTATION_ORDER = (
     "extras.jobconsoleentry",
     "extras.jobresult",
 )
+
+
+class ChangelogRotation(Job):
+    """
+    Move change and job history out of warm storage into its calendar period.
+
+    A record's own timestamp decides which period holds it, so rotation is idempotent: re-running files the
+    same records in the same period and the repeated primary keys conflict harmlessly. There is no
+    fill-and-rotate step and no size bound to trip; period granularity is the size control.
+    """
+
+    record_types = MultiChoiceVar(
+        choices=[(label, label) for label in ROTATION_ORDER],
+        description="Record types to rotate. Leave empty to rotate all of them.",
+        required=False,
+    )
+    warm_window_days = IntegerVar(
+        description=(
+            "Days of history to keep in warm storage. Records older than this are moved. "
+            "Leave empty to use the CHANGELOG_WARM_WINDOW_DAYS setting."
+        ),
+        label="Warm Window",
+        min_value=1,
+        required=False,
+    )
+    batch_size = IntegerVar(
+        description=(
+            "Records to move per increment. Leave empty to use the CHANGELOG_ROTATION_BATCH_SIZE setting. "
+            "Lower it if rotation runs out of memory: each record in a batch is held twice while it is copied."
+        ),
+        label="Batch Size",
+        min_value=1,
+        required=False,
+    )
+    include_job_files = BooleanVar(
+        description=(
+            "Rotate job results that have output files attached. Those files are deleted with the warm "
+            "record and are not archived, so this is off by default."
+        ),
+        default=False,
+    )
+    dry_run = BooleanVar(description="Report what would be moved without moving anything.", default=True)
+
+    class Meta:
+        name = "Changelog Rotation"
+        description = "Move change and job history older than the warm window into long-term retention."
+        has_sensitive_variables = False
+
+    def run(  # pylint: disable=arguments-differ
+        self, *, record_types=None, warm_window_days=None, batch_size=None, include_job_files=False, dry_run=True
+    ):
+        if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
+            self.logger.warning("Changelog long-term retention is disabled (CHANGELOG_ARCHIVE_ENABLED); nothing to do.")
+            return {}
+
+        if warm_window_days in (None, ""):
+            warm_window_days = get_settings_or_config("CHANGELOG_WARM_WINDOW_DAYS", fallback=90)
+        if batch_size in (None, ""):
+            # Rotation's own setting, not truncation's. The two measure different costs: truncation's batch
+            # is how many rows one delete statement covers, which needs only their keys, while rotation's
+            # is how many records are held in memory at once to copy -- each one twice, the warm record and
+            # the retained copy built from it. Reusing truncation's default made an out-of-memory kill an
+            # order of magnitude more likely than intended, on exactly the large-record tables this
+            # feature exists to relieve.
+            batch_size = get_settings_or_config("CHANGELOG_ROTATION_BATCH_SIZE", fallback=1000)
+
+        labels = [label for label in ROTATION_ORDER if not record_types or label in record_types]
+        cutoff = timezone.now() - timedelta(days=warm_window_days)
+        self.logger.info("Rotating records older than %s (%d-day warm window)", cutoff, warm_window_days)
+
+        result = {}
+        with without_delete_change_logging(self.logger):
+            for label in labels:
+                model = apps.get_model(label)
+                mirror = registry["changelog_archive_models"].get(label)
+                if mirror is None:
+                    self.logger.warning("No retention mirror registered for %s; skipping.", label)
+                    continue
+                result[model._meta.label] = self._rotate_model(
+                    model, mirror, cutoff, batch_size, include_job_files, dry_run
+                )
+
+        if dry_run:
+            # Sits beside the per-model counts so the summary reads "dry run; 149 object changes" rather
+            # than leaving a reader to guess whether the numbers describe work done or work pending.
+            result["dry_run"] = True
+        else:
+            self._close_finished_periods(labels)
+
+        return result
+
+    def _rotate_model(self, model, mirror, cutoff, batch_size, include_job_files, dry_run):
+        """Move one model's eligible records, a bounded batch at a time."""
+        age_field = age_field_for(model)
+        eligible = model.objects.filter(**{f"{age_field}__lt": cutoff}).order_by(age_field)
+        eligible = self._exclude_unsafe(model, eligible, include_job_files, dry_run=dry_run)
+
+        total = eligible.count()
+        if not total:
+            self.logger.info("No %s records older than the warm window", model._meta.label)
+            return 0
+
+        if dry_run:
+            self.logger.warning(
+                "Dry run: would move %d %s records in increments of %d", total, model._meta.label, batch_size
+            )
+            # The count it *would* move, not zero. A dry run exists to answer "how much would this do",
+            # and a result summary reading 0 answers the wrong question -- the caller knows it was a dry
+            # run from the `dry_run` key alongside these counts.
+            return total
+
+        moved = 0
+        increments = 0
+        while True:
+            batch = list(eligible[:batch_size])
+            if not batch:
+                break
+            moved_now = self._move_batch(model, mirror, batch, age_field)
+            moved += moved_now
+            increments += 1
+            self.logger.info("Increment %d: moved %d %s records", increments, moved_now, model._meta.label)
+            if not moved_now:
+                self.logger.warning(
+                    "Stopping: %d %s records remain eligible but could not be moved", len(batch), model._meta.label
+                )
+                break
+
+        self.logger.success("Moved %d %s records across %d increments", moved, model._meta.label, increments)
+        return moved
+
+    def _exclude_unsafe(self, model, queryset, include_job_files, dry_run=False):
+        """
+        Drop records that cannot be rotated without collateral loss.
+
+        A warm `JobResult` is deleted once archived, and its CASCADE children go with it. Log and console
+        entries are archived first by `ROTATION_ORDER`, so any still present mean their own rotation has not
+        caught up and this result must wait. Output files are never archived at all, so a result carrying
+        them is held back unless the operator opts in.
+        """
+        if model._meta.label_lower != "extras.jobresult":
+            return queryset
+
+        # `.distinct()` because filtering across these reverse foreign keys yields one row per child, so
+        # the count would otherwise report log entries rather than job results.
+        stragglers = queryset.filter(Q(job_log_entries__isnull=False) | Q(job_console_entries__isnull=False)).distinct()
+        straggler_count = stragglers.count()
+        if straggler_count:
+            # One message, with the reason phrased for the mode. A dry run moves nothing, so every child
+            # is still warm and every parent looks held back -- reporting that count without saying why
+            # reads as a bug, since the real run will exceed it.
+            if dry_run:
+                self.logger.info(
+                    "Holding back %d job results whose log or console entries are still in warm storage. "
+                    "In a dry run those never move, so the job result count is a lower bound rather than a "
+                    "prediction; a real run moves them first.",
+                    straggler_count,
+                )
+            else:
+                self.logger.info(
+                    "Holding back %d job results whose log or console entries are still in warm storage; "
+                    "they will rotate once those do.",
+                    straggler_count,
+                )
+            queryset = queryset.exclude(pk__in=stragglers.values("pk"))
+
+        if not include_job_files:
+            with_files = queryset.filter(files__isnull=False).distinct()
+            file_count = with_files.count()
+            if file_count:
+                self.logger.warning(
+                    "Holding back %d job results with output files attached. Those files are not archived "
+                    "and would be deleted with the warm record; re-run with `include_job_files` to accept that.",
+                    file_count,
+                )
+                queryset = queryset.exclude(pk__in=with_files.values("pk"))
+
+        return queryset
+
+    def _move_batch(self, model, mirror, batch, age_field):
+        """
+        Copy a batch into its periods, then delete the warm rows.
+
+        Copy-then-delete rather than delete-then-copy: a failure between the two leaves the record in both
+        places, which the next run resolves, whereas the reverse would lose it.
+
+        Deliberately *not* one transaction across both, and it cannot be: the mirror is written through the
+        `changelog_archive` connection while the warm delete goes through `default`, so they are two
+        connections and two transactions even when the alias points at the same database. The ordering above
+        is what makes that safe. What the transaction here does cover is the warm delete and the period's
+        row count together, so a process killed between them cannot leave a count that says fewer records
+        were archived than were actually removed from warm storage.
+        """
+        by_period = {}
+        for warm_object in batch:
+            period_key = period_key_for(getattr(warm_object, age_field))
+            by_period.setdefault(period_key, []).append(warm_object)
+
+        moved = 0
+        for period_key, objects in by_period.items():
+            segment = self._get_or_create_segment(model, period_key)
+            mirrors = [build_mirror_instance(warm_object, mirror, period_key) for warm_object in objects]
+            pks = [warm_object.pk for warm_object in objects]
+            latest = max(getattr(warm_object, age_field) for warm_object in objects)
+            with transaction.atomic():
+                mirror.objects.bulk_create(mirrors, ignore_conflicts=True)
+                archived = set(mirror.objects.filter(pk__in=pks).values_list("pk", flat=True))
+                if len(archived) != len(pks):
+                    missing = len(pks) - len(archived)
+                    self.logger.error(
+                        "%d of %d %s records did not land in period %s; leaving them in warm storage",
+                        missing,
+                        len(pks),
+                        model._meta.label,
+                        period_key,
+                    )
+                deleted = model.objects.filter(pk__in=list(archived)).delete()[0]
+                moved += len(archived)
+                self._record_progress(segment, len(archived), latest)
+            self.logger.debug("Period %s: archived %d and removed %d warm rows", period_key, len(archived), deleted)
+        return moved
+
+    def _get_or_create_segment(self, model, period_key):
+        """Find or create the registry row for one (model, period)."""
+        time_start, time_end = period_bounds_for(period_key)
+        segment, created = ArchiveSegment.objects.get_or_create(
+            model_label=model._meta.label_lower,
+            period_key=period_key,
+            defaults={
+                "label": period_label_for(period_key),
+                "period_granularity": get_settings_or_config("CHANGELOG_ARCHIVE_PERIOD", fallback="year"),
+                "time_start": time_start,
+                "time_end": time_end,
+            },
+        )
+        if created:
+            self.logger.info("Opened retention period %s for %s", segment.label, model._meta.label)
+        return segment
+
+    def _record_progress(self, segment, archived_count, latest_time):
+        """Update the period's row count and how far rotation has gotten into it."""
+        segment.row_count = F("row_count") + archived_count
+        if segment.last_rotated_time is None or latest_time > segment.last_rotated_time:
+            segment.last_rotated_time = latest_time
+        segment.save(update_fields=["row_count", "last_rotated_time"])
+        segment.refresh_from_db(fields=["row_count"])
+
+    def _close_finished_periods(self, labels):
+        """
+        Mark a period closed once it has ended and no warm records remain inside it.
+
+        A closed period carries no staleness claim, and it is the signal truncation uses to decide that a
+        period's warm leftovers are safe to delete.
+        """
+        now = timezone.now()
+        for label in labels:
+            model = apps.get_model(label)
+            age_field = age_field_for(model)
+            for segment in ArchiveSegment.objects.filter(model_label=label, is_period_closed=False, time_end__lte=now):
+                remaining = model.objects.filter(
+                    **{f"{age_field}__gte": segment.time_start, f"{age_field}__lt": segment.time_end}
+                ).exists()
+                if not remaining:
+                    segment.is_period_closed = True
+                    segment.save(update_fields=["is_period_closed"])
+                    self.logger.info("Closed retention period %s for %s", segment.label, model._meta.label)
 
 
 class ChangelogTruncation(CascadeDeleteMixin, Job):

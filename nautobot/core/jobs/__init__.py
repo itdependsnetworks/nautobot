@@ -47,7 +47,7 @@ from nautobot.core.jobs.customfields import (
     UpdateCustomFieldChoiceData,
 )
 from nautobot.core.jobs.groups import RefreshDynamicGroupCacheJobButtonReceiver, RefreshDynamicGroupCaches
-from nautobot.core.jobs.retention import ChangelogTruncation
+from nautobot.core.jobs.retention import ChangelogRotation, ChangelogTruncation
 from nautobot.core.models.querysets import RestrictedQuerySet
 from nautobot.core.models.utils import m2m_through_data_fields
 from nautobot.core.utils.lookup import get_filterset_for_model, get_view_for_model
@@ -1062,6 +1062,7 @@ class ValidateModelData(Job):
 jobs = [
     BulkDeleteObjects,
     BulkEditObjects,
+    ChangelogRotation,
     ChangelogTruncation,
     CleanupCustomFieldsData,
     DeleteCustomFieldData,
