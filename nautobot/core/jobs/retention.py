@@ -12,6 +12,7 @@ one, and the two share `CascadeDeleteMixin` rather than each carrying its own ca
 from datetime import timedelta
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import F, Q
@@ -25,7 +26,12 @@ from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS
 from nautobot.extras.context_managers import without_delete_change_logging
 from nautobot.extras.jobs import BooleanVar, IntegerVar, Job, MultiChoiceVar
 from nautobot.extras.models import (
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ArchiveSegment,
+    JobResult,
     RetentionRule,
 )
 from nautobot.extras.models.archive import (
@@ -313,6 +319,210 @@ class ChangelogRotation(Job):
                     segment.is_period_closed = True
                     segment.save(update_fields=["is_period_closed"])
                     self.logger.info("Closed retention period %s for %s", segment.label, model._meta.label)
+
+
+class ChangelogArchiveIntegrityCheck(Job):
+    """
+    Stand in for what CASCADE used to do for retained history.
+
+    The mirrors hold their references as bare identifier columns, so nothing stops a retained record from
+    outliving the thing it points at. This finds those, and deletes them only when asked: a dangling
+    reference is usually a reason to look, not a reason to discard audit record.
+    """
+
+    repair = BooleanVar(
+        description="Delete the records reported instead of only reporting them.",
+        default=False,
+    )
+
+    class Meta:
+        name = "Changelog Archive Integrity Check"
+        description = "Report retained records whose referent no longer exists."
+        has_sensitive_variables = False
+
+    def run(self, *, repair=False):  # pylint: disable=arguments-differ
+        result = {}
+        for name, finder in (
+            ("orphaned_log_entries", self._find_orphaned_log_entries),
+            ("orphaned_console_entries", self._find_orphaned_console_entries),
+            ("stale_content_types", self._find_stale_content_types),
+        ):
+            queryset = finder()
+            count = queryset.count()
+            result[name] = count
+            if not count:
+                self.logger.info("%s: none found", name)
+                continue
+            if repair:
+                deleted = queryset.delete()[0]
+                self.logger.warning("%s: deleted %d records", name, deleted)
+                result[name] = deleted
+            else:
+                self.logger.warning("%s: %d records found. Re-run with `repair` to delete them.", name, count)
+        return result
+
+    def _find_orphaned_log_entries(self):
+        """Retained log entries whose job result is in neither warm storage nor retention."""
+        missing = self._missing_referents(ArchivedJobLogEntry, "job_result_id", (JobResult, ArchivedJobResult))
+        return ArchivedJobLogEntry.objects.filter(job_result_id__in=missing)
+
+    def _find_orphaned_console_entries(self):
+        missing = self._missing_referents(ArchivedJobConsoleEntry, "job_result_id", (JobResult, ArchivedJobResult))
+        return ArchivedJobConsoleEntry.objects.filter(job_result_id__in=missing)
+
+    def _find_stale_content_types(self):
+        """
+        Retained changes pointing at a content type that no longer exists.
+
+        `ContentType` is a small table, so its keys are compared as a literal list rather than a subquery,
+        for the same cross-connection reason as `_missing_referents`.
+        """
+        known = list(ContentType.objects.values_list("pk", flat=True))
+        return ArchivedObjectChange.objects.filter(changed_object_type_id__isnull=False).exclude(
+            changed_object_type_id__in=known
+        )
+
+    @staticmethod
+    def _missing_referents(mirror, field_name, referent_models, chunk_size=10000):
+        """
+        Which values of `mirror.field_name` name nothing that still exists.
+
+        Compared in chunks in Python rather than as a subquery on purpose. The mirrors live on their own
+        connection, and a subquery joining them to a warm table is unreliable on one database and outright
+        impossible once an operator repoints the archive alias at its own host. Chunking keeps it bounded
+        either way.
+        """
+        missing = []
+        distinct_ids = (
+            mirror.objects.exclude(**{f"{field_name}__isnull": True}).values_list(field_name, flat=True).distinct()
+        )
+        offset = 0
+        while True:
+            chunk = list(distinct_ids[offset : offset + chunk_size])
+            if not chunk:
+                break
+            found = set()
+            for referent in referent_models:
+                found |= set(referent.objects.filter(pk__in=chunk).values_list("pk", flat=True))
+            missing.extend(value for value in chunk if value not in found)
+            offset += chunk_size
+        return missing
+
+
+class ChangelogArchiveReconciliation(Job):
+    """
+    Stand in for what PROTECT and the migration tooling used to do.
+
+    Confirms that each period's recorded row count is true, that no record sits outside the period filing
+    it, and that nothing exists in both warm storage and retention. None of these prevent divergence; they
+    detect it, which is the trade §2 accepted when it dropped referential integrity.
+    """
+
+    repair = BooleanVar(
+        description="Correct the recorded row counts. Records are never moved or deleted by this job.",
+        default=False,
+    )
+
+    class Meta:
+        name = "Changelog Archive Reconciliation"
+        description = "Verify retained history against its period registry."
+        has_sensitive_variables = False
+
+    def run(self, *, repair=False):  # pylint: disable=arguments-differ
+        return {
+            "segment_count_drift": self._verify_segment_counts(repair),
+            "out_of_period_records": self._find_out_of_period_rows(),
+            "duplicated_records": self._find_duplicate_records(),
+        }
+
+    def _verify_segment_counts(self, repair):
+        """A period's `row_count` should equal what the mirror actually holds."""
+        drift = 0
+        for segment in ArchiveSegment.objects.all():
+            mirror = registry["changelog_archive_models"].get(segment.model_label)
+            if mirror is None:
+                self.logger.warning(
+                    "Period %s refers to %s, which has no retention mirror registered",
+                    segment.label,
+                    segment.model_label,
+                )
+                continue
+            actual = mirror.objects.filter(period_key=segment.period_key).count()
+            if actual == segment.row_count:
+                continue
+            drift += 1
+            self.logger.warning(
+                "Period %s of %s records %d rows but holds %d",
+                segment.label,
+                segment.model_label,
+                segment.row_count,
+                actual,
+            )
+            if repair:
+                segment.row_count = actual
+                segment.save(update_fields=["row_count"])
+                self.logger.info("Period %s row count corrected to %d", segment.label, actual)
+        if not drift:
+            self.logger.info("Every period's row count matches what it holds")
+        return drift
+
+    def _find_out_of_period_rows(self):
+        """A record whose timestamp falls outside the period holding it was filed wrongly."""
+        total = 0
+        for segment in ArchiveSegment.objects.all():
+            mirror = registry["changelog_archive_models"].get(segment.model_label)
+            if mirror is None:
+                continue
+            age_field = age_field_for(apps.get_model(segment.model_label))
+            stray = mirror.objects.filter(period_key=segment.period_key).exclude(
+                **{f"{age_field}__gte": segment.time_start, f"{age_field}__lt": segment.time_end}
+            )
+            count = stray.count()
+            if count:
+                total += count
+                self.logger.warning(
+                    "Period %s of %s holds %d records timestamped outside %s..%s",
+                    segment.label,
+                    segment.model_label,
+                    count,
+                    segment.time_start,
+                    segment.time_end,
+                )
+        if not total:
+            self.logger.info("Every retained record falls inside the period holding it")
+        return total
+
+    def _find_duplicate_records(self):
+        """
+        A record in both warm storage and retention was copied but never removed.
+
+        The state a rotation interrupted between its copy and its delete leaves behind. Harmless to read
+        past, but it means a warm table is not as small as the operator thinks.
+        """
+        total = 0
+        for label, mirror in registry["changelog_archive_models"].items():
+            warm = apps.get_model(label)
+            # Chunked in Python for the same reason as `_missing_referents`: the two live on different
+            # connections, so a subquery across them cannot be relied on.
+            count = 0
+            offset = 0
+            mirror_pks = mirror.objects.values_list("pk", flat=True)
+            while True:
+                chunk = list(mirror_pks[offset : offset + 10000])
+                if not chunk:
+                    break
+                count += warm.objects.filter(pk__in=chunk).count()
+                offset += 10000
+            if count:
+                total += count
+                self.logger.warning(
+                    "%d %s records exist in both warm storage and retention; re-run rotation to clear them",
+                    count,
+                    warm._meta.label,
+                )
+        if not total:
+            self.logger.info("No record exists in both warm storage and retention")
+        return total
 
 
 class ChangelogTruncation(CascadeDeleteMixin, Job):
