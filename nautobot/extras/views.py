@@ -98,6 +98,10 @@ from nautobot.dcim.tables import (
     RackTable,
     VirtualDeviceContextTable,
 )
+from nautobot.extras.archive_reads import (
+    archive_context,
+    object_change_history,
+)
 from nautobot.extras.constants import PENDING_WORKFLOWS_ERROR_CODE
 from nautobot.extras.context_managers import deferred_change_logging_for_bulk_operation
 from nautobot.extras.jobs_cancel import CancelFactory, user_can_cancel_job_result
@@ -108,6 +112,7 @@ from nautobot.extras.utils import (
     get_kubernetes_job_manifest,
     get_pending_approval_workflow_stages,
     get_worker_count,
+    resolve_object_urls,
 )
 from nautobot.ipam.models import IPAddress, IPAddressRange, Prefix, VLAN
 from nautobot.ipam.tables import IPAddressRangeTable, IPAddressTable, PrefixTable, VLANTable
@@ -1941,6 +1946,98 @@ class ObjectDynamicGroupsView(generic.GenericView):
 #
 # Export Templates
 #
+
+
+class RetentionRuleUIViewSet(ScopedFilterViewMixin, NautobotUIViewSet):
+    """
+    CRUD for the filter model that drives changelog truncation.
+
+    The rule's scope is edited with the same filter builder a custom field's scope uses, so a rule selects
+    exactly what the same filter selects in the change log -- which is how an operator checks what a rule
+    will delete before enabling it.
+    """
+
+    bulk_update_form_class = forms.RetentionRuleBulkEditForm
+    filterset_class = filters.RetentionRuleFilterSet
+    filterset_form_class = forms.RetentionRuleFilterForm
+    form_class = forms.RetentionRuleForm
+    queryset = RetentionRule.objects.all()
+    serializer_class = serializers.RetentionRuleSerializer
+    table_class = tables.RetentionRuleTable
+
+    def get_queryset(self):
+        """`content_type` is rendered on every row of the list and on the detail page."""
+        return super().get_queryset().select_related("content_type")
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=[
+            object_detail.ObjectFieldsPanel(
+                label="Retention Rule",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("name", "description", "content_type", "mode", "max_age_days", "weight", "enabled"),
+            ),
+            object_detail.ObjectTextPanel(
+                label="Scope Filter",
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                object_field="scope_filter",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+            ),
+        ]
+    )
+
+    def get_extra_context(self, request, instance):
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            context["scope_filter_trigger"] = "#id_content_type"
+            context.update(**self.get_scope_filter_form_context(request, instance))
+        return context
+
+    def form_save(self, form, **kwargs):
+        obj = super().form_save(form, **kwargs)
+        self.save_scope_filter(obj, self.get_extra_context(self.request, obj))
+        return obj
+
+
+class ArchiveSegmentUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
+    """
+    Read-only view of the retention period registry.
+
+    Periods are created and maintained by the rotation job, never by hand, so there is no create, edit,
+    or delete here. Its `view` permission is the single cold-storage gate for every covered model.
+    """
+
+    filterset_class = filters.ArchiveSegmentFilterSet
+    filterset_form_class = forms.ArchiveSegmentFilterForm
+    queryset = ArchiveSegment.objects.all()
+    serializer_class = serializers.ArchiveSegmentSerializer
+    table_class = tables.ArchiveSegmentTable
+    action_buttons = ("export",)
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=[
+            object_detail.ObjectFieldsPanel(
+                label="Period",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=(
+                    "label",
+                    "model_label",
+                    "period_key",
+                    "period_granularity",
+                    "time_start",
+                    "time_end",
+                ),
+            ),
+            object_detail.ObjectFieldsPanel(
+                label="Rotation Status",
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                fields=("row_count", "last_rotated_time", "is_period_closed"),
+            ),
+        ]
+    )
 
 
 class ExportTemplateUIViewSet(NautobotUIViewSet):
@@ -4133,11 +4230,15 @@ class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, Ob
             if key == "changed_object":
                 if value and getattr(value, "get_absolute_url", None):
                     return helpers.hyperlinked_object(value)
-                else:
-                    # PLACEHOLDER: commit 15, Link a retained record to the object it describes, resolves
-                    # the link from the identifier columns instead of falling straight through to text.
-                    obj = get_obj_from_context(context, self.context_object_key)
-                    return helpers.placeholder(obj.object_repr)
+                # A retained record has no `changed_object` relation to follow, only the content type and
+                # object ids rotation demoted it to, so the link is resolved from those. Falls back to the
+                # stored `object_repr` when the object is gone, which is the same thing the list does.
+                obj = get_obj_from_context(context, self.context_object_key)
+                reference = (obj.changed_object_type_id, obj.changed_object_id)
+                url = resolve_object_urls([reference]).get(reference)
+                if url:
+                    return format_html('<a href="{}">{}</a>', url, obj.object_repr)
+                return helpers.placeholder(obj.object_repr)
             return super().render_value(key, value, context)
 
     object_detail_content = object_detail.ObjectDetailContent(
@@ -4265,14 +4366,9 @@ class ObjectChangeLogView(generic.GenericView):
 
         # Gather all changes for this object (and its related objects)
         content_type = ContentType.objects.get_for_model(model)
-        objectchanges = (
-            ObjectChange.objects.restrict(request.user, "view")
-            .select_related("user", "changed_object_type")
-            .filter(
-                Q(changed_object_type=content_type, changed_object_id=obj.pk)
-                | Q(related_object_type=content_type, related_object_id=obj.pk)
-            )
-        )
+        archive = archive_context(ObjectChange, request, show_counts=False)
+        # One period at a time: the selected period replaces warm storage rather than adding to it.
+        objectchanges, _period_key = object_change_history(obj, content_type, request)
         objectchanges_table = tables.ObjectChangeTable(data=objectchanges, orderable=False)
 
         # Apply the request context
@@ -4298,6 +4394,7 @@ class ObjectChangeLogView(generic.GenericView):
                 "view_titles": self.get_view_titles(obj, view_type=""),
                 "detail": True,
                 "view_action": "changelog",
+                **archive,
             },
         )
 
@@ -5125,95 +5222,3 @@ class WebhookUIViewSet(NautobotUIViewSet):
             ),
         ]
     )
-
-
-class ArchiveSegmentUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
-    """
-    Read-only view of the retention period registry.
-
-    Periods are created and maintained by the rotation job, never by hand, so there is no create, edit,
-    or delete here. Its `view` permission is the single cold-storage gate for every covered model.
-    """
-
-    filterset_class = filters.ArchiveSegmentFilterSet
-    filterset_form_class = forms.ArchiveSegmentFilterForm
-    queryset = ArchiveSegment.objects.all()
-    serializer_class = serializers.ArchiveSegmentSerializer
-    table_class = tables.ArchiveSegmentTable
-    action_buttons = ("export",)
-
-    object_detail_content = object_detail.ObjectDetailContent(
-        panels=[
-            object_detail.ObjectFieldsPanel(
-                label="Period",
-                section=SectionChoices.LEFT_HALF,
-                weight=100,
-                fields=(
-                    "label",
-                    "model_label",
-                    "period_key",
-                    "period_granularity",
-                    "time_start",
-                    "time_end",
-                ),
-            ),
-            object_detail.ObjectFieldsPanel(
-                label="Rotation Status",
-                section=SectionChoices.RIGHT_HALF,
-                weight=100,
-                fields=("row_count", "last_rotated_time", "is_period_closed"),
-            ),
-        ]
-    )
-
-
-class RetentionRuleUIViewSet(ScopedFilterViewMixin, NautobotUIViewSet):
-    """
-    CRUD for the filter model that drives changelog truncation.
-
-    The rule's scope is edited with the same filter builder a custom field's scope uses, so a rule selects
-    exactly what the same filter selects in the change log -- which is how an operator checks what a rule
-    will delete before enabling it.
-    """
-
-    bulk_update_form_class = forms.RetentionRuleBulkEditForm
-    filterset_class = filters.RetentionRuleFilterSet
-    filterset_form_class = forms.RetentionRuleFilterForm
-    form_class = forms.RetentionRuleForm
-    queryset = RetentionRule.objects.all()
-    serializer_class = serializers.RetentionRuleSerializer
-    table_class = tables.RetentionRuleTable
-
-    def get_queryset(self):
-        """`content_type` is rendered on every row of the list and on the detail page."""
-        return super().get_queryset().select_related("content_type")
-
-    object_detail_content = object_detail.ObjectDetailContent(
-        panels=[
-            object_detail.ObjectFieldsPanel(
-                label="Retention Rule",
-                section=SectionChoices.LEFT_HALF,
-                weight=100,
-                fields=("name", "description", "content_type", "mode", "max_age_days", "weight", "enabled"),
-            ),
-            object_detail.ObjectTextPanel(
-                label="Scope Filter",
-                section=SectionChoices.RIGHT_HALF,
-                weight=100,
-                object_field="scope_filter",
-                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
-            ),
-        ]
-    )
-
-    def get_extra_context(self, request, instance):
-        context = super().get_extra_context(request, instance)
-        if self.action in ("create", "update"):
-            context["scope_filter_trigger"] = "#id_content_type"
-            context.update(**self.get_scope_filter_form_context(request, instance))
-        return context
-
-    def form_save(self, form, **kwargs):
-        obj = super().form_save(form, **kwargs)
-        self.save_scope_filter(obj, self.get_extra_context(self.request, obj))
-        return obj
