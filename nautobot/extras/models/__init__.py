@@ -50,6 +50,7 @@ from .models import (
     Webhook,
 )
 from .relationships import Relationship, RelationshipAssociation, RelationshipModel
+from .retention import RetentionRule
 from .roles import Role, RoleField
 from .secrets import Secret, SecretsGroup, SecretsGroupAssociation
 from .statuses import Status, StatusField
@@ -107,6 +108,7 @@ __all__ = (
     "Relationship",
     "RelationshipAssociation",
     "RelationshipModel",
+    "RetentionRule",
     "Role",
     "RoleField",
     "SavedView",

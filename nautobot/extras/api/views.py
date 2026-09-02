@@ -81,6 +81,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -1630,3 +1631,11 @@ class ArchiveSegmentViewSet(ReadOnlyModelViewSet):
     queryset = ArchiveSegment.objects.all()
     serializer_class = serializers.ArchiveSegmentSerializer
     filterset_class = filters.ArchiveSegmentFilterSet
+
+
+class RetentionRuleViewSet(NautobotModelViewSet):
+    """Manage the filter rules that drive changelog truncation."""
+
+    queryset = RetentionRule.objects.select_related("content_type")
+    serializer_class = serializers.RetentionRuleSerializer
+    filterset_class = filters.RetentionRuleFilterSet

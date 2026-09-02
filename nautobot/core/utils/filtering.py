@@ -120,7 +120,12 @@ def get_filterset_parameter_form_field(model, parameter, filterset=None):
     from nautobot.dcim.models import Device
     from nautobot.extras.filters import ContentTypeMultipleChoiceFilter, CustomFieldFilterMixin
     from nautobot.extras.models import ConfigContext
-    from nautobot.extras.utils import ChangeLoggedModelsQuery, RoleModelsQuery, TaggableClassesQuery
+    from nautobot.extras.utils import (
+        ChangelogArchiveCoveredModelsQuery,
+        ChangeLoggedModelsQuery,
+        RoleModelsQuery,
+        TaggableClassesQuery,
+    )
     from nautobot.virtualization.models import VirtualMachine
 
     if filterset is None or filterset.Meta.model != model:
@@ -177,6 +182,7 @@ def get_filterset_parameter_form_field(model, parameter, filterset=None):
                 "tags": TaggableClassesQuery,
                 "job_hooks": ChangeLoggedModelsQuery,
                 "roles": RoleModelsQuery,
+                "retention_rules": ChangelogArchiveCoveredModelsQuery,
             }
             form_field = MultipleContentTypeField(
                 choices_as_strings=True, queryset=queryset_map[plural_name]().as_queryset()

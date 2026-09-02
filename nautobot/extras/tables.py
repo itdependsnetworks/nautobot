@@ -60,6 +60,7 @@ from .models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -2001,3 +2002,16 @@ class ArchiveSegmentTable(BaseTable):
             "time_end",
         )
         default_columns = ("label", "model_label", "row_count", "last_rotated_time", "is_period_closed")
+
+
+class RetentionRuleTable(BaseTable):
+    pk = ToggleColumn()
+    name = tables.Column(linkify=True)
+    content_type = tables.Column(verbose_name="Object Type")
+    mode = ChoiceFieldColumn()
+    enabled = BooleanColumn()
+
+    class Meta(BaseTable.Meta):
+        model = RetentionRule
+        fields = ("pk", "name", "content_type", "mode", "max_age_days", "weight", "enabled", "description")
+        default_columns = ("pk", "name", "content_type", "mode", "max_age_days", "enabled")

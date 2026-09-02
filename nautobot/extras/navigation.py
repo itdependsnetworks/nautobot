@@ -278,6 +278,14 @@ menu_items = (
                         buttons=(),
                     ),
                     NavMenuItem(
+                        link="extras:retentionrule_list",
+                        name="Retention Rules",
+                        weight=200,
+                        permissions=[
+                            "extras.view_retentionrule",
+                        ],
+                    ),
+                    NavMenuItem(
                         link="extras:archivesegment_list",
                         name="Archive Segments",
                         weight=300,
