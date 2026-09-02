@@ -1,0 +1,63 @@
+{% comment %}
+Period selector for retained change history.
+
+Markup follows `components/button/dropdown.html`, the UI framework's canonical DropdownButton, so this
+looks and behaves like every other Nautobot dropdown. Kept as a standalone include rather than a
+`DropdownButton` instance because the change log list view and the change log tab are not built from
+`ObjectDetailContent`, which is what renders that component.
+
+Renders nothing unless the viewer holds the cold-storage permission and at least one period exists, so a
+caller can include it unconditionally.
+
+Context:
+    archive_periods          ArchiveSegment queryset, newest first, each carrying `switch_url`
+    archive_period           the period key currently selected, if any
+    archive_freshness        dict from get_archive_freshness for the selected period, if any
+    archive_show_counts      whether to show each period's record count; false on object-scoped views,
+                             where a whole-period count sits misleadingly beside one object's history
+    archive_warm_url         where "Recent" links, preserving filters and sorting
+    archive_dropped_filters  filters that cannot carry into a period, so the reader can be told
+{% endcomment %}
+{% if archive_periods %}
+    <div class="dropdown d-inline-flex">
+        <button type="button" id="archive-period-dropdown"
+                class="btn btn-{% if archive_period %}primary{% else %}default{% endif %} dropdown-toggle"
+                data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false"
+                {% comment %}
+                How current the period is belongs here rather than as text beside the button: it is
+                reference detail a reader wants once, not something worth permanent space in the header.
+                {% endcomment %}
+                title="{% if archive_period and archive_freshness %}{% if archive_freshness.is_period_closed %}All {{ archive_freshness.period_label }} records have been archived.{% else %}{{ archive_freshness.period_label }} is still being archived{% if archive_freshness.last_rotated_time %}, up to {{ archive_freshness.last_rotated_time }}{% endif %} — more may follow.{% endif %}{% else %}Read change history moved into long-term retention{% endif %}">
+            <span class="mdi mdi-history" aria-hidden="true"></span>
+            {% if archive_period %}{{ archive_freshness.period_label|default:archive_period }}{% else %}Archive{% endif %}
+            <span class="mdi mdi-chevron-down"></span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end" role="menu" aria-labelledby="archive-period-dropdown">
+            <li>
+                <a class="dropdown-item {% if not archive_period %}active{% endif %}"
+                   href="{{ archive_warm_url|default:request.path }}">Recent</a>
+            </li>
+            <li><hr class="dropdown-divider"></li>
+            {% for segment in archive_periods %}
+                <li>
+                    <a class="dropdown-item {% if segment.period_key == archive_period %}active{% endif %}"
+                       href="{{ segment.switch_url }}">
+                        {{ segment.label }}{% if archive_show_counts %}
+                            <span class="badge bg-secondary" title="Records in this period">{{ segment.row_count }}</span>
+                        {% endif %}{% if not segment.is_period_closed %}
+                            <span class="mdi mdi-clock" aria-hidden="true"
+                                  title="Still being archived"></span>
+                        {% endif %}
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% if archive_period and archive_dropped_filters %}
+        <span class="text-warning">
+            <span class="mdi mdi-alert" aria-hidden="true"></span>
+            Not available for archived records, so {% if archive_dropped_filters|length == 1 %}this filter was{% else %}these filters were{% endif %} dropped:
+            {{ archive_dropped_filters|join:", " }}.
+        </span>
+    {% endif %}
+{% endif %}

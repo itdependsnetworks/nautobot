@@ -36,6 +36,11 @@
 {% block content %}
     <div class="align-items-center d-flex gap-8 justify-content-end mb-16 d-print-none">
         {% block buttons %}{% endblock %}
+        {% comment %}
+        Period selector for retained history. Renders nothing unless the viewer holds the cold-storage
+        permission and at least one period exists, so it is safe on every list view.
+        {% endcomment %}
+        {% include "components/archive_period_dropdown.html" %}
         {% plugin_buttons content_type.model_class 'list' %}
 
         <div class="btn-group">

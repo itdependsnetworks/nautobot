@@ -9,6 +9,37 @@ from nautobot.core.api.constants import NON_FILTER_QUERY_PARAMS
 register = template.Library()
 
 
+# Query parameters that select *what you are looking at* rather than filter it, and so must survive a form
+# submit. A plain GET form sends only its own fields, so anything here is lost unless carried explicitly.
+#
+# Sort links and the paginator already preserve the whole query string, so they need nothing.
+#
+# `page` is deliberately absent: changing a filter should return to the first page rather than a page that
+# may no longer exist.
+PRESERVED_VIEW_STATE_PARAMS = (
+    # Which retained history period is being read. Losing it silently drops the reader back into warm
+    # storage, which looks like the records changed rather than the view.
+    "archive_period",
+)
+
+
+@register.inclusion_tag("utilities/preserved_view_state.html", takes_context=True)
+def preserved_view_state(context):
+    """
+    Hidden inputs carrying view-state query parameters through a GET form.
+
+    Include this inside any form that submits to a list view, or the form will drop them.
+    """
+    request = context.get("request")
+    params = []
+    if request is not None:
+        for name in PRESERVED_VIEW_STATE_PARAMS:
+            for value in request.GET.getlist(name):
+                if value:
+                    params.append((name, value))
+    return {"preserved_params": params}
+
+
 @register.inclusion_tag("utilities/render_field.html", takes_context=True)
 def render_field(context, field, bulk_nullable=False, container_class=None):
     """

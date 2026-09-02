@@ -1137,8 +1137,9 @@ def table_config_form(table, table_name=None):
     }
 
 
-@register.inclusion_tag("utilities/templatetags/filter_form_drawer.html")
+@register.inclusion_tag("utilities/templatetags/filter_form_drawer.html", takes_context=True)
 def filter_form_drawer(
+    context,
     filter_form,
     dynamic_filter_form,
     model_plural_name,
@@ -1153,6 +1154,9 @@ def filter_form_drawer(
         "filter_params": filter_params,
         "dynamic_filter_form": dynamic_filter_form,
         "dynamic_filter_form_name": dynamic_filter_form_name,
+        # An inclusion_tag renders with only the dict returned here, so `request` has to be passed through
+        # explicitly. The filter forms need it to carry view-state query parameters through their submit.
+        "request": context.get("request"),
     }
 
 

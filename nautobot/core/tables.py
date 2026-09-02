@@ -36,6 +36,26 @@ def _linked_count_to_attr(lookup):
     return lookup.replace("__", "_") + "_list"
 
 
+class RetainedHistoryTableData(TableQuerysetData):
+    """
+    `TableQuerysetData` for a changelog retention mirror, without the model-mismatch warning.
+
+    Rendering a warm table over a mirror is the design: the two are field-for-field equivalent, so a reader
+    switching to a retained period gets the same columns. django-tables2 compares the data's model against
+    `Table.Meta.model` and warns because a mirror is not a subclass of its warm counterpart, which in a log
+    reads as a misconfigured table when nothing is wrong.
+
+    Subclassing is how django-tables2 invites a caller to say so: `TableData.from_data` passes an explicit
+    `TableData` subclass through untouched. Skipping the method that emits the warning also avoids
+    `warnings.catch_warnings()`, which mutates a global filter and would swallow other threads' warnings
+    for as long as it is held.
+    """
+
+    def set_table(self, table):
+        # The grandparent deliberately: the warning is all `TableQuerysetData.set_table` adds.
+        TableData.set_table(self, table)
+
+
 class BaseTable(django_tables2.Table):
     """
     Default table for object lists.
@@ -146,6 +166,7 @@ class BaseTable(django_tables2.Table):
         self.is_object_embedded_search_results = is_object_embedded_search_results
 
         # Init table
+        args, kwargs = self._wrap_retained_history_data(args, kwargs)
         super().__init__(*args, order_by=order_by, orderable=orderable, row_attrs=row_attrs, **kwargs)
 
         if not isinstance(self.data, TableQuerysetData):
@@ -213,6 +234,16 @@ class BaseTable(django_tables2.Table):
             if not is_object_embedded_search_results:
                 # Do not show `"actions"` column in object embedded search results
                 self.sequence.append("actions")
+
+        if self._renders_retained_history():
+            # Retained change history is read-only. Row actions and the bulk-select checkbox reverse warm
+            # URLs from the record's key, so on a retained record they point at a view that cannot find it
+            # -- a delete link that 404s. There is no write surface for retained records by design.
+            for name in ("pk", "actions"):
+                if name in self.base_columns:
+                    self.columns.hide(name)
+
+            self._retarget_retained_history_ordering()
 
         # Dynamically update the table's QuerySet to ensure related fields are pre-fetched
         if isinstance(self.data, TableQuerysetData):
@@ -389,6 +420,83 @@ class BaseTable(django_tables2.Table):
         # Resume base class implementation
         self.data.order_by(self._order_by)
 
+    def _retarget_retained_history_ordering(self):
+        """
+        Point each column's sort at a field the mirror actually has.
+
+        A mirror holds its foreign keys as bare `<name>_id` columns, so a column that sorts on the relation
+        name -- `changed_object_type`, `user`, `job_model` -- raises `FieldError` on the mirror and the sort
+        link 500s. Sorting on the identifier is what the warm sort already does, since ordering by a
+        foreign key orders by its column, so the retarget changes nothing the reader sees.
+
+        Where there is no identifier to fall back on, the column becomes unsortable rather than raising:
+        retained history genuinely cannot be ordered by something it does not store.
+        """
+        model = self.data.data.model
+        for bound_column in self.columns.all():
+            order_by = bound_column.order_by
+            if not order_by:
+                continue
+            retargeted = []
+            for order in order_by:
+                root, _, rest = OrderBy(order).bare.partition("__")
+                if self._can_prefetch(model, root):
+                    retargeted.append(order)
+                    continue
+                try:
+                    model._meta.get_field(f"{root}_id")
+                except FieldDoesNotExist:
+                    retargeted = None
+                    break
+                replacement = "__".join(filter(None, [f"{root}_id", rest]))
+                retargeted.append(f"-{replacement}" if str(order).startswith("-") else replacement)
+            if retargeted is None:
+                bound_column.column.orderable = False
+            elif retargeted != list(order_by):
+                bound_column.column.order_by = OrderByTuple(retargeted)
+
+    @staticmethod
+    def _wrap_retained_history_data(args, kwargs):
+        """
+        Hand django-tables2 a `TableData` that knows a mirror is expected here.
+
+        Has to run before `super().__init__()`, which is what builds the `TableData` and triggers the
+        warning, so this reads the incoming data instead of `self.data`.
+        """
+        from nautobot.extras.registry import registry
+
+        if "data" in kwargs:
+            data = kwargs["data"]
+        elif args:
+            data = args[0]
+        else:
+            return args, kwargs
+        if not isinstance(data, QuerySet) or data.model not in registry["changelog_archive_models"].values():
+            return args, kwargs
+        wrapped = RetainedHistoryTableData(data)
+        if "data" in kwargs:
+            return args, {**kwargs, "data": wrapped}
+        return (wrapped, *args[1:]), kwargs
+
+    def _renders_retained_history(self):
+        """Whether this table's data is a changelog retention mirror."""
+        from django.db.models import QuerySet
+
+        from nautobot.extras.registry import registry
+
+        data = getattr(self.data, "data", None)
+        if not isinstance(data, QuerySet):
+            return False
+        return data.model in registry["changelog_archive_models"].values()
+
+    @staticmethod
+    def _can_prefetch(model, field_name):
+        """Whether `field_name` names something on `model` that can be followed."""
+        root = str(field_name).split("__")[0]
+        names = {field.name for field in model._meta.get_fields()}
+        names |= {field.name for field in model._meta.private_fields}
+        return root in names
+
     def add_conditional_prefetch(self, table_field, db_column=None, prefetch=None):
         """Conditionally prefetch the specified database column if the related table field is visible.
 
@@ -405,6 +513,12 @@ class BaseTable(django_tables2.Table):
         if not db_column:
             db_column = table_field
         if table_field in self.columns and self.columns[table_field].visible and isinstance(self.data.data, QuerySet):
+            if not prefetch and not self._can_prefetch(self.data.data.model, db_column):
+                # The field does not exist on the model actually being rendered, so there is nothing to
+                # follow. This happens when a table built for a warm model renders a changelog retention
+                # mirror, which holds its relations as bare identifier columns. `prefetch_related` would
+                # not raise until evaluation, far from here.
+                return
             if prefetch:
                 self.data = TableData.from_data(self.data.data.prefetch_related(prefetch))
             else:

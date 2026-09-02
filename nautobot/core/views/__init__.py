@@ -497,6 +497,11 @@ class SearchView(AccessMixin, View):
             try:
                 view_func = resolve(reverse(url)).func
                 context["url"] = f"{reverse(url)}?q={request.GET.get('q')}"
+                archive_period = request.GET.get("archive_period")
+                if archive_period:
+                    # Keep the selected period on the "see all results" link, or following it would
+                    # silently drop the reader back into warm storage.
+                    context["url"] += f"&archive_period={archive_period}"
                 # For UIViewSet, view_func.cls gets what we need; for an ObjectListView, view_func.view_class is it.
                 view_or_viewset = getattr(view_func, "cls", getattr(view_func, "view_class", None))
                 queryset = view_or_viewset.queryset.restrict(request.user, "view")

@@ -1,6 +1,15 @@
 {% extends base_template %}
 
 {% block content %}
+    {% comment %}
+    Same control row a detail tab uses for its buttons: `ms-auto` pushes it right, which is also where it
+    stays clear of the expanded side navigation.
+    {% endcomment %}
+    <div class="align-items-center d-flex flex-wrap mb-16 gap-8">
+        <div class="d-flex align-items-center gap-8 flex-grow-0 flex-wrap d-print-none ms-auto">
+            {% include "components/archive_period_dropdown.html" %}
+        </div>
+    </div>
     {% include 'panel_table.html' %}
     {% include 'inc/paginator.html' with paginator=table.paginator page=table.page %}
 {% endblock %}

@@ -2,7 +2,6 @@ import logging
 
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Q
 from django.template import engines, loader
 from django.urls import resolve
 from django_tables2 import RequestConfig
@@ -29,7 +28,6 @@ from nautobot.core.views.utils import (
     get_saved_views_for_user,
     view_changes_not_saved,
 )
-from nautobot.extras.models.change_logging import ObjectChange
 from nautobot.extras.utils import get_saved_view_or_none
 
 
@@ -101,22 +99,25 @@ class NautobotHTMLRenderer(renderers.BrowsableAPIRenderer):
                     configurable=True,
                     is_object_embedded_search_results=is_object_embedded_search_request,
                 )
-                if "pk" in table.base_columns and (permissions["change"] or permissions["delete"]):
+                if (
+                    "pk" in table.base_columns
+                    and (permissions["change"] or permissions["delete"])
+                    and not table._renders_retained_history()
+                ):
+                    # Not for retained history: it is read-only, and the checkbox exists only to feed bulk
+                    # actions that cannot act on it.
                     table.columns.show("pk")
             elif view.action == "notes":
                 obj = kwargs.get("object")
                 table = table_class(obj.notes, user=request.user)
             elif view.action == "changelog":
+                from nautobot.extras.archive_reads import object_change_history
+
                 obj = kwargs.get("object")
                 content_type = kwargs.get("content_type")
-                objectchanges = (
-                    ObjectChange.objects.restrict(request.user, "view")
-                    .prefetch_related("user", "changed_object_type")
-                    .filter(
-                        Q(changed_object_type=content_type, changed_object_id=obj.pk)
-                        | Q(related_object_type=content_type, related_object_id=obj.pk)
-                    )
-                )
+                # Honors `?archive_period=`; without this the selector renders but the table keeps showing
+                # warm records.
+                objectchanges, _period_key = object_change_history(obj, content_type, request)
                 table = table_class(data=objectchanges, orderable=False)
 
             # Apply the request context
