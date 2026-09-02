@@ -6,12 +6,14 @@ it lives beside the archive models rather than among them: nothing here is writt
 rule outlives every record it acts on.
 """
 
+from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 
 from nautobot.core.constants import CHARFIELD_MAX_LENGTH
 from nautobot.core.models.generics import OrganizationalModel
 from nautobot.extras.choices import RetentionRuleModeChoices
+from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS
 from nautobot.extras.models.mixins import ScopedFilterMixin
 from nautobot.extras.utils import extras_features
 
@@ -75,9 +77,69 @@ class RetentionRule(ScopedFilterMixin, OrganizationalModel):
         verbose_name = "retention rule"
         verbose_name_plural = "retention rules"
 
-    # PLACEHOLDER: `clean()` lands in commit 09, Changelog truncation job. It refuses a rule naming a
-    # model retention does not cover, and a scope filter the model's FilterSet rejects -- both of which
-    # only mean anything once there is a job that walks the covered models and resolves those filters.
+    def clean(self):
+        """
+        A rule has to be one truncation can actually act on.
+
+        Two ways it can fail to be, and both used to save cleanly and then do nothing: naming a model
+        retention does not cover, and carrying a filter the model's FilterSet rejects. Either way the rule
+        sits in the list looking enabled while truncation skips it, and the only evidence is a job log
+        nobody is reading. Both are caught here so they land on the form, and so they land on the REST API
+        too, which is the path that had no check at all.
+        """
+        super().clean()
+        errors = {}
+        if self.content_type_id:
+            label = f"{self.content_type.app_label}.{self.content_type.model}"
+            if label not in CHANGELOG_ARCHIVE_COVERED_MODELS:
+                errors["content_type"] = (
+                    f"Changelog retention does not cover {label}, so a rule for it would never apply. "
+                    f"Covered models are: {', '.join(CHANGELOG_ARCHIVE_COVERED_MODELS)}."
+                )
+            else:
+                self._validate_scope_filter(errors)
+        if errors:
+            raise ValidationError(errors)
+
+    def _validate_scope_filter(self, errors):
+        """
+        Reject a filter the model's own FilterSet does not accept.
+
+        Truncation refuses such a rule at run time rather than widening it, which is the safe behaviour but
+        a late one: the rule sits in the list looking enabled and does nothing until someone reads a job
+        log. The edit form already rejected it, so before this the REST API was the one way to store a
+        filter the UI would not let you save.
+
+        A model with no FilterSet is not the operator's problem and does not block the save; the job logs
+        and skips that case. Anything the FilterSet raises other than a rejection is treated the same way,
+        since a save is the wrong place to surface it and truncation remains the backstop.
+        """
+        if not self.scope_filter:
+            return
+        from nautobot.core.utils.lookup import get_filterset_for_model
+
+        model = self.content_type.model_class()
+        if model is None:
+            return
+        filterset_class = get_filterset_for_model(model)
+        if filterset_class is None:
+            return
+        try:
+            filterset = filterset_class(self.scope_filter, model.objects.all())
+            valid = filterset.is_valid()
+        except Exception:  # a broken FilterSet must not block the save; truncation still refuses
+            return
+        if not valid:
+            # `filterset.errors` renders itself as an HTML `<ul>`, which is right for a form and wrong in a
+            # REST response, so the messages are flattened to text.
+            detail = "; ".join(
+                f"{field}: {' '.join(str(message) for message in messages)}"
+                for field, messages in filterset.errors.items()
+            )
+            errors["scope_filter"] = (
+                f"The filter is not valid for {self.content_type.app_label}.{self.content_type.model}, so "
+                f"truncation would refuse it. {detail}"
+            )
 
     @property
     def scope_filter_model_class(self):
