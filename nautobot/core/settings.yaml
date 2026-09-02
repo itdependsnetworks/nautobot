@@ -585,6 +585,16 @@ properties:
     environment_variable: "NAUTOBOT_CHANGELOG_RETENTION"
     is_constance_config: true
     type: "integer"
+  CHANGELOG_ROTATION_BATCH_SIZE:
+    default: 1000
+    description: >-
+      The number of records the changelog rotation job moves per increment. Lower than the truncation batch size
+      because rotation holds each record in memory in order to copy it, twice over -- the warm record and the
+      retained copy built from it -- while truncation needs only their keys. Reduce this if rotation runs out of
+      memory on records carrying large data.
+    is_constance_config: true
+    type: "integer"
+    version_added: "3.3.0"
   CHANGELOG_TRUNCATION_BATCH_SIZE:
     default: 10000
     description: >-
