@@ -1,5 +1,6 @@
 import logging
 
+from django.core.exceptions import FieldError
 from django.db import NotSupportedError
 
 logger = logging.getLogger(__name__)
@@ -25,11 +26,29 @@ def maybe_select_related(queryset, select_fields):
             model.__name__,
         )
     else:
+        # A field that is not a relation on this model cannot be followed. This is not hypothetical: the
+        # changelog retention mirrors are field-for-field copies of their warm models except that foreign
+        # keys are held as bare identifier columns, so a table built for the warm model asks to follow
+        # relations the mirror does not have.
+        followable = {field.name for field in model._meta.get_fields() if field.is_relation and field.concrete}
+        unfollowable = [field for field in select_fields if str(field).split("__")[0] not in followable]
+        if unfollowable:
+            logger.debug(
+                "NOT applying select_related(%s) to %s QuerySet - not relations on this model",
+                unfollowable,
+                model.__name__,
+            )
+            select_fields = [field for field in select_fields if field not in unfollowable]
+
+    if not select_fields:
+        return queryset
+
+    if queryset._fields is None and not queryset.query.combinator:
         logger.debug("Applying .select_related(%s) to %s QuerySet", select_fields, model.__name__)
         # Belt and suspenders - we should have avoided any error cases above, but be safe anyway:
         try:
             queryset = queryset.select_related(*select_fields)
-        except (TypeError, ValueError, NotSupportedError) as exc:
+        except (FieldError, TypeError, ValueError, NotSupportedError) as exc:
             logger.warning(
                 "Unexpected error when trying to .select_related() on %s QuerySet: %s",
                 model.__name__,
@@ -54,7 +73,7 @@ def maybe_prefetch_related(queryset, prefetch_fields):
         # Belt and suspenders - we should have avoided any error cases above, but be safe anyway:
         try:
             queryset = queryset.prefetch_related(*prefetch_fields)
-        except (AttributeError, TypeError, ValueError, NotSupportedError) as exc:
+        except (AttributeError, FieldError, TypeError, ValueError, NotSupportedError) as exc:
             logger.warning(
                 "Unexpected error when trying to .prefetch_related() on %s QuerySet: %s",
                 model.__name__,

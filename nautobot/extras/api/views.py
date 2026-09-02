@@ -1,5 +1,9 @@
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import (
+    PermissionDenied as DjangoPermissionDenied,
+    ValidationError as DjangoValidationError,
+)
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.forms import ValidationError as FormsValidationError
@@ -10,7 +14,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from graphene_django.views import GraphQLView
 from graphql import GraphQLError
-from rest_framework import mixins, status, viewsets
+from rest_framework import exceptions as drf_exceptions, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.parsers import JSONParser, MultiPartParser
@@ -33,6 +37,11 @@ from nautobot.core.graphql import execute_saved_query
 from nautobot.core.models.querysets import count_related
 from nautobot.core.templatetags.perms import can_cancel
 from nautobot.extras import filters
+from nautobot.extras.archive_reads import (
+    filter_archive_queryset,
+    get_archive_queryset,
+    requested_archive_period,
+)
 from nautobot.extras.choices import (
     ApprovalWorkflowStateChoices,
     JobExecutionType,
@@ -1172,7 +1181,45 @@ class JobQueueAssignmentViewSet(ModelViewSet):
 #
 
 
-class JobLogEntryViewSet(ReadOnlyModelViewSet):
+class ArchiveReadViewSetMixin:
+    """
+    Serves one retained-history period when `?archive_period=` names it.
+
+    Absent the parameter, nothing changes: the endpoint returns warm storage exactly as before. Present
+    without the cold-storage permission, the request is rejected rather than quietly downgraded, so a
+    client cannot mistake a warm response for an archived one.
+
+    Hooked into `filter_queryset` rather than `get_queryset` deliberately. The permission layer resolves
+    the required permission from `get_queryset().model`, so swapping the model there would make it demand
+    `view_archivedobjectchange` -- a permission nobody holds, since the mirrors declare none. Reading
+    archived history still requires being able to view the warm model, which is the intended rule, plus
+    the cold-storage permission on top.
+
+    Filtering within a period goes through the mirror's own filterset rather than the warm one, since a
+    few warm filters traverse relations the mirror holds as identifier columns.
+    """
+
+    def filter_queryset(self, queryset):
+        period_key = requested_archive_period(self.request)
+        if not period_key:
+            return super().filter_queryset(queryset)
+        try:
+            archived = get_archive_queryset(queryset.model, period_key, self.request.user)
+            archived, filterset = filter_archive_queryset(archived, self.request.query_params)
+            if filterset is not None and not filterset.is_valid():
+                raise drf_exceptions.ValidationError(filterset.errors)
+            return archived
+        except DjangoPermissionDenied as error:
+            # Re-raised as DRF's own so the reason survives into the response body. Django's is rendered
+            # with a generic detail.
+            raise drf_exceptions.PermissionDenied(str(error)) from error
+        except DjangoValidationError as error:
+            # Django's ValidationError is not one of DRF's handled types, so left alone it becomes a 500
+            # rather than the 400 an unknown period deserves.
+            raise drf_exceptions.ValidationError(error.messages) from error
+
+
+class JobLogEntryViewSet(ArchiveReadViewSetMixin, ReadOnlyModelViewSet):
     """
     Retrieve a list of job log entries.
     """
@@ -1183,6 +1230,8 @@ class JobLogEntryViewSet(ReadOnlyModelViewSet):
 
 
 class JobResultViewSet(
+    # Nautobot retention mixin (must precede the base class so its get_queryset wins):
+    ArchiveReadViewSetMixin,
     # DRF mixins:
     # note no CreateModelMixin or UpdateModelMixin
     mixins.DestroyModelMixin,
@@ -1433,7 +1482,28 @@ class NoteViewSet(ModelViewSet):
 #
 
 
-class ObjectChangeViewSet(ReadOnlyModelViewSet):
+class RetentionRuleViewSet(NautobotModelViewSet):
+    """Manage the filter rules that drive changelog truncation."""
+
+    queryset = RetentionRule.objects.select_related("content_type")
+    serializer_class = serializers.RetentionRuleSerializer
+    filterset_class = filters.RetentionRuleFilterSet
+
+
+class ArchiveSegmentViewSet(ReadOnlyModelViewSet):
+    """
+    List the retention periods available to read.
+
+    This is how a client discovers valid `archive_period` values. Read-only: periods are created and
+    maintained by the rotation job.
+    """
+
+    queryset = ArchiveSegment.objects.all()
+    serializer_class = serializers.ArchiveSegmentSerializer
+    filterset_class = filters.ArchiveSegmentFilterSet
+
+
+class ObjectChangeViewSet(ArchiveReadViewSetMixin, ReadOnlyModelViewSet):
     """
     Retrieve a list of recent changes.
     """
@@ -1580,24 +1650,3 @@ class WebhooksViewSet(NotesViewSetMixin, ModelViewSet):
     queryset = Webhook.objects.all()
     serializer_class = serializers.WebhookSerializer
     filterset_class = filters.WebhookFilterSet
-
-
-class ArchiveSegmentViewSet(ReadOnlyModelViewSet):
-    """
-    List the retention periods available to read.
-
-    This is how a client discovers valid `archive_period` values. Read-only: periods are created and
-    maintained by the rotation job.
-    """
-
-    queryset = ArchiveSegment.objects.all()
-    serializer_class = serializers.ArchiveSegmentSerializer
-    filterset_class = filters.ArchiveSegmentFilterSet
-
-
-class RetentionRuleViewSet(NautobotModelViewSet):
-    """Manage the filter rules that drive changelog truncation."""
-
-    queryset = RetentionRule.objects.select_related("content_type")
-    serializer_class = serializers.RetentionRuleSerializer
-    filterset_class = filters.RetentionRuleFilterSet

@@ -9,12 +9,13 @@ from django.core.exceptions import (
     FieldDoesNotExist,
     ImproperlyConfigured,
     ObjectDoesNotExist,
+    PermissionDenied,
     ValidationError,
 )
 from django.db import transaction
 from django.db.models import CharField, ManyToManyField, Model, ProtectedError, Q, QuerySet
 from django.forms import Form, ModelMultipleChoiceField, MultipleHiddenInput
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import select_template, TemplateDoesNotExist
 from django.urls import resolve, reverse
@@ -673,7 +674,20 @@ class NautobotViewSetMixin(GenericViewSet, UIComponentsMixin, AccessMixin, GetRe
         Override the original `get_queryset()` to apply permission specific to the user and action.
         """
         queryset = super().get_queryset()
+        if self._is_archive_mirror(queryset.model):
+            # A retention mirror declares no permissions of its own, so `restrict` would resolve
+            # `view_archived<model>` -- which nobody can hold -- and return nothing at all. Access to
+            # retained history is gated once, on the cold-storage permission, at the point the queryset is
+            # built. Per-record restriction against retained history is explicitly out of scope (TRD §2).
+            return queryset
         return queryset.restrict(self.request.user, self.get_action())
+
+    @staticmethod
+    def _is_archive_mirror(model):
+        """Whether `model` holds retained history, and so is gated by the cold-storage permission instead."""
+        from nautobot.extras.registry import registry
+
+        return model in registry["changelog_archive_models"].values()
 
     def get_action(self):
         """Helper method for retrieving action and if action not set defaulting to action name."""
@@ -842,6 +856,84 @@ class ObjectDetailViewMixin(NautobotViewSetMixin, mixins.RetrieveModelMixin):
         return Response({})
 
 
+class ArchiveAwareRetrieveMixin:
+    """
+    Let a model's existing detail view serve its retained records too.
+
+    Retained records keep the primary key they had in warm storage, so a URL that worked before rotation
+    keeps working after it. That is the reason this is a fallback on the existing view rather than a
+    parallel set of routes: one URL space, and links do not rot when a record is moved.
+
+    A view using this must tolerate a mirror instance in `get_extra_context` and in its panels. Mirrors
+    resolve demoted relations to None, which covers most of it, but anything calling a method that only the
+    warm model has needs a guard.
+    """
+
+    #: Actions the retention fallback applies to. Read-only on purpose: handing an archived record to a
+    #: destroy or update view would offer a write against something with no write surface.
+    archive_aware_actions = ("retrieve",)
+
+    def get_object(self):
+        try:
+            return super().get_object()
+        except Http404:
+            record = self.get_archived_object(self.kwargs.get("pk"))
+            if record is None:
+                raise
+            return record
+
+    def get_archived_object(self, pk):
+        """
+        The retained record with this primary key, or None if the fallback does not apply.
+
+        Separate from `get_object` so the custom detail actions -- a job result's log table and console
+        output -- can resolve the same record the detail page did. Those actions look their instance up
+        themselves rather than through `get_object`, so without this they raise 404 on a record whose page
+        had just rendered, and the panel comes up empty.
+
+        Raises `PermissionDenied` where the record exists but the user may not read retained history, rather
+        than returning None: a 404 there would say the record does not exist.
+        """
+        from nautobot.core.utils.config import get_settings_or_config
+        from nautobot.extras.archive_reads import user_can_read_archive
+        from nautobot.extras.models.archive import archive_model_for
+
+        if self.action not in self.archive_aware_actions:
+            return None
+        # Skipped entirely while retention is off, so a miss costs no extra query and behaves exactly as
+        # it did before the capability existed.
+        if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
+            return None
+        mirror = archive_model_for(type(self).queryset.model)
+        if mirror is None:
+            return None
+        record = mirror.objects.filter(pk=pk).first()
+        if record is None:
+            return None
+        # The warm view's own permission was already checked; reading retained history needs the
+        # cold-storage grant on top of it.
+        if not user_can_read_archive(self.request.user):
+            raise PermissionDenied("You do not have permission to read archived change history.")
+        self.archived_instance = record
+        return record
+
+    def is_archived(self, instance):
+        """Whether `instance` came from long-term retention rather than warm storage."""
+        return self._is_archive_mirror(type(instance))
+
+    def restrict_if_warm(self, queryset, action="view"):
+        """
+        Apply per-object restriction, except on retained history, which has no per-object permissions.
+
+        A mirror declares no permissions of its own -- reading it is gated once, on
+        `extras.view_archivesegment` -- so `restrict` there would resolve a permission that does not exist
+        and return nothing. Mirrors it to `NautobotViewSetMixin.get_queryset`.
+        """
+        if self._is_archive_mirror(queryset.model):
+            return queryset
+        return queryset.restrict(self.request.user, action)
+
+
 class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
     """
     UI mixin to list a model queryset
@@ -860,12 +952,34 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
         "table_changes_pending",  # indicator for if there is any table changes not applied to the saved view
         "all_filters_removed",  # indicator for if all filters have been removed from the saved view
         "clear_view",  # indicator for if the clear view button is clicked or not
+        "archive_period",  # selects one retained-history period; see nautobot.extras.models.archive
     )
 
     def filter_queryset(self, queryset):
         """
         Filter a query with request querystrings.
         """
+        try:
+            archived = self._apply_archive_period(queryset)
+        except ValidationError as error:
+            # A period that does not exist is a bad URL. Report it and show nothing, rather than falling
+            # back to warm records the reader would read as archived.
+            messages.error(self.request, format_html("{}", "; ".join(error.messages)))
+            self.filter_params = {}
+            return queryset.none()
+        if archived is not None:
+            # Filtered through the mirror's own filterset, not the warm one: a few warm filters traverse
+            # relations the mirror holds as identifier columns.
+            from nautobot.extras.archive_reads import filter_archive_queryset
+
+            # The renderer reads `filter_params` to show which filters are active, so it has to be set on
+            # this path too -- returning early without it renders as a NoneType error.
+            self.filter_params = self.get_filter_params(self.request) if self.filterset_class is not None else {}
+            archived, filterset = filter_archive_queryset(archived, self.request.GET)
+            if filterset is not None and not filterset.is_valid():
+                messages.error(self.request, format_html("Invalid filters were specified: {}", filterset.errors))
+                return archived.none()
+            return archived
         if self.filterset_class is not None:
             self.filter_params = self.get_filter_params(self.request)
             self.filterset = self.filterset_class(self.filter_params, queryset)
@@ -883,6 +997,37 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
             if self.filterset.is_valid() and self.filterset.data:
                 self.hide_hierarchy_ui = True
         return queryset
+
+    def get_archive_context(self, queryset):
+        """Context for the period selector, empty-but-present when there is nothing to offer."""
+        from nautobot.extras.archive_reads import archive_context
+
+        return archive_context(queryset.model, self.request)
+
+    def _apply_archive_period(self, queryset):
+        """
+        The queryset for one retained-history period, or None when the request names no period.
+
+        One period per query, never merged with warm storage, so the filterset, table, and paginator all
+        behave exactly as they do for a warm read. Absent the parameter this is a no-op, which is what
+        keeps the default path unchanged.
+        """
+        from nautobot.extras.archive_reads import (
+            get_archive_queryset,
+            requested_archive_period,
+        )
+        from nautobot.extras.models.archive import archive_model_for
+
+        period_key = requested_archive_period(self.request)
+        if not period_key:
+            return None
+        if archive_model_for(queryset.model) is None:
+            # This model has no retained history, so the parameter means nothing here. Ignoring it beats
+            # erroring on a stray parameter carried over from another page.
+            return None
+        # PermissionDenied is deliberately not caught: silently serving warm rows would let a reader
+        # mistake them for archived ones.
+        return get_archive_queryset(queryset.model, period_key, self.request.user)
 
     # 3.0 TODO: remove, irrelevant after #4746
     def check_for_export(self, request, model, content_type):
@@ -977,9 +1122,11 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
             if global_saved_view:
                 return redirect(reverse("extras:savedview", kwargs={"pk": global_saved_view.pk}))
 
-        response = Response(
-            {"user_default_saved_view": user_default_saved_view, "global_saved_view": global_saved_view}
-        )
+        context = {"user_default_saved_view": user_default_saved_view, "global_saved_view": global_saved_view}
+        # Empty-but-present keys when there is nothing to offer, so the template includes the period
+        # selector unconditionally.
+        context.update(self.get_archive_context(self.get_queryset()))
+        response = Response(context)
         patch_vary_headers(response, ["HX-Request"])
         return response
 
@@ -1564,11 +1711,17 @@ class ObjectChangeLogViewMixin(NautobotViewSetMixin):
         detail=True, custom_view_base_action="view", custom_view_additional_permissions=["extras.view_objectchange"]
     )
     def changelog(self, request, *args, **kwargs):
+        from nautobot.extras.archive_reads import archive_context
+        from nautobot.extras.models import ObjectChange
+
         model = self.get_queryset().model
         data = {
             "base_template": get_base_template(self.base_template, model),
             "active_tab": "changelog",
         }
+        # The selector on an object's changelog tab offers ObjectChange periods, not periods of the object's
+        # own model, which has no retained history of its own.
+        data.update(archive_context(ObjectChange, request, show_counts=False))
         return Response(data)
 
 

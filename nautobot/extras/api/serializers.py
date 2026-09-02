@@ -3,6 +3,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
@@ -781,7 +782,38 @@ class ScheduledJobSerializer(BaseModelSerializer):
 #
 
 
-class JobResultSerializer(CustomFieldModelSerializerMixin, BaseModelSerializer):
+class ArchivedRelationSerializerMixin:
+    """
+    Fill in relation fields for retained records, which hold their references as identifier columns.
+
+    A mirror has `job_result_id` but no `job_result`, so DRF renders the relation as null and the reader
+    loses the ability to correlate an archived log entry back to its run. This substitutes the identifying
+    part of what a warm response carries -- `id` and `object_type` -- and omits `url`, which cannot be
+    produced for a referent that may no longer exist. Content-type fields are left alone; they render as
+    `app_label.model` strings and are handled where they are declared.
+    """
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        warm_model = self.Meta.model
+        for name, value in list(data.items()):
+            if value is not None:
+                continue
+            related_id = getattr(instance, f"{name}_id", None)
+            if related_id is None:
+                continue
+            try:
+                field = warm_model._meta.get_field(name)
+            except FieldDoesNotExist:
+                continue
+            related_model = getattr(field, "related_model", None)
+            if related_model is None or related_model is ContentType:
+                continue
+            data[name] = {"id": str(related_id), "object_type": related_model._meta.label_lower}
+        return data
+
+
+class JobResultSerializer(ArchivedRelationSerializerMixin, CustomFieldModelSerializerMixin, BaseModelSerializer):
     status = ChoiceField(choices=JobResultStatusChoices, read_only=True)
 
     class Meta:
@@ -976,7 +1008,7 @@ class JobMultiPartInputSerializer(serializers.Serializer):
         return attrs
 
 
-class JobLogEntrySerializer(BaseModelSerializer):
+class JobLogEntrySerializer(ArchivedRelationSerializerMixin, BaseModelSerializer):
     class Meta:
         model = JobLogEntry
         fields = "__all__"
@@ -1099,7 +1131,31 @@ class NoteInputSerializer(serializers.Serializer):
 #
 
 
-class ObjectChangeSerializer(BaseModelSerializer):
+class RetentionRuleSerializer(NautobotModelSerializer):
+    content_type = ContentTypeField(
+        queryset=ContentType.objects.filter(changelog_covered_content_types_q()),
+    )
+
+    class Meta:
+        model = RetentionRule
+        fields = "__all__"
+        # `scope_filter` is `editable=False` on the model, since the UI writes it through the filter
+        # builder rather than as typed JSON. The API still accepts it directly -- same as a custom field's
+        # scope filter -- so a rule can be created from a script.
+        extra_kwargs = {
+            "scope_filter": {"read_only": False, "required": False},
+        }
+
+
+class ArchiveSegmentSerializer(BaseModelSerializer):
+    """Read-only: periods are created and maintained by the rotation job, never through the API."""
+
+    class Meta:
+        model = ArchiveSegment
+        fields = "__all__"
+
+
+class ObjectChangeSerializer(ArchivedRelationSerializerMixin, BaseModelSerializer):
     action = ChoiceField(choices=ObjectChangeActionChoices, read_only=True)
     changed_object_type = ContentTypeField(read_only=True)
     related_object_type = ContentTypeField(read_only=True)
@@ -1108,6 +1164,24 @@ class ObjectChangeSerializer(BaseModelSerializer):
     class Meta:
         model = ObjectChange
         fields = "__all__"
+
+    def to_representation(self, instance):
+        """
+        Fill in the content-type fields for retained records.
+
+        A mirror instance holds its content types as bare identifier columns, so the `ContentTypeField`
+        declarations above have no attribute to read and DRF omits them. §8 requires an archived response
+        to validate against the same schema as the warm equivalent, so they are resolved from the ids here.
+        """
+        data = super().to_representation(instance)
+        for field_name in ("changed_object_type", "related_object_type"):
+            # A mirror renders these as null rather than omitting them, so fill on null too.
+            if data.get(field_name) is not None or not hasattr(instance, f"{field_name}_id"):
+                continue
+            type_id = getattr(instance, f"{field_name}_id")
+            content_type = ContentType.objects.filter(pk=type_id).first() if type_id else None
+            data[field_name] = f"{content_type.app_label}.{content_type.model}" if content_type else None
+        return data
 
     @extend_schema_field(
         PolymorphicProxySerializer(
@@ -1121,6 +1195,13 @@ class ObjectChangeSerializer(BaseModelSerializer):
         """
         Serialize a nested representation of the changed object.
         """
+        # A retained record holds its references as bare identifier columns, so there is no generic
+        # foreign key to follow. `object_repr` is the denormalized copy kept for exactly this.
+        #
+        # Tested by looking for the descriptor rather than with `hasattr`: a mirror resolves unknown
+        # relation names to None, so `hasattr` is true there and would send us down the warm path.
+        if not any(field.name == "changed_object" for field in type(obj)._meta.private_fields):
+            return obj.object_repr
         if obj.changed_object is None:
             return None
         try:
@@ -1342,27 +1423,3 @@ class GitRepositorySyncResponseSerializer(serializers.Serializer):
 
     message = serializers.CharField(read_only=True)
     job_result = JobResultSerializer(read_only=True)
-
-
-class ArchiveSegmentSerializer(BaseModelSerializer):
-    """Read-only: periods are created and maintained by the rotation job, never through the API."""
-
-    class Meta:
-        model = ArchiveSegment
-        fields = "__all__"
-
-
-class RetentionRuleSerializer(NautobotModelSerializer):
-    content_type = ContentTypeField(
-        queryset=ContentType.objects.filter(changelog_covered_content_types_q()),
-    )
-
-    class Meta:
-        model = RetentionRule
-        fields = "__all__"
-        # `scope_filter` is `editable=False` on the model, since the UI writes it through the filter
-        # builder rather than as typed JSON. The API still accepts it directly -- same as a custom field's
-        # scope filter -- so a rule can be created from a script.
-        extra_kwargs = {
-            "scope_filter": {"read_only": False, "required": False},
-        }

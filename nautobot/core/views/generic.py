@@ -188,6 +188,7 @@ class ObjectListView(UIComponentsMixin, ObjectPermissionRequiredMixin, View):
         "table_changes_pending",  # indicator for if there is any table changes not applied to the saved view
         "all_filters_removed",  # indicator for if all filters have been removed from the saved view
         "clear_view",  # indicator for if the clear view button is clicked or not
+        "archive_period",  # selects one retained-history period; see nautobot.extras.models.archive
     )
 
     def get_filter_params(self, request):

@@ -62,6 +62,7 @@ from nautobot.core.utils.lookup import (
     get_table_class_string_from_view_name,
     get_table_for_model,
 )
+from nautobot.core.utils.querysets import maybe_select_related
 from nautobot.core.utils.requests import (
     is_single_choice_field,
     normalize_querydict,
@@ -3809,7 +3810,10 @@ class JobResultUIViewSet(
         return context
 
     def get_queryset(self):
-        queryset = super().get_queryset().select_related("job_model", "user")
+        # `maybe_select_related` rather than `.select_related()` directly: this runs after a retained period
+        # has been swapped in, and a mirror holds `job_model` and `user` as bare identifier columns with no
+        # relation to follow. The deferred fields all exist on the mirror, so those need no guard.
+        queryset = maybe_select_related(super().get_queryset(), ["job_model", "user"])
 
         if not self.detail:
             queryset = queryset.defer("result", "task_args", "task_kwargs", "celery_kwargs", "traceback", "meta")
