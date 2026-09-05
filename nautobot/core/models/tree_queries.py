@@ -2,7 +2,10 @@ import uuid
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db import models
 from django.db.models import Case, When
+from django.db.models.lookups import Lookup
 from django.db.models.signals import post_delete, post_save
 from tree_queries.compiler import TreeQuery
 from tree_queries.models import TreeNode
@@ -209,3 +212,63 @@ class TreeModel(TreeNode):
             cache.delete_pattern(f"{cache_key}(*)")
 
         return super().delete(*args, **kwargs)
+
+
+class InTreeLookup(Lookup):
+    """
+    `<field>__in_tree=<pk or list of pks>`: match rows whose value is one of the given tree nodes *or any of their
+    descendants*, where the field is a foreign key to a `TreeModel` (or the primary key of a `TreeModel`).
+
+    This makes "everything under the AMER region" a single, stable condition (`location__in_tree: <AMER pk>`) in a
+    permission constraint or policy template, rather than a snapshot list of every descendant. Descendant primary
+    keys come from `TreeModel.cacheable_descendants_pks()`, so the tree is walked once and then served from cache
+    until the tree changes.
+
+    NOT RATIFIED: this lookup is provisional and needs further investigation before it can be considered a
+    supported part of the ORM vocabulary. Known concerns with the current implementation:
+
+    - `as_sql()` runs its own database queries (the node lookup, and the descendant walk on a cache miss) while
+      Django is compiling the outer query, and it does so every time that query is compiled: a single request
+      compiles a restricted queryset several times (count, page fetch, per-object permission checks).
+    - The descendant set is inlined into the SQL as `IN (pk, pk, ...)`, so the statement grows with the size of the
+      subtree (thousands of UUIDs for a large region), with the corresponding planning cost on PostgreSQL and the
+      packet-size ceiling on MySQL.
+    - Correctness depends on the `cacheable_descendants_pks` cache being invalidated on every tree change.
+
+    The likely proper fix inverts the question: instead of expanding a node into its descendants, test whether the
+    node is among the *ancestors* of the row's tree node (a materialized ancestor path on `TreeModel`, or the
+    `tree_path` CTE annotation of django-tree-queries used as a subquery). Both need design and cross-database
+    verification; see the permission policy documentation for the current caveats. Until then, do not build new
+    features on `in_tree`, and treat its removal as a possible outcome.
+    """
+
+    lookup_name = "in_tree"
+    prepare_rhs = False
+
+    def _tree_model(self):
+        field = self.lhs.output_field
+        model = field.related_model if field.is_relation else (field.model if field.primary_key else None)
+        if model is None or not issubclass(model, TreeModel):
+            raise ValidationError(
+                f"The 'in_tree' lookup applies only to tree models; '{field.name}' does not reference one."
+            )
+        return model
+
+    def get_prep_lookup(self):
+        model = self._tree_model()
+        values = self.rhs if isinstance(self.rhs, (list, tuple, set)) else [self.rhs]
+        return [model._meta.pk.to_python(value) for value in values]
+
+    def as_sql(self, compiler, connection):
+        # Provisional implementation, see the class docstring: queries at compile time and an inlined pk list.
+        model = self._tree_model()
+        descendant_pks = set()
+        for node in model.objects.filter(pk__in=self.rhs):
+            descendant_pks.update(node.cacheable_descendants_pks(include_self=True))
+        in_lookup = self.lhs.output_field.get_lookup("in")(self.lhs, list(descendant_pks) or [None])
+        return in_lookup.as_sql(compiler, connection)
+
+
+# Provisional registration (see `InTreeLookup`); `in_tree` may be withdrawn or reimplemented before release.
+models.ForeignKey.register_lookup(InTreeLookup)
+models.UUIDField.register_lookup(InTreeLookup)
