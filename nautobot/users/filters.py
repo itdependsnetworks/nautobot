@@ -11,11 +11,17 @@ from nautobot.core.filters import (
 )
 from nautobot.dcim.models import RackReservation
 from nautobot.extras.models import ObjectChange
-from nautobot.users.models import ObjectPermission, Token
+from nautobot.users.models import (
+    ObjectPermission,
+    PermissionPolicy,
+    Token,
+)
 
 __all__ = (
     "GroupFilterSet",
     "ObjectPermissionFilterSet",
+    "PermissionPolicyFilterSet",
+    "TokenFilterSet",
     "UserFilterSet",
 )
 
@@ -119,3 +125,9 @@ class ObjectPermissionFilterSet(BaseFilterSet, NameSearchFilterSet):
     class Meta:
         model = ObjectPermission
         fields = ["id", "name", "enabled", "object_types", "description"]
+
+
+class PermissionPolicyFilterSet(BaseFilterSet, NameSearchFilterSet):
+    class Meta:
+        model = PermissionPolicy
+        fields = ["id", "name", "description"]

@@ -7,12 +7,21 @@ from django.contrib.auth.forms import (
 from timezone_field import TimeZoneFormField
 
 from nautobot.core.events import publish_event
-from nautobot.core.forms import BootstrapMixin, DateTimePicker, MultiValueCharField
+from nautobot.core.forms import (
+    BootstrapMixin,
+    BulkEditForm,
+    DateTimePicker,
+    MultiValueCharField,
+)
 from nautobot.core.forms.widgets import StaticSelect2
 from nautobot.core.utils.config import get_settings_or_config
+from nautobot.extras.forms import NautobotFilterForm
 from nautobot.users.utils import serialize_user_without_config_and_views
 
-from .models import Token
+from .models import (
+    PermissionPolicy,
+    Token,
+)
 
 
 class LoginForm(BootstrapMixin, AuthenticationForm):
@@ -101,3 +110,35 @@ class AdminPasswordChangeForm(_AdminPasswordChangeForm):
             payload = serialize_user_without_config_and_views(instance)
             publish_event(topic="nautobot.admin.user.change_password", payload=payload)
         return instance
+
+
+#
+# Permission policies
+#
+
+
+#: The declared parameters of a policy, as needed by the rule form. Built from saved parameters or from the
+#: (possibly unsaved) parameter formset so that the create and edit flows behave identically.
+#: Formset prefixes shared by the policy form, its templates and the views that bind the formsets.
+#: Inputs whose values are parameter names the constraint editor should offer, besides the saved ones: the name cells
+#: of the policy form's parameter rows, and the hidden names the suggested-paths fragment emits on the rule form.
+class PermissionPolicyForm(BootstrapMixin, forms.ModelForm):
+    class Meta:
+        model = PermissionPolicy
+        fields = ("name", "description")
+
+
+class PermissionPolicyBulkEditForm(BootstrapMixin, BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(queryset=PermissionPolicy.objects.all(), widget=forms.MultipleHiddenInput())
+    description = forms.CharField(max_length=255, required=False)
+
+    class Meta:
+        nullable_fields = ["description"]
+
+
+class PermissionPolicyFilterForm(NautobotFilterForm):
+    model = PermissionPolicy
+    field_order = ["q", "name"]
+
+    q = forms.CharField(required=False, label="Search")
+    name = MultiValueCharField(required=False)

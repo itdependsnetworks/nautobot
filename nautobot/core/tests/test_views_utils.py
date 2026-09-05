@@ -197,6 +197,14 @@ class CheckPrepareClonedFields(TestCase):
                 self.assertTrue(len(query_params["description"]) == 1)
                 self.assertTrue(query_params["description"][0] == description)
 
+    def test_get_clone_extra_params_hook(self):
+        """A model may add query parameters to the Clone URL that are not fields, e.g. a pointer to the source."""
+        instance = Location.objects.get(name=self.name)
+        instance.get_clone_extra_params = lambda: {"clone_from": str(instance.pk)}
+        query_params = urllib.parse.parse_qs(prepare_cloned_fields(instance))
+        self.assertEqual(query_params["clone_from"], [str(instance.pk)])
+        self.assertIn("location_type", query_params)  # the regular clone fields are still there
+
 
 class GetSavedViewsForUserTestCase(TestCase):
     """

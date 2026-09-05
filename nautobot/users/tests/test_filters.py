@@ -14,10 +14,16 @@ from nautobot.extras.models import ObjectChange
 from nautobot.users.filters import (
     GroupFilterSet,
     ObjectPermissionFilterSet,
+    PermissionPolicyFilterSet,
     TokenFilterSet,
     UserFilterSet,
 )
-from nautobot.users.models import ObjectPermission, Token
+from nautobot.users.models import (
+    ObjectPermission,
+    PermissionPolicy,
+    Token,
+)
+from nautobot.users.tests.test_policies import create_tenant_policy
 
 # Use the proper swappable User model
 User = get_user_model()
@@ -194,6 +200,24 @@ class ObjectPermissionTestCase(FilterTestCases.FilterTestCase):
         object_types = ContentType.objects.filter(model__in=["location", "rack"])
         params = {"object_types": [object_types[0].pk, object_types[1].pk]}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+
+class PermissionPolicyTestCase(FilterTestCases.FilterTestCase):
+    queryset = PermissionPolicy.objects.all()
+    filterset = PermissionPolicyFilterSet
+
+    generic_filter_tests = (
+        ["name"],
+        ["description"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        for i, policy in enumerate(policies):
+            policy.description = f"Description {i + 1}"
+            policy.save()
+        PermissionPolicy.objects.create(name="Empty policy", description="No rules")
 
 
 class TokenTestCase(FilterTestCases.FilterTestCase):

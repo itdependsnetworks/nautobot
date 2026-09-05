@@ -23,9 +23,25 @@ from nautobot.core.choices import NautobotEditionChoices
 from nautobot.core.constants import NAUTOBOT_EDITION_URLS
 from nautobot.core.events import publish_event
 from nautobot.core.forms import ConfirmationForm
+from nautobot.core.ui import object_detail
+from nautobot.core.ui.choices import SectionChoices
 from nautobot.core.ui.titles import Titles
 from nautobot.core.utils.config import get_nautobot_edition
 from nautobot.core.views.generic import GenericView
+from nautobot.core.views.mixins import (
+    ObjectBulkCreateViewMixin,
+    ObjectBulkDestroyViewMixin,
+    ObjectBulkRenameViewMixin,
+    ObjectBulkUpdateViewMixin,
+    ObjectChangeLogViewMixin,
+    ObjectDestroyViewMixin,
+    ObjectDetailViewMixin,
+    ObjectEditViewMixin,
+    ObjectListViewMixin,
+    ObjectOverviewViewMixin,
+)
+from nautobot.users import filters as users_filters, tables as users_tables
+from nautobot.users.api import serializers as users_serializers
 from nautobot.users.utils import serialize_user_without_config_and_views
 
 from ..core.views.mixins import GetReturnURLMixin
@@ -36,10 +52,13 @@ from .forms import (
     NavbarFavoritesRemoveForm,
     NavbarFavoritesReorderForm,
     PasswordChangeForm,
+    PermissionPolicyBulkEditForm,
+    PermissionPolicyFilterForm,
+    PermissionPolicyForm,
     PreferenceProfileSettingsForm,
     TokenForm,
 )
-from .models import Token
+from .models import PermissionPolicy, Token
 
 #
 # Login/logout
@@ -533,3 +552,47 @@ class AdvancedProfileSettingsEditView(GenericView):
                 "is_django_auth_user": is_django_auth_user(request),
             },
         )
+
+
+#
+# Permission policies
+#
+
+
+# PLACEHOLDER: will be replaced in C13 (Policy assignment validation and warnings): warn about assignments
+# that lack a value for a parameter added after them.
+
+
+class PolicyUIViewSetBase(
+    ObjectDetailViewMixin,
+    ObjectListViewMixin,
+    ObjectEditViewMixin,
+    ObjectDestroyViewMixin,
+    ObjectBulkDestroyViewMixin,
+    ObjectBulkCreateViewMixin,
+    ObjectBulkUpdateViewMixin,
+    ObjectBulkRenameViewMixin,
+    ObjectChangeLogViewMixin,
+    ObjectOverviewViewMixin,
+):
+    """`NautobotUIViewSet` minus the Notes and Data Compliance views, which these models do not support."""
+
+
+class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
+    bulk_update_form_class = PermissionPolicyBulkEditForm
+    filterset_class = users_filters.PermissionPolicyFilterSet
+    filterset_form_class = PermissionPolicyFilterForm
+    form_class = PermissionPolicyForm
+    queryset = PermissionPolicy.objects.all()
+    serializer_class = users_serializers.PermissionPolicySerializer
+    table_class = users_tables.PermissionPolicyTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            object_detail.ObjectFieldsPanel(
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("name", "description"),
+            ),
+        ),
+    )

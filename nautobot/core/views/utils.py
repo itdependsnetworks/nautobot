@@ -364,6 +364,11 @@ def prepare_cloned_fields(instance):
         for tag in instance.tags.all():
             params.append(("tags", tag.pk))
 
+    # A model may contribute parameters that are not concrete fields (for example a reference to the source object
+    # so the create view can copy related records) by defining `get_clone_extra_params()` returning a dict.
+    if hasattr(instance, "get_clone_extra_params"):
+        params.extend(instance.get_clone_extra_params().items())
+
     # Encode the parameters into a URL query string
     param_string = urllib.parse.urlencode(params)
 

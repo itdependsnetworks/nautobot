@@ -12,7 +12,11 @@ from nautobot.core.api.views import ModelViewSet
 from nautobot.core.models.querysets import RestrictedQuerySet
 from nautobot.core.utils.data import deepmerge
 from nautobot.users import filters
-from nautobot.users.models import ObjectPermission, Token
+from nautobot.users.models import (
+    ObjectPermission,
+    PermissionPolicy,
+    Token,
+)
 
 from . import serializers
 
@@ -72,6 +76,18 @@ class ObjectPermissionViewSet(ModelViewSet):
     queryset = ObjectPermission.objects.all()
     serializer_class = serializers.ObjectPermissionSerializer
     filterset_class = filters.ObjectPermissionFilterSet
+
+
+#
+# Permission policies
+#
+
+
+class PermissionPolicyViewSet(ModelViewSet):
+    # PLACEHOLDER: will be replaced in C12 (Policy assignment model and stack): annotate assignment_count.
+    queryset = PermissionPolicy.objects.all()
+    serializer_class = serializers.PermissionPolicySerializer
+    filterset_class = filters.PermissionPolicyFilterSet
 
 
 #

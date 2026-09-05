@@ -20,6 +20,7 @@ from nautobot.extras.models.change_logging import ChangeLoggedModel
 __all__ = (
     "AdminGroup",
     "ObjectPermission",
+    "PermissionPolicy",
     "Token",
     "User",
 )
@@ -277,6 +278,37 @@ class Token(BaseModel):
 # Permissions
 #
 
+# Content types that a permission (stored or policy-generated) may apply to.
+# TODO: Remove pylint disable after issue is resolved (see: https://github.com/PyCQA/pylint/issues/7381)
+# pylint: disable=unsupported-binary-operation
+PERMISSION_OBJECT_TYPE_LIMIT_CHOICES = (
+    ~Q(
+        app_label__in=[
+            "admin",
+            "auth",
+            "contenttypes",
+            "sessions",
+            "taggit",
+            "users",
+        ]
+    )
+    | Q(app_label="admin", model__in=["logentry"])
+    | Q(app_label="auth", model__in=["group"])
+    | Q(
+        app_label="users",
+        model__in=[
+            "objectpermission",
+            "permissionpolicy",
+            "policyassignment",
+            "policyparameter",
+            "policyrule",
+            "token",
+            "user",
+        ],
+    )
+)
+# pylint: enable=unsupported-binary-operation
+
 
 class ObjectPermission(BaseModel, ChangeLoggedModel):
     """
@@ -287,28 +319,11 @@ class ObjectPermission(BaseModel, ChangeLoggedModel):
     name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, unique=True)
     description = models.CharField(max_length=CHARFIELD_MAX_LENGTH, blank=True)
     enabled = models.BooleanField(default=True)
-    # TODO: Remove pylint disable after issue is resolved (see: https://github.com/PyCQA/pylint/issues/7381)
-    # pylint: disable=unsupported-binary-operation
     object_types = models.ManyToManyField(
         to=ContentType,
-        limit_choices_to=Q(
-            ~Q(
-                app_label__in=[
-                    "admin",
-                    "auth",
-                    "contenttypes",
-                    "sessions",
-                    "taggit",
-                    "users",
-                ]
-            )
-            | Q(app_label="admin", model__in=["logentry"])
-            | Q(app_label="auth", model__in=["group"])
-            | Q(app_label="users", model__in=["objectpermission", "token", "user"])
-        ),
+        limit_choices_to=PERMISSION_OBJECT_TYPE_LIMIT_CHOICES,
         related_name="object_permissions",
     )
-    # pylint: enable=unsupported-binary-operation
     groups = models.ManyToManyField(to=Group, blank=True, related_name="object_permissions")
     users = models.ManyToManyField(to=settings.AUTH_USER_MODEL, blank=True, related_name="object_permissions")
     actions = JSONArrayField(
@@ -339,3 +354,39 @@ class ObjectPermission(BaseModel, ChangeLoggedModel):
         if not isinstance(self.constraints, list):
             return [self.constraints]
         return self.constraints
+
+
+#
+# Permission policies
+#
+
+
+class PermissionPolicy(BaseModel, ChangeLoggedModel):
+    """
+    A reusable permission definition: content types, actions and a constraint template per content type.
+
+    A policy grants nothing by itself. A `PolicyAssignment` binds it to parameter values and to the users or
+    groups that receive the access. Nautobot renders the constraints at permission-check time and never writes
+    `ObjectPermission` records for a policy.
+    """
+
+    name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, unique=True)
+    description = models.CharField(max_length=CHARFIELD_MAX_LENGTH, blank=True)
+
+    documentation_static_path = "docs/user-guide/platform-functionality/users/permissionpolicy.html"
+    is_metadata_associable_model = False
+    natural_key_field_names = ["name"]
+    # Cloning pre-fills the create form; parameters and rules are copied via `get_clone_extra_params()`.
+    clone_fields = ["description"]
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "permission policy"
+        verbose_name_plural = "permission policies"
+
+    def __str__(self):
+        return self.name
+
+    def get_clone_extra_params(self):
+        """Point the standard Clone flow at this policy so the create form can prefill its parameters and rules."""
+        return {"clone_from": str(self.pk)}

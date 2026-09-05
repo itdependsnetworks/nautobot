@@ -5,7 +5,12 @@ from django.contrib.auth import get_user_model
 from django.test.utils import override_settings
 
 from nautobot.core.testing.models import ModelTestCases
-from nautobot.users.models import ObjectPermission, Token
+from nautobot.users.models import (
+    ObjectPermission,
+    PermissionPolicy,
+    Token,
+)
+from nautobot.users.tests.test_policies import create_tenant_policy
 
 # Use the proper swappable User model
 User = get_user_model()
@@ -16,6 +21,14 @@ class ObjectPermissionTest(ModelTestCases.BaseModelTestCase):
 
     def setUp(self):
         ObjectPermission.objects.create(name="Test Permission", actions=["view", "add", "change", "delete"])
+
+
+class PermissionPolicyTest(ModelTestCases.BaseModelTestCase):
+    model = PermissionPolicy
+
+    @classmethod
+    def setUpTestData(cls):
+        create_tenant_policy(name="Model test policy")
 
 
 class TokenTest(ModelTestCases.BaseModelTestCase):

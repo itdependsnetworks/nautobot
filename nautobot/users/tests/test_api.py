@@ -12,7 +12,12 @@ from rest_framework import HTTP_HEADER_ENCODING, status
 from nautobot.core.testing import APITestCase, APIViewTestCases, get_deletable_objects
 from nautobot.core.utils.data import deepmerge
 from nautobot.users.filters import GroupFilterSet
-from nautobot.users.models import ObjectPermission, Token
+from nautobot.users.models import (
+    ObjectPermission,
+    PermissionPolicy,
+    Token,
+)
+from nautobot.users.tests.test_policies import create_tenant_policy
 
 # Use the proper swappable User model
 User = get_user_model()
@@ -451,6 +456,38 @@ class ObjectPermissionTest(APIViewTestCases.APIViewTestCase):
             actions=["view", "add", "change", "delete"],
             constraints={"name": "TEST100"},
         )
+
+    # TODO: Unskip after resolving #2908, #2909
+    @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")
+    def test_list_objects_ascending_ordered(self):
+        pass
+
+    @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")
+    def test_list_objects_descending_ordered(self):
+        pass
+
+
+class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
+    model = PermissionPolicy
+    validation_excluded_fields = ["parameters", "rules"]  # nested lists, checked explicitly below
+
+    @classmethod
+    def setUpTestData(cls):
+        for i in range(3):
+            create_tenant_policy(name=f"Policy {i + 1}")
+
+        # PLACEHOLDER: will be replaced in C07 and C09 (parameter and rule models): nested parameters and rules.
+        cls.create_data = [
+            {"name": "Policy 4", "description": "Tenant viewer"},
+            {"name": "Policy 5"},
+            {"name": "Policy 6"},
+        ]
+        cls.update_data = {"name": "Policy X", "description": "Updated"}
+        cls.bulk_update_data = {"description": "New description"}
+
+    @skip("Nested parameters and rules are not part of the CSV representation; use the JSON API to recreate them")
+    def test_recreate_object_csv(self):
+        pass
 
     # TODO: Unskip after resolving #2908, #2909
     @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")

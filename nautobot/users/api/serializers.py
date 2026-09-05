@@ -10,7 +10,11 @@ from nautobot.core.api import (
     ContentTypeField,
     ValidatedModelSerializer,
 )
-from nautobot.users.models import ObjectPermission, Token
+from nautobot.users.models import (
+    ObjectPermission,
+    PermissionPolicy,
+    Token,
+)
 
 
 class UserSerializer(ValidatedModelSerializer):
@@ -96,6 +100,31 @@ class ObjectPermissionSerializer(ValidatedModelSerializer):
     class Meta:
         model = ObjectPermission
         fields = "__all__"
+
+
+#
+# Permission policies
+#
+
+
+class PermissionPolicySerializer(ValidatedModelSerializer):
+    """
+    A `PermissionPolicy` with its parameters and rules as writable nested lists.
+
+    Children are saved in one transaction with the policy and validated against the final state, because the
+    consistency rules (every parameter accounted for in every rule) span all of them. Children are matched by
+    natural key (`name` for parameters, `content_type` for rules); children absent from a supplied list are
+    deleted. Omit `parameters` or `rules` entirely on PATCH to leave them unchanged.
+    """
+
+    # PLACEHOLDER: will be replaced in C07 (Policy parameter model and stack): nested parameters and rules.
+
+    class Meta:
+        model = PermissionPolicy
+        fields = "__all__"
+
+        # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): sync the nested rules.
+        # PLACEHOLDER: will be replaced in C11 (Policy definition validation): validate the policy as a whole.
 
 
 class UserLoginSerializer(serializers.Serializer):

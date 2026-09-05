@@ -9,9 +9,11 @@ from django.urls import reverse
 from django.utils import timezone
 from social_django.utils import load_backend, load_strategy
 
-from nautobot.core.testing import TestCase, utils
+from nautobot.core.testing import TestCase, utils, ViewTestCases
 from nautobot.core.testing.context import load_event_broker_override_settings
 from nautobot.core.testing.utils import post_data
+from nautobot.users.models import PermissionPolicy
+from nautobot.users.tests.test_policies import create_tenant_policy
 from nautobot.users.utils import serialize_user_without_config_and_views
 
 User = get_user_model()
@@ -252,3 +254,33 @@ class NavbarFavoritesReorderViewTest(TestCase):
         response = self._post_reorder(["/dcim/devices/"])
         self.assertHttpStatus(response, 302)
         self.assertIn("login", response.url)
+
+
+#
+# Permission policies
+#
+
+
+# The generic view tests assume the model honors `EXEMPT_VIEW_PERMISSIONS = ["*"]`. These models are deliberately
+# listed in EXEMPT_EXCLUDE_MODELS (like ObjectPermission), so the exclusion is narrowed for the generic tests only.
+POLICY_TEST_EXEMPT_EXCLUDE_MODELS = (("auth", "group"), ("users", "user"), ("users", "objectpermission"))
+
+
+@override_settings(EXEMPT_EXCLUDE_MODELS=POLICY_TEST_EXEMPT_EXCLUDE_MODELS)
+class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
+    model = PermissionPolicy
+
+    @classmethod
+    def setUpTestData(cls):
+        for i in range(3):
+            create_tenant_policy(name=f"Policy {i + 1}")
+        # PLACEHOLDER: will be replaced in C07 and C09 (parameter and rule models): the parameter and rule formsets.
+        cls.form_data = {
+            "name": "Policy X",
+            "description": "Created through the UI",
+        }
+        cls.update_data = {
+            "name": "Policy Y",
+            "description": "Edited through the UI",
+        }
+        cls.bulk_edit_data = {"description": "Bulk edited"}
