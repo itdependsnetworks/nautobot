@@ -4,6 +4,9 @@ The Nautobot REST API enforces the same object-based permission model used throu
 
 Throughout this page, "view permission" means that the user has been granted the `view` action for the relevant model — subject to any constraints on the granting [object permission](../users/objectpermission.md) — and that the model has not been exempted via the [`EXEMPT_VIEW_PERMISSIONS`](../../administration/configuration/settings.md#exempt_view_permissions) configuration setting. Superusers implicitly have all object permissions and are exempt from every check described here.
 
++/- 3.3.0
+    Access granted through a [policy assignment](../users/policyassignment.md) is enforced exactly like a stored object permission, but it is not visible in `/api/users/permissions/`. Use `GET /api/users/users/effective-access/` to see everything a user is granted, with the source of each grant.
+
 ## Primary Objects
 
 For any list or detail (retrieve) request, the set of _primary_ objects is restricted to those the requesting user has permission to view:

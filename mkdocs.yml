@@ -227,6 +227,10 @@ plugins:
         "models/dcim/interfacetemplate.md": "user-guide/core-data-model/dcim/interfacetemplate.md"
         "models/dcim/inventoryitem.md": "user-guide/core-data-model/dcim/inventoryitem.md"
         "models/dcim/location.md": "user-guide/core-data-model/dcim/location.md"
+        "models/users/permissionpolicy.md": "user-guide/platform-functionality/users/permissionpolicy.md"
+        "models/users/policyparameter.md": "user-guide/platform-functionality/users/policyparameter.md"
+        "models/users/policyrule.md": "user-guide/platform-functionality/users/policyrule.md"
+        "models/users/policyassignment.md": "user-guide/platform-functionality/users/policyassignment.md"
         "models/dcim/locationtype.md": "user-guide/core-data-model/dcim/locationtype.md"
         "models/dcim/manufacturer.md": "user-guide/core-data-model/dcim/manufacturer.md"
         "models/dcim/platform.md": "user-guide/core-data-model/dcim/platform.md"
@@ -612,6 +616,10 @@ nav:
           - Users:
               - Groups: "user-guide/platform-functionality/users/groups.md"
               - Object Permission: "user-guide/platform-functionality/users/objectpermission.md"
+              - Permission Policy: "user-guide/platform-functionality/users/permissionpolicy.md"
+              - Policy Parameter: "user-guide/platform-functionality/users/policyparameter.md"
+              - Policy Rule: "user-guide/platform-functionality/users/policyrule.md"
+              - Policy Assignment: "user-guide/platform-functionality/users/policyassignment.md"
               - Token: "user-guide/platform-functionality/users/token.md"
           - Webhooks: "user-guide/platform-functionality/webhook.md"
   - Developer Guide:

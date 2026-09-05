@@ -1,0 +1,1 @@
+Fixed the table configuration form offering columns that an `ObjectsTablePanel` excludes, so that a saved preference to show such a column no longer silently has no effect.

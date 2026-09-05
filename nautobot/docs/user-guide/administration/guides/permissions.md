@@ -155,6 +155,20 @@ Multiple permissions can be assigned to a user group.
 !!! info
     Group permission relationships can be managed in the Admin UI by modifying the group (superusers only) or the permission.
 
+### Permission Policies
+
++++ 3.3.0
+
+When the same shape of access is granted many times with different values (one tenant per team, for example), define it once as a [permission policy](../../platform-functionality/users/permissionpolicy.md) and create one [policy assignment](../../platform-functionality/users/policyassignment.md) per audience. A policy declares parameters and, for each object type, the lookup path that reaches each parameter; an assignment supplies the values and the users or groups. Nautobot renders the resulting constraints during permission resolution and stores no object permission records, so assignments cannot drift from their policy and deleting one removes the access immediately.
+
+Policies and assignments are managed under **Extensibility > Users** in the UI, or at `/api/users/permission-policies/` and `/api/users/permission-policy-assignments/` in the REST API. Managing them requires the `users.*_permissionpolicy` and `users.*_policyassignment` permissions, which should be treated with the same caution as `users.*_objectpermission`.
+
+### Viewing Effective Access
+
++++ 3.3.0
+
+Because policy-generated access is not stored, the object permission list does not show everything a user is granted. Every user can review their own effective access, with the source of each grant, from the **Access** tab of their profile (`/user/access/`) or from `GET /api/users/users/effective-access/`. An administrator with `users.view_user`, `users.view_objectpermission` and `users.view_policyassignment` can review another user's access at `/users/<user id>/access/` or `GET /api/users/users/<user id>/effective-access/`.
+
 ## Special Permission Behaviors
 
 Most models follow the standard pattern: `view`/`add`/`change`/`delete` actions enforced against a queryset restricted by your permission constraints. The features below deviate from that pattern, usually because a user has inherent access to *their own* objects that differs from the model-level permission.

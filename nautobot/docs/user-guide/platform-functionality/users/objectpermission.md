@@ -27,6 +27,12 @@ In addition to these, permissions can also grant custom actions that may be requ
 
 Constraints are expressed as a JSON object or list representing a [Django query filter](https://docs.djangoproject.com/en/stable/ref/models/querysets/#field-lookups). This is the same syntax that you would pass to the QuerySet `filter()` method when performing a query using the Django ORM. As with query filters, double underscores can be used to traverse related objects or invoke lookup expressions. Some example queries and their corresponding definitions are shown below.
 
++++ 3.3.0
+    Fields that reference a tree model (such as `location`) accept the `in_tree` lookup, which matches the given node(s) and all of their descendants: `{"location__in_tree": "<location id>"}` grants access to everything at or beneath that location. On a tree model itself, use `{"pk__in_tree": "<location id>"}`.
+
+!!! warning "Provisional"
+    The `in_tree` lookup is not yet ratified. Its current implementation expands the node into the list of every descendant when the query is built, which is costly for large trees, and it may be reimplemented or withdrawn before this release is final. Prefer `in` with an explicit list where the set of locations is small and stable.
+
 All attributes defined within a single JSON object are applied with a logical AND. For example, suppose you assign a permission for the location model with the following constraints.
 
 ```json
