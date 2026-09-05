@@ -381,6 +381,24 @@ class PolicyModelValidationTest(TestCase):
         with self.assertRaises(ValidationError):
             PolicyParameter(policy=self.policy, name="Bad Name", kind="string").full_clean()
 
+    def test_validate_definition(self):
+        empty = PermissionPolicy.objects.create(name="Empty")
+        self.assertFalse(empty.is_assignable())
+        with self.assertRaisesRegex(ValidationError, "has no rules"):
+            empty.validate_definition()
+        self.assertTrue(self.policy.is_assignable())
+        # A parameter that no rule uses makes the policy invalid; a parameter used by one rule is enough.
+        PolicyParameter.objects.create(policy=self.policy, name="extra", kind="string")
+        with self.assertRaises(ValidationError) as cm:
+            self.policy.validate_definition()
+        self.assertEqual(len(cm.exception.messages), 1)
+        self.assertIn("Parameter 'extra' is not used by any rule", cm.exception.messages[0])
+        rule = self.policy.rules.get(content_type=self.device_ct)
+        rule.constraint_template = {**rule.constraint_template, "name__istartswith": "{{ extra }}"}
+        rule.path_map = {**rule.path_map, "extra": {"path": "name", "lookup": "istartswith"}}
+        rule.validated_save()
+        self.assertTrue(self.policy.is_assignable())
+
     def test_render_as_object_permissions(self):
         rules = list(self.policy.rules.select_related("content_type"))
         # Without values the placeholders stay as written, one record per distinct constraint.
@@ -461,6 +479,17 @@ class BuiltinPoliciesTest(TestCase):
     @classmethod
     def setUpTestData(cls):
         seed_migration.create_builtin_policies(apps, None)
+
+    def test_seeded_policies_are_valid(self):
+        policies = PermissionPolicy.objects.filter(name__startswith="nautobot-default-")
+        self.assertEqual(policies.count(), 4)
+        for policy in policies:
+            with self.subTest(policy=policy.name):
+                for parameter in policy.parameters.all():
+                    parameter.full_clean()
+                for rule in policy.rules.all():
+                    rule.full_clean()
+                policy.validate_definition()
 
     def test_seed_does_not_overwrite_edited_policy(self):
         policy = PermissionPolicy.objects.get(name="nautobot-default-reference-data-viewer")

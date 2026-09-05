@@ -608,6 +608,44 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
         self.assertEqual(policy.name, "Policy 1")  # the parent update was rolled back with the children
         self.assertEqual(policy.rules.count(), 2)
 
+    def test_removing_referenced_parameter_rejected(self):
+        """Dropping a parameter that a rule still uses fails at the policy level, after the children are synced."""
+        self.add_permissions("users.change_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        response = self.client.patch(self._get_detail_url(policy), {"parameters": []}, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("undeclared parameter 'tenant'", str(response.data))
+        self.assertEqual(policy.parameters.count(), 1)
+
+    def test_nested_validation_error_names_child(self):
+        self.add_permissions("users.add_permissionpolicy")
+        data = {
+            "name": "Broken",
+            "parameters": [
+                {"name": "tenant", "kind": "object", "target_content_type": "tenancy.tenant", "multiple": True}
+            ],
+            "rules": [
+                {
+                    "content_type": "dcim.interface",
+                    "actions": ["view"],
+                    "constraint_template": {"device__tenant__in": "{{ tenant }}"},
+                    "path_map": {},
+                }
+            ],
+        }
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("constraint_template", response.data["rules"][0])
+        self.assertIn("dcim.interface", str(response.data["rules"][0]["constraint_template"]))
+        self.assertFalse(PermissionPolicy.objects.filter(name="Broken").exists())
+
+        # A parameter that no rule uses is a policy-level error, reported without a field.
+        data["rules"][0]["constraint_template"] = {}
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Parameter 'tenant' is not used by any rule", str(response.data["non_field_errors"]))
+        self.assertFalse(PermissionPolicy.objects.filter(name="Broken").exists())
+
     def test_resolve_path(self):
         self.add_permissions("users.view_permissionpolicy")
         url = reverse("users-api:permissionpolicy-resolve-path")

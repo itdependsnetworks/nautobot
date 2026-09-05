@@ -23,6 +23,7 @@ from nautobot.users.policies import (
     extract_placeholders,
     find_malformed_placeholders,
     PolicyRenderError,
+    rule_content_type,
     substitute_placeholders,
 )
 
@@ -397,6 +398,50 @@ class PermissionPolicy(BaseModel, ChangeLoggedModel):
 
     def __str__(self):
         return self.name
+
+    def get_parameter_names(self):
+        """Return the set of parameter names this policy declares."""
+        return {parameter.name for parameter in self.parameters.all()}
+
+    def validate_definition(self):
+        """
+        Check that the policy as a whole is consistent and can be assigned.
+
+        A rule only needs to account for the parameters its own template uses, but every declared parameter must be
+        used by at least one rule: a parameter nobody references would be asked for on every assignment for nothing.
+
+        Raises:
+            ValidationError: If the policy has no rules, a declared parameter is used by no rule, or a rule template
+                references an undeclared parameter. Rule-level messages name the content type.
+        """
+        errors = []
+        rules = list(self.rules.all())
+        if not rules:
+            errors.append(f"Policy '{self.name}' has no rules and grants nothing; it cannot be assigned.")
+        declared = self.get_parameter_names()
+        used = set()
+        for rule in rules:
+            content_type = rule_content_type(rule)
+            label = f"{content_type.app_label}.{content_type.model}"
+            placeholders = extract_placeholders(rule.constraint_template)
+            used |= placeholders
+            for name in sorted(placeholders - declared):
+                errors.append(f"Rule for {label} references undeclared parameter '{name}'.")
+        for name in sorted(declared - used):
+            errors.append(
+                f"Parameter '{name}' is not used by any rule; reference '{{{{ {name} }}}}' in a rule's constraint "
+                "template or remove the parameter."
+            )
+        if errors:
+            raise ValidationError(errors)
+
+    def is_assignable(self):
+        """Return True if `validate_definition()` passes."""
+        try:
+            self.validate_definition()
+        except ValidationError:
+            return False
+        return True
 
     def get_clone_extra_params(self):
         """Point the standard Clone flow at this policy so the create form can prefill its parameters and rules."""

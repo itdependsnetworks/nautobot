@@ -1,0 +1,6 @@
+{% for level, text in alerts %}
+    <div class="alert alert-{{ level }} mb-0{% if not forloop.last %} mb-8{% endif %}" role="alert">
+        <span class="mdi {% if level == 'danger' %}mdi-alert-circle-outline{% else %}mdi-alert-outline{% endif %}" aria-hidden="true"></span>
+        {{ text }}
+    </div>
+{% endfor %}

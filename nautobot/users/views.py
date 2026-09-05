@@ -577,8 +577,37 @@ class AdvancedProfileSettingsEditView(GenericView):
 #
 
 
-# PLACEHOLDER: will be replaced in C13 (Policy assignment validation and warnings): warn about assignments
-# that lack a value for a parameter added after them.
+class AlertPanel(object_detail.Panel):
+    """
+    Inline alerts for a detail page or tab, from the `alerts` context key: a list of `(level, text)` pairs where
+    `level` is a Bootstrap contextual class (`warning`, `danger`). Preferred over `messages` for GET renders, which
+    would otherwise queue a toast on every render, including HTMX reloads. Omitted when there are no alerts.
+    """
+
+    body_content_template_path = "users/inc/panel_alerts.html"
+
+    def should_render(self, context):
+        return super().should_render(context) and bool(context.get("alerts"))
+
+
+def policy_state_alerts(policy):
+    """Alerts for a policy's pages: why the policy cannot be assigned, if it cannot."""
+    try:
+        policy.validate_definition()
+    except ValidationError as exc:
+        return [("warning", f"This policy cannot be assigned yet. {' '.join(exc.messages)}")]
+    return []
+
+
+def warn_about_policy_state(request, policy):
+    """
+    After a policy, or one of its parameters or rules, is saved: warn when the policy cannot be assigned, and when an
+    existing assignment lacks a value for a parameter (added after the assignment) and grants nothing until edited.
+    """
+    for _, text in policy_state_alerts(policy):
+        messages.warning(request, text)
+    # PLACEHOLDER: will be replaced in C13 (Policy assignment validation and warnings): warn about assignments
+    # that lack a value for a parameter added after them.
 
 
 class PolicyUIViewSetBase(
@@ -611,6 +640,11 @@ class PolicyChildUIViewSetBase(
     neither model has a field that is sensibly changed across many records at once.
     """
 
+    def form_save(self, form, **kwargs):
+        obj = super().form_save(form, **kwargs)
+        warn_about_policy_state(self.request, obj.policy)
+        return obj
+
 
 class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
     bulk_update_form_class = PermissionPolicyBulkEditForm
@@ -623,6 +657,7 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
 
     object_detail_content = object_detail.ObjectDetailContent(
         panels=(
+            AlertPanel(section=SectionChoices.FULL_WIDTH, weight=50),
             object_detail.ObjectFieldsPanel(
                 section=SectionChoices.LEFT_HALF,
                 weight=100,
@@ -704,6 +739,8 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
             context["parameters"] = parameters
             context["rules"] = self._rule_formset(request, instance, specs)
             context["rule_paths_url"] = reverse("users:permissionpolicy_rule_paths")
+        elif self.action == "retrieve":
+            context["alerts"] = policy_state_alerts(instance)
         return context
 
     def form_save(self, form, **kwargs):
@@ -722,6 +759,9 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
                 raise ValidationError(list(rules.non_form_errors()) or ["Correct the errors in the rules below."])
             rules.save()
             obj.refresh_from_db()
+        # A policy may be saved before it is complete (rules can also be added from their own pages), so an
+        # unassignable state is a warning here and a hard error only when an assignment is attempted.
+        warn_about_policy_state(self.request, obj)
         return obj
 
     @action(detail=False, methods=["get"], url_path="rule-paths", url_name="rule_paths", custom_view_base_action="view")

@@ -280,7 +280,14 @@ class PermissionPolicySerializer(ValidatedModelSerializer):
             self._sync(policy, policy.rules, rules, "content_type", errors, "rules")
             if errors:
                 raise ValidationError(errors)
-        # PLACEHOLDER: will be replaced in C11 (Policy definition validation): validate the policy as a whole.
+        if parameters is None and rules is None:
+            return
+        policy.refresh_from_db()
+        try:
+            policy.validate_definition()
+        except DjangoValidationError as exc:
+            # Policy-level: no rules, an unused parameter, or an undeclared placeholder (the message names the rule).
+            raise ValidationError({"non_field_errors": exc.messages})
 
 
 class UserLoginSerializer(serializers.Serializer):

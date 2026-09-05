@@ -349,6 +349,23 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         self.add_permissions("users.view_permissionpolicy")
         self.assertIn("not scoped by this parameter", self.client.get(policy.get_absolute_url()).content.decode())
 
+    def test_create_with_unused_parameter_saves_and_warns(self):
+        """A parameter no rule uses does not block saving (rules can still be added from their own page), but the
+        policy cannot be assigned and the response says so."""
+        self.add_permissions("users.add_permissionpolicy", "users.view_permissionpolicy")
+        data = {
+            **self.form_data,
+            "rules-0-constraint_template": "{}",
+            "rules-1-constraint_template": "{}",
+        }
+        response = self.client.post(self._get_url("add"), data=post_data(data), follow=True)
+        self.assertHttpStatus(response, 200)
+        policy = PermissionPolicy.objects.get(name="Policy X")
+        self.assertFalse(policy.is_assignable())
+        body = response.content.decode(response.charset)
+        self.assertIn("This policy cannot be assigned yet.", body)
+        self.assertIn("Parameter &#x27;tenant&#x27; is not used by any rule", body)
+
     def test_clone_prefills_parameters_and_rules(self):
         self.add_permissions("users.add_permissionpolicy", "users.view_permissionpolicy")
         policy = PermissionPolicy.objects.get(name="Policy 1")
@@ -453,6 +470,15 @@ class PolicyParameterTestCase(PolicyChildViewTestCases.ViewTestCase):
             "target_content_type": ContentType.objects.get_for_model(Tenant).pk,
             "multiple": False,
         }
+
+    def test_adding_a_parameter_warns_about_the_policy_state(self):
+        """A new parameter no rule uses leaves the policy unassignable; the save says so."""
+        self.add_permissions("users.add_policyparameter", "users.view_policyparameter", "users.view_permissionpolicy")
+        response = self.client.post(self._get_url("add"), data=post_data(self.form_data), follow=True)
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("This policy cannot be assigned yet.", body)
+        self.assertIn("Parameter &#x27;region&#x27; is not used by any rule", body)
 
     def test_create_form_prefills_policy_from_the_detail_page_link(self):
         self.add_permissions("users.add_policyparameter", "users.view_permissionpolicy")
