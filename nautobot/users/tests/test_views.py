@@ -1,8 +1,10 @@
 import json
 from unittest import mock
+import uuid
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import override_settings, RequestFactory
@@ -16,7 +18,7 @@ from nautobot.core.testing.utils import post_data
 from nautobot.dcim.models import Device, Interface, Location
 from nautobot.extras.models import Status
 from nautobot.tenancy.models import Tenant
-from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
+from nautobot.users.models import PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
 from nautobot.users.tests.test_policies import create_tenant_policy
 from nautobot.users.utils import serialize_user_without_config_and_views
 
@@ -420,6 +422,19 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         # The editor learns the policy's parameter names from hidden inputs in the fragment.
         self.assertIn('class="nb-rule-parameter-name" value="tenant"', body)
 
+    def test_parameter_fields_fragment(self):
+        self.add_permissions("users.view_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        url = reverse("users:permissionpolicy_parameter_fields")
+        response = self.client.get(f"{url}?policy={policy.pk}")
+        self.assertHttpStatus(response, 200)
+        self.assertIn('name="param__tenant"', response.content.decode(response.charset))
+        # No policy selected yet: the fragment is the prompt, so the form needs no script to show it.
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        self.assertIn("Select a policy", response.content.decode(response.charset))
+        self.assertHttpStatus(self.client.get(f"{url}?policy={uuid.uuid4()}"), 404)
+
     def test_detail_view_lists_rules_and_parameters(self):
         # The parameter and rule panels are permission-restricted tables of their own models.
         self.add_permissions("users.view_permissionpolicy", "users.view_policyparameter", "users.view_policyrule")
@@ -541,3 +556,61 @@ class PolicyRuleTestCase(PolicyChildViewTestCases.ViewTestCase):
         body = response.content.decode(response.charset)
         self.assertIn("device__tenant", body)
         self.assertIn(str(rule.policy), body)
+
+
+@override_settings(EXEMPT_EXCLUDE_MODELS=POLICY_TEST_EXEMPT_EXCLUDE_MODELS)
+class PolicyAssignmentTestCase(ViewTestCases.PrimaryObjectViewTestCase):
+    model = PolicyAssignment
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions("users.view_permissionpolicy")
+
+    @classmethod
+    def setUpTestData(cls):
+        policy = create_tenant_policy(name="Assignment policy")
+        tenants = list(Tenant.objects.all()[:3])
+        groups = [Group.objects.create(name=f"Group {i + 1}") for i in range(3)]
+        for i in range(3):
+            assignment = PolicyAssignment(
+                policy=policy, name=f"Assignment {i + 1}", parameter_values={"tenant": [str(tenants[i].pk)]}
+            )
+            assignment.validated_save()
+            assignment.groups.add(groups[i])
+
+        cls.form_data = {
+            "policy": policy.pk,
+            "name": "Assignment X",
+            "description": "Created through the UI",
+            "enabled": True,
+            "param__tenant": [tenants[0].pk, tenants[1].pk],
+            "groups": [groups[0].pk],
+            "users": [],
+        }
+        cls.bulk_edit_data = {"description": "Bulk edited", "enabled": False}
+
+    def test_create_object_with_constrained_permission(self):
+        super().test_create_object_with_constrained_permission()
+        assignment = PolicyAssignment.objects.get(name="Assignment X")
+        self.assertEqual(
+            set(assignment.parameter_values["tenant"]), {str(pk) for pk in self.form_data["param__tenant"]}
+        )
+
+    def test_detail_view_shows_generated_constraints(self):
+        self.add_permissions("users.view_policyassignment")
+        assignment = PolicyAssignment.objects.get(name="Assignment 1")
+        response = self.client.get(assignment.get_absolute_url())
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("generated constraints", body.lower())
+        self.assertIn("tenant__in", body)
+        self.assertIn("DCIM | device", body)  # object types listed like a Status or Tag lists its content types
+        self.assertIn("Group 1", body)  # assigned groups are listed, not the raw related manager
+        self.assertNotIn("auth.Group.None", body)
+        self.assertIn(assignment.parameter_values["tenant"][0], body)
+        # The JSON definition column is offered by the Configure drawer but hidden until the user picks it.
+        self.assertIn('value="definition"', body)
+        self.assertNotIn("dcim.device", body)
+        self.user.set_config("tables.RuleConstraintsTable.columns", ["object_types", "definition"], commit=True)
+        body = self.client.get(assignment.get_absolute_url()).content.decode(response.charset)
+        self.assertIn("dcim.device", body)

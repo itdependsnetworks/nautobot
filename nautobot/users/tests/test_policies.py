@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.db.models import ProtectedError
 from django.test import SimpleTestCase
 
 from nautobot.core.testing import TestCase
@@ -24,13 +25,14 @@ from nautobot.core.utils.permissions import qs_filter_from_constraints, validate
 from nautobot.dcim.models import Device, Interface, Location, Rack
 from nautobot.extras.models import Status
 from nautobot.tenancy.models import Tenant
-from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
+from nautobot.users.models import PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
 from nautobot.users.policies import (
     extract_placeholders,
     find_malformed_placeholders,
     PolicyRenderError,
     render_as_object_permissions,
     substitute_placeholders,
+    validate_parameter_values,
 )
 
 User = get_user_model()
@@ -399,6 +401,29 @@ class PolicyModelValidationTest(TestCase):
         rule.validated_save()
         self.assertTrue(self.policy.is_assignable())
 
+    def test_validate_parameter_values(self):
+        tenant = self.tenants[0]
+        self.assertEqual(
+            validate_parameter_values(self.policy, {"tenant": [str(tenant.pk)]}), {"tenant": [str(tenant.pk)]}
+        )
+        with self.assertRaisesRegex(ValidationError, "required"):
+            validate_parameter_values(self.policy, {})
+        with self.assertRaisesRegex(ValidationError, "non-empty list"):
+            validate_parameter_values(self.policy, {"tenant": str(tenant.pk)})
+        with self.assertRaisesRegex(ValidationError, "no tenant exists"):
+            validate_parameter_values(self.policy, {"tenant": ["00000000-0000-0000-0000-000000000000"]})
+        with self.assertRaisesRegex(ValidationError, "identifiers"):
+            validate_parameter_values(self.policy, {"tenant": ["not-a-uuid"]})
+        with self.assertRaisesRegex(ValidationError, "not a parameter"):
+            validate_parameter_values(self.policy, {"tenant": [str(tenant.pk)], "bogus": 1})
+
+    def test_policy_with_assignments_is_protected(self):
+        PolicyAssignment(
+            policy=self.policy, name="A", parameter_values={"tenant": [str(self.tenants[0].pk)]}
+        ).validated_save()
+        with self.assertRaises(ProtectedError):
+            self.policy.delete()
+
     def test_render_as_object_permissions(self):
         rules = list(self.policy.rules.select_related("content_type"))
         # Without values the placeholders stay as written, one record per distinct constraint.
@@ -442,6 +467,31 @@ class PolicyModelValidationTest(TestCase):
 
 
 seed_migration = importlib.import_module("nautobot.users.migrations.0015_permission_policy_seed_data")
+
+
+class RenderingHelpersTest(TestCase):
+    """The small rendering helpers behind the policy tables."""
+
+    def test_render_constraints(self):
+        from nautobot.users.tables import render_constraints
+
+        self.assertIn("no constraint", render_constraints([{}]))
+        self.assertIn("no constraint", render_constraints([]))
+        short = render_constraints([{"tenant__in": ["a"]}])
+        self.assertTrue(short.startswith("<code"))
+        long = render_constraints([{f"field_{index}": "x" * 20 for index in range(5)}])
+        self.assertTrue(long.startswith("<pre"))
+
+    def test_render_parameter_values(self):
+        from nautobot.users.tables import render_parameter_values
+
+        html = render_parameter_values({"tenant": ["a", "b"], "prefix": "[core]", "many": ["1", "2", "3", "4"]})
+        self.assertIn("a, b", html)
+        self.assertIn("[core]", html)
+        self.assertIn("4 values", html)
+        self.assertNotIn("6 values", html)  # a string that starts with "[" is still a string
+        self.assertIn("missing value: region", render_parameter_values({}, missing=["region"]))
+        self.assertIn("&mdash;", render_parameter_values({}))
 
 
 class ConstraintToFilterParamsTest(TestCase):
@@ -525,11 +575,15 @@ class DemoDataCommandTest(TestCase):
             self.assertTrue(user.check_password("nautobot"))
             self.assertTrue(user.groups.exists())
         policies = PermissionPolicy.objects.filter(name__startswith="demo-").count()
+        assignments = PolicyAssignment.objects.filter(name__startswith="demo-").count()
         self.assertEqual(policies, 3)
-        # PLACEHOLDER: will be replaced in C11 (Policy assignment model and stack): assignment assertions.
+        self.assertEqual(assignments, 7)
+        for policy in PermissionPolicy.objects.filter(name__startswith="demo-"):
+            self.assertTrue(policy.is_assignable(), policy.name)
 
         self._run()  # second run updates in place
         self.assertEqual(PermissionPolicy.objects.filter(name__startswith="demo-").count(), policies)
+        self.assertEqual(PolicyAssignment.objects.filter(name__startswith="demo-").count(), assignments)
 
     def test_flush_removes_demo_objects_only(self):
         self._run()
@@ -539,3 +593,4 @@ class DemoDataCommandTest(TestCase):
         self.assertFalse(PermissionPolicy.objects.filter(name__startswith="demo-").exists())
         self.assertFalse(User.objects.filter(username="job-runner").exists())
         self.assertEqual(PermissionPolicy.objects.filter(name__startswith="nautobot-default-").count(), builtin_count)
+        self.assertTrue(Tenant.objects.filter(name="Network to Code").exists())

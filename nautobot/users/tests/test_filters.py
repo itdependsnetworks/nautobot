@@ -16,6 +16,7 @@ from nautobot.users.filters import (
     GroupFilterSet,
     ObjectPermissionFilterSet,
     PermissionPolicyFilterSet,
+    PolicyAssignmentFilterSet,
     PolicyParameterFilterSet,
     PolicyRuleFilterSet,
     TokenFilterSet,
@@ -24,6 +25,7 @@ from nautobot.users.filters import (
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
@@ -49,6 +51,8 @@ class UserTestCase(FilterTestCases.FilterTestCase):
         ["object_changes", "object_changes__id"],
         ["object_permissions", "object_permissions__id"],
         ["object_permissions", "object_permissions__name"],
+        ["policy_assignments", "policy_assignments__id"],
+        ["policy_assignments", "policy_assignments__name"],
     )
 
     @classmethod
@@ -117,6 +121,18 @@ class UserTestCase(FilterTestCases.FilterTestCase):
         ]
         cls.permissions[0].users.add(cls.users[0])
         cls.permissions[1].users.add(cls.users[1])
+
+        policy = create_tenant_policy(name="User filter policy")
+        tenants = list(Tenant.objects.all()[:2])
+        cls.policy_assignments = [
+            PolicyAssignment(
+                policy=policy, name=f"User assignment {num}", parameter_values={"tenant": [str(tenants[num].pk)]}
+            )
+            for num in range(2)
+        ]
+        for num, assignment in enumerate(cls.policy_assignments):
+            assignment.validated_save()
+            assignment.users.add(cls.users[num])
 
         RackFactory.create_batch(10)
         RackReservationFactory.create_batch(5)
@@ -214,14 +230,21 @@ class PermissionPolicyTestCase(FilterTestCases.FilterTestCase):
     generic_filter_tests = (
         ["name"],
         ["description"],
+        ["assignments", "assignments__id"],
+        ["assignments", "assignments__name"],
     )
 
     @classmethod
     def setUpTestData(cls):
+        tenants = list(Tenant.objects.all()[:3])
         policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
         for i, policy in enumerate(policies):
             policy.description = f"Description {i + 1}"
             policy.save()
+            assignment = PolicyAssignment(
+                policy=policy, name=f"Assignment {i + 1}", parameter_values={"tenant": [str(tenants[i].pk)]}
+            )
+            assignment.validated_save()
         PermissionPolicy.objects.create(name="Empty policy", description="No rules")
 
     def test_content_types(self):
@@ -293,6 +316,44 @@ class PolicyRuleTestCase(FilterTestCases.FilterTestCase):
             self.filterset({"q": "interface"}, self.queryset).qs,
             self.queryset.filter(content_type__model="interface"),
         )
+
+
+class PolicyAssignmentTestCase(FilterTestCases.FilterTestCase):
+    queryset = PolicyAssignment.objects.all()
+    filterset = PolicyAssignmentFilterSet
+
+    generic_filter_tests = (
+        ["name"],
+        ["description"],
+        ["policy", "policy__id"],
+        ["policy", "policy__name"],
+        ["users", "users__id"],
+        ["users", "users__username"],
+        ["groups_id", "groups__id"],
+        ["groups", "groups__name"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        tenants = list(Tenant.objects.all()[:3])
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        groups = [Group.objects.create(name=f"Group {i + 1}") for i in range(3)]
+        users = [User.objects.create(username=f"User{i + 1}") for i in range(3)]
+        for i in range(3):
+            assignment = PolicyAssignment(
+                policy=policies[i],
+                name=f"Assignment {i + 1}",
+                description=f"Description {i + 1}",
+                enabled=i != 2,
+                parameter_values={"tenant": [str(tenants[i].pk)]},
+            )
+            assignment.validated_save()
+            assignment.groups.set([groups[i]])
+            assignment.users.set([users[i]])
+
+    def test_enabled(self):
+        self.assertEqual(self.filterset({"enabled": True}, self.queryset).qs.count(), 2)
+        self.assertEqual(self.filterset({"enabled": False}, self.queryset).qs.count(), 1)
 
 
 class TokenTestCase(FilterTestCases.FilterTestCase):

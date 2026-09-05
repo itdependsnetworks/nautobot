@@ -12,7 +12,7 @@ from django.contrib.auth import (
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.http import HttpResponse, HttpResponseForbidden, HttpResponseRedirect
+from django.http import Http404, HttpResponse, HttpResponseForbidden, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.decorators import method_decorator
@@ -28,6 +28,7 @@ from nautobot.core.constants import NAUTOBOT_EDITION_URLS
 from nautobot.core.events import publish_event
 from nautobot.core.forms import ConfirmationForm
 from nautobot.core.models.querysets import count_related
+from nautobot.core.templatetags.helpers import table_config_form
 from nautobot.core.ui import object_detail
 from nautobot.core.ui.choices import SectionChoices
 from nautobot.core.ui.titles import Titles
@@ -47,6 +48,10 @@ from nautobot.core.views.mixins import (
 )
 from nautobot.users import filters as users_filters, tables as users_tables
 from nautobot.users.api import serializers as users_serializers
+from nautobot.users.policies import (
+    PolicyRenderError,
+    render_as_object_permissions,
+)
 from nautobot.users.utils import serialize_user_without_config_and_views
 
 from ..core.views.mixins import GetReturnURLMixin
@@ -65,9 +70,13 @@ from .forms import (
     PermissionPolicyForm,
     policy_parameter_rows,
     policy_rule_rows,
+    PolicyAssignmentBulkEditForm,
+    PolicyAssignmentFilterForm,
+    PolicyAssignmentForm,
     PolicyParameterFilterForm,
     PolicyParameterForm,
     PolicyParameterFormSet,
+    PolicyPreviewForm,
     PolicyRuleFilterForm,
     PolicyRuleForm,
     PolicyRuleFormSet,
@@ -76,7 +85,7 @@ from .forms import (
     suggested_parameter_paths,
     TokenForm,
 )
-from .models import PermissionPolicy, PolicyParameter, PolicyRule, Token
+from .models import PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule, Token
 
 #
 # Login/logout
@@ -577,6 +586,52 @@ class AdvancedProfileSettingsEditView(GenericView):
 #
 
 
+class TablePanel(object_detail.Panel):
+    """
+    Render a django-tables2 table taken from the view context (`context_table_key`) in the framework's table wrapper.
+
+    For tables over computed rows rather than a model QuerySet, where `ObjectsTablePanel` does not apply. The panel
+    is omitted when the context has no table under that key.
+    """
+
+    body_wrapper_template_path = "components/panel/body_wrapper_table.html"
+    body_content_template_path = "users/inc/panel_table.html"
+    context_table_key = None
+
+    def __init__(self, *, footer_text=None, show_table_config_button=False, **kwargs):
+        """
+        Args:
+            footer_text (str): Explanatory text rendered in the panel footer, if any.
+            show_table_config_button (bool): Offer the table's Configure (columns) drawer. The table must be built
+                with `configurable=True` and the requesting `user` so that it shows the button and applies the choice.
+        """
+        super().__init__(**kwargs)
+        self.footer_text = footer_text
+        self.show_table_config_button = show_table_config_button
+        if footer_text:
+            self.footer_content_template_path = "users/inc/panel_footer_text.html"
+
+    def should_render(self, context):
+        return super().should_render(context) and context.get(self.context_table_key) is not None
+
+    def get_table_config_form_context(self, context):
+        """Context for this table's configuration drawer, picked up by the `render_table_config_forms` tag."""
+        if not self.show_table_config_button or not self.should_render(context):
+            return None
+        return table_config_form(context[self.context_table_key])
+
+    def render_table_config_form(self, context):
+        """Present so the `render_table_config_forms` tag considers this panel; rendering is done by the tag."""
+        return ""
+
+    def get_extra_context(self, context):
+        return {
+            **super().get_extra_context(context),
+            "body_content_table": context.get(self.context_table_key),
+            "footer_text": self.footer_text,
+        }
+
+
 class AlertPanel(object_detail.Panel):
     """
     Inline alerts for a detail page or tab, from the `alerts` context key: a list of `(level, text)` pairs where
@@ -683,6 +738,15 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
                 # The parameter-paths column lists, per rule, the parameters it does not use.
                 prefetch_related_fields=("policy__parameters",),
             ),
+            object_detail.ObjectsTablePanel(
+                section=SectionChoices.FULL_WIDTH,
+                weight=300,
+                table_class=users_tables.PolicyAssignmentTable,
+                table_filter="policy",
+                table_title="Assignments",
+                exclude_columns=("policy",),
+                prefetch_related_fields=("policy__parameters", "users", "groups"),
+            ),
         ),
     )
 
@@ -694,6 +758,7 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
             queryset = queryset.prefetch_related("rules__content_type").annotate(
                 parameter_count=count_related(PolicyParameter, "policy"),
                 rule_count=count_related(PolicyRule, "policy"),
+                assignment_count=count_related(PolicyAssignment, "policy"),
             )
         return queryset
 
@@ -792,6 +857,25 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
             },
         )
 
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="parameter-fields",
+        url_name="parameter_fields",
+        custom_view_base_action="view",
+    )
+    def parameter_fields(self, request, *args, **kwargs):
+        """
+        HTMX fragment: the parameter-value form fields for the policy named by `?policy=<pk>`, used by the assignment
+        form. Without a policy it renders the prompt to select one, so the form needs no script to swap the hint.
+        """
+        pk = request.GET.get("policy")
+        policy = PermissionPolicy.objects.restrict(request.user, "view").filter(pk=pk).first() if pk else None
+        if pk and policy is None:
+            raise Http404
+        fields = list(PolicyPreviewForm(policy)) if policy is not None else None
+        return render(request, "users/inc/assignment_parameter_fields.html", {"policy": policy, "fields": fields})
+
 
 class PolicyParameterUIViewSet(PolicyChildUIViewSetBase):
     filterset_class = users_filters.PolicyParameterFilterSet
@@ -841,3 +925,101 @@ class PolicyRuleUIViewSet(PolicyChildUIViewSetBase):
         if self.action in ("create", "update"):
             context["rule_paths_url"] = reverse("users:permissionpolicy_rule_paths")
         return context
+
+
+class PolicyAssignmentUIViewSet(PolicyUIViewSetBase):
+    bulk_update_form_class = PolicyAssignmentBulkEditForm
+    filterset_class = users_filters.PolicyAssignmentFilterSet
+    filterset_form_class = PolicyAssignmentFilterForm
+    form_class = PolicyAssignmentForm
+    queryset = PolicyAssignment.objects.all()
+    serializer_class = users_serializers.PolicyAssignmentSerializer
+    table_class = users_tables.PolicyAssignmentTable
+
+    def get_queryset(self):
+        queryset = super().get_queryset().select_related("policy")
+        if self.action in ("list", "bulk_update", "bulk_destroy"):
+            # The table shows users, groups and the "missing value" badges, which read the policy's parameters.
+            queryset = queryset.prefetch_related("users", "groups", "policy__parameters")
+        elif self.action in ("retrieve", "preview"):
+            queryset = queryset.prefetch_related("users", "groups", "policy__parameters", "policy__rules")
+        return queryset
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            AlertPanel(section=SectionChoices.FULL_WIDTH, weight=50),
+            object_detail.ObjectFieldsPanel(
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("name", "policy", "enabled", "description"),
+            ),
+            object_detail.KeyValueTablePanel(
+                section=SectionChoices.LEFT_HALF,
+                weight=200,
+                label="Parameter values",
+                context_data_key="parameter_value_objects",
+            ),
+            object_detail.KeyValueTablePanel(
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                label="Assigned to",
+                context_data_key="assigned_to",
+            ),
+            TablePanel(
+                section=SectionChoices.FULL_WIDTH,
+                weight=300,
+                label="Generated constraints",
+                context_table_key="generated_constraints_table",
+                show_table_config_button=True,
+                footer_text=(
+                    "Each row is one object permission record: what an administrator would otherwise create by hand. "
+                    "Rules with identical actions and constraints share a row listing all of their object types. The "
+                    "Configure button offers a column with each record as JSON in the shape the object permissions "
+                    "REST API accepts."
+                ),
+            ),
+        ),
+    )
+
+    def get_extra_context(self, request, instance):
+        context = super().get_extra_context(request, instance)
+        if self.action == "retrieve":
+            values = {}
+            for name, value in instance.get_parameter_objects().items():
+                if isinstance(value, list):
+                    model = type(value[0]) if value else None
+                    if model is not None and hasattr(model._default_manager, "restrict"):
+                        values[name] = model._default_manager.restrict(request.user, "view").filter(
+                            pk__in=[obj.pk for obj in value]
+                        )
+                    else:
+                        values[name] = value
+                else:
+                    values[name] = value
+            context["parameter_value_objects"] = values
+            context["assigned_to"] = {
+                "users": instance.users.all().order_by("username"),
+                "groups": instance.groups.all().order_by("name"),
+            }
+            context["generated_constraints_table"] = self._generated_constraints_table(request, context, instance)
+        elif self.action == "create":
+            context["parameter_fields_url"] = reverse("users:permissionpolicy_parameter_fields")
+        return context
+
+    @staticmethod
+    def _generated_constraints_table(request, context, assignment):
+        try:
+            records = render_as_object_permissions(
+                assignment.policy.rules.select_related("content_type"),
+                assignment.parameter_values or {},
+                name=assignment.name,
+                enabled=assignment.enabled,
+            )
+        except PolicyRenderError as exc:
+            context.setdefault("alerts", []).append(("danger", f"This assignment cannot be rendered: {exc}"))
+            return None
+        table = users_tables.RuleConstraintsTable(
+            users_tables.RuleConstraintsTable.rows_from_records(records), user=request.user, configurable=True
+        )
+        table.request = request
+        return table

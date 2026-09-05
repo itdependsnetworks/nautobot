@@ -15,11 +15,13 @@ import json
 import logging
 
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 
 from nautobot.core.utils.permissions import (
     CONSTRAINT_PLACEHOLDER_PATTERN,
     normalize_constraints,
 )
+from nautobot.users.choices import PolicyParameterKindChoices
 
 logger = logging.getLogger(__name__)
 
@@ -224,3 +226,85 @@ def permission_names_for_rule(rule):
 def render_rule_constraints(rule, parameter_values):
     """Render one `PolicyRule` into a list of constraint dicts using `parameter_values`."""
     return substitute_placeholders(rule.constraint_template, parameter_values)
+
+
+#
+# Parameter values
+#
+
+
+def validate_parameter_values(policy, values):
+    """
+    Validate and normalize the `parameter_values` of an assignment (or a preview request) against `policy`.
+
+    Args:
+        policy (PermissionPolicy): The policy that declares the parameters.
+        values (dict): Supplied values keyed by parameter name.
+
+    Returns:
+        (dict): Normalized values: lists for `multiple` parameters, scalars otherwise; object primary keys
+            as strings (integers for integer primary keys).
+
+    Raises:
+        ValidationError: With one message per problem, each naming the parameter.
+    """
+    if values is None:
+        values = {}
+    if not isinstance(values, dict):
+        raise ValidationError("Parameter values must be a JSON object keyed by parameter name.")
+
+    parameters = {parameter.name: parameter for parameter in policy.parameters.all()}
+    errors = []
+    normalized = {}
+
+    for name in sorted(set(values) - set(parameters)):
+        errors.append(f"'{name}' is not a parameter of policy '{policy.name}'.")
+
+    for name, parameter in parameters.items():
+        if name not in values:
+            errors.append(f"A value for parameter '{name}' is required.")
+            continue
+        value = values[name]
+        if parameter.multiple:
+            if not isinstance(value, list) or not value:
+                errors.append(f"Parameter '{name}' accepts multiple values and requires a non-empty list.")
+                continue
+            items = value
+        else:
+            if isinstance(value, list):
+                errors.append(f"Parameter '{name}' accepts a single value, not a list.")
+                continue
+            items = [value]
+
+        if parameter.kind == PolicyParameterKindChoices.KIND_STRING:
+            if not all(isinstance(item, str) and item != "" for item in items):
+                errors.append(f"Parameter '{name}' requires a non-empty string value.")
+                continue
+            normalized[name] = items if parameter.multiple else items[0]
+            continue
+
+        target_model = parameter.target_content_type.model_class() if parameter.target_content_type_id else None
+        if target_model is None:
+            errors.append(f"Parameter '{name}' references an object type that is not installed.")
+            continue
+        pk_field = target_model._meta.pk
+        coerced = []
+        try:
+            for item in items:
+                pk_value = pk_field.to_python(item)
+                coerced.append(pk_value if isinstance(pk_value, int) else str(pk_value))
+        except (ValidationError, ValueError, TypeError):
+            errors.append(f"Parameter '{name}' requires {target_model._meta.verbose_name} identifiers.")
+            continue
+        found = set(str(pk) for pk in target_model._default_manager.filter(pk__in=coerced).values_list("pk", flat=True))
+        missing = [str(pk) for pk in coerced if str(pk) not in found]
+        if missing:
+            errors.append(
+                f"Parameter '{name}': no {target_model._meta.verbose_name} exists with identifier {', '.join(missing)}."
+            )
+            continue
+        normalized[name] = coerced if parameter.multiple else coerced[0]
+
+    if errors:
+        raise ValidationError(errors)
+    return normalized

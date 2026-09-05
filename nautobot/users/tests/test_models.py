@@ -8,6 +8,7 @@ from nautobot.core.testing.models import ModelTestCases
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
@@ -47,6 +48,19 @@ class PolicyRuleTest(ModelTestCases.BaseModelTestCase):
     @classmethod
     def setUpTestData(cls):
         create_tenant_policy(name="Model test policy")
+
+
+class PolicyAssignmentTest(ModelTestCases.BaseModelTestCase):
+    model = PolicyAssignment
+
+    @classmethod
+    def setUpTestData(cls):
+        from nautobot.tenancy.models import Tenant
+
+        policy = create_tenant_policy(name="Model test policy")
+        PolicyAssignment(
+            policy=policy, name="Model test assignment", parameter_values={"tenant": [str(Tenant.objects.first().pk)]}
+        ).validated_save()
 
 
 class TokenTest(ModelTestCases.BaseModelTestCase):

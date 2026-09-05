@@ -49,6 +49,18 @@ menu_items = (
                             ),
                         ),
                     ),
+                    NavMenuItem(
+                        link="users:policyassignment_list",
+                        name="Policy Assignments",
+                        weight=500,
+                        permissions=["users.view_policyassignment"],
+                        buttons=(
+                            NavMenuAddButton(
+                                link="users:policyassignment_add",
+                                permissions=["users.add_policyassignment"],
+                            ),
+                        ),
+                    ),
                 ),
             ),
         ),

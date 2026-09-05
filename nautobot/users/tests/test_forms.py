@@ -6,9 +6,11 @@ from nautobot.tenancy.models import Tenant
 from nautobot.users.forms import (
     parameter_specs_from_policy,
     PolicyParameterForm,
+    PolicyPreviewForm,
     PolicyRuleForm,
     PolicyRuleFormSet,
 )
+from nautobot.users.models import PolicyParameter
 from nautobot.users.tests.test_policies import create_tenant_policy
 
 
@@ -142,3 +144,16 @@ class PolicyRuleFormTest(TestCase):
         )
         self.assertFalse(formset.is_valid())
         self.assertIn("more than one rule", str(formset.non_form_errors()))
+
+
+class ParameterFieldStylingTest(TestCase):
+    def test_string_parameter_inputs_are_styled_like_the_rest_of_the_form(self):
+        policy = create_tenant_policy()
+        PolicyParameter.objects.create(policy=policy, name="prefix", kind="string")
+        form = PolicyPreviewForm(policy)
+        prefix_attrs = form.fields["param__prefix"].widget.attrs
+        self.assertIn("form-control", prefix_attrs["class"])
+        self.assertEqual(prefix_attrs["placeholder"], "prefix")
+        self.assertEqual(prefix_attrs["aria-label"], "prefix")
+        # Object parameters use the API select widget, which brings its own classes.
+        self.assertNotIn("form-control", form.fields["param__tenant"].widget.attrs.get("class", ""))

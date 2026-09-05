@@ -18,6 +18,7 @@ router.register("permissions", views.ObjectPermissionViewSet)
 router.register("permission-policies", views.PermissionPolicyViewSet)
 router.register("policy-parameters", views.PolicyParameterViewSet)
 router.register("policy-rules", views.PolicyRuleViewSet)
+router.register("permission-policy-assignments", views.PolicyAssignmentViewSet)
 
 # User preferences
 router.register("config", views.UserConfigViewSet, basename="userconfig")

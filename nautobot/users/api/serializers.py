@@ -19,10 +19,12 @@ from nautobot.users.models import (
     ObjectPermission,
     PERMISSION_OBJECT_TYPE_LIMIT_CHOICES,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
 )
+from nautobot.users.policies import validate_parameter_values
 
 
 class UserSerializer(ValidatedModelSerializer):
@@ -204,12 +206,19 @@ class PermissionPolicySerializer(ValidatedModelSerializer):
 
     parameters = PolicyParameterChildSerializer(many=True, required=False)
     rules = PolicyRuleChildSerializer(many=True, required=False)
+    assignment_count = serializers.SerializerMethodField()
 
     class Meta:
         model = PermissionPolicy
         fields = "__all__"
         # Nested lists are treated like M2M fields: shown by default here, hidden with `?exclude_m2m=true`.
         default_m2m_fields = ("parameters", "rules")
+
+    def get_assignment_count(self, obj):
+        count = getattr(obj, "assignment_count", None)
+        if count is None:
+            count = obj.assignments.count()
+        return count
 
     def validate(self, attrs):
         nested = {key: attrs.pop(key) for key in ("parameters", "rules") if key in attrs}
@@ -288,6 +297,23 @@ class PermissionPolicySerializer(ValidatedModelSerializer):
         except DjangoValidationError as exc:
             # Policy-level: no rules, an unused parameter, or an undeclared placeholder (the message names the rule).
             raise ValidationError({"non_field_errors": exc.messages})
+
+
+class PolicyAssignmentSerializer(ValidatedModelSerializer):
+    parameter_values = serializers.JSONField(required=False)
+
+    class Meta:
+        model = PolicyAssignment
+        fields = "__all__"
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)  # runs the model's clean(), so the values are known to be valid here
+        policy = attrs.get("policy", getattr(self.instance, "policy", None))
+        if policy is not None and ("parameter_values" in attrs or "policy" in attrs):
+            values = attrs.get("parameter_values", getattr(self.instance, "parameter_values", None))
+            # Store the canonical shape (pks as strings, lists for multi-valued parameters), as the UI form does.
+            attrs["parameter_values"] = validate_parameter_values(policy, values)
+        return attrs
 
 
 class UserLoginSerializer(serializers.Serializer):

@@ -16,6 +16,7 @@ from nautobot.extras.models import ObjectChange
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
@@ -25,6 +26,7 @@ __all__ = (
     "GroupFilterSet",
     "ObjectPermissionFilterSet",
     "PermissionPolicyFilterSet",
+    "PolicyAssignmentFilterSet",
     "PolicyParameterFilterSet",
     "PolicyRuleFilterSet",
     "TokenFilterSet",
@@ -77,6 +79,14 @@ class UserFilterSet(BaseFilterSet):
     object_permissions = NaturalKeyOrPKMultipleChoiceFilter(
         to_field_name="name",
         queryset=ObjectPermission.objects.all(),
+    )
+    has_policy_assignments = RelatedMembershipBooleanFilter(
+        field_name="policy_assignments",
+        label="Has policy assignments",
+    )
+    policy_assignments = NaturalKeyOrPKMultipleChoiceFilter(
+        to_field_name="name",
+        queryset=PolicyAssignment.objects.all(),
     )
     has_rack_reservations = RelatedMembershipBooleanFilter(
         field_name="rack_reservations",
@@ -150,6 +160,14 @@ class PermissionPolicyFilterSet(BaseFilterSet, NameSearchFilterSet):
         field_name="rules",
         label="Has rules",
     )
+    has_assignments = RelatedMembershipBooleanFilter(
+        field_name="assignments",
+        label="Has assignments",
+    )
+    assignments = NaturalKeyOrPKMultipleChoiceFilter(
+        to_field_name="name",
+        queryset=PolicyAssignment.objects.all(),
+    )
 
     class Meta:
         model = PermissionPolicy
@@ -180,3 +198,31 @@ class PolicyRuleFilterSet(BaseFilterSet):
     class Meta:
         model = PolicyRule
         fields = ["id"]
+
+
+class PolicyAssignmentFilterSet(BaseFilterSet, NameSearchFilterSet):
+    policy = NaturalKeyOrPKMultipleChoiceFilter(
+        to_field_name="name",
+        queryset=PermissionPolicy.objects.all(),
+    )
+    users = NaturalKeyOrPKMultipleChoiceFilter(
+        queryset=get_user_model().objects.all(),
+        to_field_name="username",
+    )
+    # TODO(timizuo): Collapse groups_id and groups into single NaturalKeyOrPKMultipleChoiceFilter; This cant be done now
+    #  because Group uses integer as its pk field and NaturalKeyOrPKMultipleChoiceFilter do not properly handle this yet
+    groups_id = ModelMultipleChoiceFilter(
+        field_name="groups",
+        queryset=Group.objects.all(),
+        label="Group (ID)",
+    )
+    groups = ModelMultipleChoiceFilter(
+        field_name="groups__name",
+        queryset=Group.objects.all(),
+        to_field_name="name",
+        label="Group (name)",
+    )
+
+    class Meta:
+        model = PolicyAssignment
+        fields = ["id", "name", "enabled", "description"]

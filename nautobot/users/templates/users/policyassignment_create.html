@@ -1,0 +1,60 @@
+{% extends 'generic/object_create.html' %}
+{% load form_helpers %}
+
+{% block form %}
+    <div class="card">
+        <div class="card-header"><strong>Policy Assignment</strong></div>
+        <div class="card-body">
+            {% render_field form.policy %}
+            {% render_field form.name %}
+            {% render_field form.description %}
+            {% render_field form.enabled %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header"><strong>Parameter values</strong></div>
+        <div class="card-body">
+            <div id="nb-assignment-parameter-fields"
+                 data-policy="{{ form.selected_policy.pk|default:'' }}"
+                 {% if parameter_fields_url %}
+                 hx-get="{{ parameter_fields_url }}"
+                 hx-include="#id_policy"
+                 hx-trigger="change[window.nbPolicyChanged(this, event)] from:#id_policy"
+                 hx-on::after-request="this.dataset.policy = document.getElementById('id_policy').value || ''"
+                 hx-target="this"
+                 hx-swap="innerHTML"
+                 hx-on::after-swap="if (window.jsify_form) jsify_form(this);"
+                 {% endif %}>
+                {% for field in form.parameter_fields %}
+                    {% render_field field %}
+                {% empty %}
+                    <div class="col-md-9 offset-md-3 text-secondary small">
+                        {% if form.selected_policy %}This policy declares no parameters.{% else %}Select a policy to enter its parameter values.{% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header"><strong>Assigned to</strong></div>
+        <div class="card-body">
+            {% render_field form.users %}
+            {% render_field form.groups %}
+        </div>
+    </div>
+{% endblock form %}
+
+{% block javascript %}
+    {{ block.super }}
+    <script type="text/javascript">
+        // Only re-fetch the parameter fields when the policy actually changed: a re-rendered form (validation
+        // errors) must keep its error messages, and select2 initialization also emits change events.
+        window.nbPolicyChanged = function (wrapper, event) {
+            return (event.target.value || "") !== (wrapper.dataset.policy || "");
+        };
+        // select2 fires only jQuery events; re-broadcast a native change so the HTMX trigger above sees it.
+        $(document).on("select2:select select2:clear", "#id_policy", function () {
+            this.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+    </script>
+{% endblock javascript %}

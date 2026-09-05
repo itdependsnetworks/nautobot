@@ -1,0 +1,10 @@
+{% load form_helpers %}
+{% if not policy %}
+    <div class="col-md-9 offset-md-3 text-secondary small">Select a policy to enter its parameter values.</div>
+{% else %}
+    {% for field in fields %}
+        {% render_field field %}
+    {% empty %}
+        <div class="col-md-9 offset-md-3 text-secondary small">This policy declares no parameters.</div>
+    {% endfor %}
+{% endif %}

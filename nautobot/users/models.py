@@ -31,6 +31,7 @@ __all__ = (
     "AdminGroup",
     "ObjectPermission",
     "PermissionPolicy",
+    "PolicyAssignment",
     "PolicyParameter",
     "PolicyRule",
     "Token",
@@ -719,3 +720,64 @@ class PolicyRule(BaseModel, ChangeLoggedModel):
             errors["constraint_template"] = template_errors
         if errors:
             raise ValidationError(errors)
+
+
+class PolicyAssignment(BaseModel, ChangeLoggedModel):
+    """
+    Binds a `PermissionPolicy` to parameter values and to the users and groups that receive the access.
+
+    Nautobot renders the assignment into constraints during permission resolution. Deleting or disabling an
+    assignment ends the access at the next permission check; there is nothing to clean up.
+    """
+
+    policy = models.ForeignKey(
+        to="users.PermissionPolicy",
+        on_delete=models.PROTECT,  # a policy with assignments must not be deleted out from under them
+        related_name="assignments",
+    )
+    name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, unique=True)
+    description = models.CharField(max_length=CHARFIELD_MAX_LENGTH, blank=True)
+    enabled = models.BooleanField(default=True)
+    parameter_values = models.JSONField(
+        encoder=DjangoJSONEncoder,
+        blank=True,
+        default=dict,
+        help_text="For each policy parameter, the supplied value (a list if the parameter accepts multiple values). "
+        "Object parameters store primary keys.",
+    )
+    groups = models.ManyToManyField(to=Group, blank=True, related_name="policy_assignments")
+    users = models.ManyToManyField(to=settings.AUTH_USER_MODEL, blank=True, related_name="policy_assignments")
+
+    documentation_static_path = "docs/user-guide/platform-functionality/users/policyassignment.html"
+    is_metadata_associable_model = False
+    natural_key_field_names = ["name"]
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "policy assignment"
+
+    def __str__(self):
+        return self.name
+
+    def get_parameter_objects(self):
+        """
+        Resolve object-kind parameter values to model instances for display.
+
+        Returns:
+            (dict): Parameter name to a list of instances (object parameters) or to the stored value (strings).
+        """
+        result = {}
+        for parameter in self.policy.parameters.all():
+            value = (self.parameter_values or {}).get(parameter.name)
+            if parameter.kind != PolicyParameterKindChoices.KIND_OBJECT or value is None:
+                result[parameter.name] = value
+                continue
+            target = (
+                ContentType.objects.get_for_id(parameter.target_content_type_id)
+                if parameter.target_content_type_id
+                else None
+            )
+            model = target.model_class() if target else None
+            pks = value if isinstance(value, list) else [value]
+            result[parameter.name] = list(model._default_manager.filter(pk__in=pks)) if model else []
+        return result

@@ -1,11 +1,14 @@
 from collections import namedtuple
+import re
 
 from django import forms
+from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import (
     AdminPasswordChangeForm as _AdminPasswordChangeForm,
     AuthenticationForm,
     PasswordChangeForm as DjangoPasswordChangeForm,
 )
+from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.forms import inlineformset_factory
@@ -17,6 +20,7 @@ from nautobot.core.forms import (
     BOOLEAN_WITH_BLANK_CHOICES,
     BootstrapMixin,
     BulkEditForm,
+    BulkEditNullBooleanSelect,
     ConstraintEditorField,
     DateTimePicker,
     DynamicModelChoiceField,
@@ -24,7 +28,7 @@ from nautobot.core.forms import (
     MultipleContentTypeField,
     MultiValueCharField,
 )
-from nautobot.core.forms.widgets import StaticSelect2, StaticSelect2Multiple
+from nautobot.core.forms.widgets import APISelect, APISelectMultiple, StaticSelect2, StaticSelect2Multiple
 from nautobot.core.models.tree_queries import TreeModel
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.core.utils.orm_paths import find_relation_paths, split_path_and_lookup
@@ -36,6 +40,7 @@ from nautobot.users.utils import serialize_user_without_config_and_views
 from .models import (
     PERMISSION_OBJECT_TYPE_LIMIT_CHOICES,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
@@ -196,6 +201,64 @@ def suggested_parameter_paths(content_type, parameter_specs):
             continue
         suggestions.append((spec, lookup, find_relation_paths(model, target_model)))
     return suggestions
+
+
+def add_parameter_fields(form, policy, prefix="param__", initial=None):
+    """
+    Add one form field per parameter of `policy` to `form`, for entering parameter values.
+
+    Object parameters render as API-backed object selectors on the target model; string parameters as text inputs.
+    Multi-valued parameters accept several values.
+    """
+    initial = initial or {}
+    if policy is None:
+        return
+    for parameter in policy.parameters.all():
+        field_name = f"{prefix}{parameter.name}"
+        value = initial.get(parameter.name)
+        if parameter.kind == PolicyParameterKindChoices.KIND_OBJECT:
+            model = parameter.target_content_type.model_class() if parameter.target_content_type_id else None
+            if model is None:
+                continue
+            field_class = DynamicModelMultipleChoiceField if parameter.multiple else DynamicModelChoiceField
+            field = field_class(queryset=model._default_manager.all(), required=True)
+            help_text = f"{model._meta.verbose_name_plural if parameter.multiple else model._meta.verbose_name}"
+        else:
+            field = MultiValueCharField(required=True) if parameter.multiple else forms.CharField(required=True)
+            help_text = "text values" if parameter.multiple else "text value"
+        field.label = parameter.name
+        field.help_text = f"Parameter '{parameter.name}': {help_text}"
+        if value is not None:
+            field.initial = value
+        # These fields are added after `BootstrapMixin.__init__` has styled the form, so style them the same way.
+        attrs = field.widget.attrs
+        if not isinstance(field.widget, (APISelect, APISelectMultiple)):
+            attrs["class"] = " ".join(filter(None, [attrs.get("class", ""), "form-control"]))
+        attrs.setdefault("placeholder", parameter.name)
+        attrs.setdefault("aria-label", parameter.name)
+        # Validate on the server: the HTML `required` attribute on a select2 control makes the browser block the
+        # submission without any visible message.
+        field.widget.use_required_attribute = lambda initial: False
+        form.fields[field_name] = field
+
+
+def parameter_values_from_cleaned_data(cleaned_data, policy, prefix="param__"):
+    """Collect the `parameter_values` dict for `policy` from a form's cleaned data."""
+    values = {}
+    if policy is None:
+        return values
+    for parameter in policy.parameters.all():
+        value = cleaned_data.get(f"{prefix}{parameter.name}")
+        if value is None or value == "" or value == []:
+            continue
+        if parameter.kind == PolicyParameterKindChoices.KIND_OBJECT:
+            if parameter.multiple:
+                values[parameter.name] = [str(obj.pk) for obj in value]
+            else:
+                values[parameter.name] = str(value.pk)
+        else:
+            values[parameter.name] = list(value) if parameter.multiple else value
+    return values
 
 
 def _drop_required_attribute(form):
@@ -487,7 +550,7 @@ class PermissionPolicyBulkEditForm(BootstrapMixin, BulkEditForm):
 
 class PermissionPolicyFilterForm(NautobotFilterForm):
     model = PermissionPolicy
-    field_order = ["q", "name", "content_types"]
+    field_order = ["q", "name", "content_types", "has_assignments"]
 
     q = forms.CharField(required=False, label="Search")
     name = MultiValueCharField(required=False)
@@ -495,6 +558,10 @@ class PermissionPolicyFilterForm(NautobotFilterForm):
         required=False,
         label="Object types",
         queryset=ContentType.objects.filter(PERMISSION_OBJECT_TYPE_LIMIT_CHOICES),
+    )
+    has_assignments = forms.NullBooleanField(
+        required=False,
+        widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES),
     )
 
 
@@ -532,3 +599,97 @@ class PolicyRuleFilterForm(NautobotFilterForm):
         label="Object type",
         widget=StaticSelect2(),
     )
+
+
+class PolicyAssignmentForm(BootstrapMixin, forms.ModelForm):
+    """
+    Bind a policy to parameter values and to users and groups.
+
+    Parameter value fields are generated from the selected policy. On the create form they are swapped in over
+    HTMX when the policy changes; on the edit form the policy cannot change.
+    """
+
+    policy = DynamicModelChoiceField(
+        queryset=PermissionPolicy.objects.all(),
+        query_params={"has_rules": True},
+    )
+    users = DynamicModelMultipleChoiceField(queryset=get_user_model().objects.all(), required=False)
+    groups = DynamicModelMultipleChoiceField(queryset=Group.objects.all(), required=False)
+    # Derived in clean() from the per-parameter fields; present so model validation errors attach to the form.
+    parameter_values = forms.JSONField(required=False, widget=forms.HiddenInput())
+
+    class Meta:
+        model = PolicyAssignment
+        fields = ("policy", "name", "description", "enabled", "users", "groups", "parameter_values")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.selected_policy = self._resolve_policy()
+        if self.instance.present_in_database:
+            self.fields["policy"].disabled = True
+        add_parameter_fields(self, self.selected_policy, initial=self.instance.parameter_values or {})
+
+    def _resolve_policy(self):
+        return _policy_from_form(self)
+
+    @property
+    def parameter_fields(self):
+        """The bound parameter-value fields, for rendering as a group."""
+        return [self[name] for name in self.fields if name.startswith("param__")]
+
+    def clean(self):
+        super().clean()
+        policy = self.cleaned_data.get("policy") or self.selected_policy
+        self.cleaned_data["parameter_values"] = (
+            parameter_values_from_cleaned_data(self.cleaned_data, policy) if policy is not None else {}
+        )
+        return self.cleaned_data
+
+    def _post_clean(self):
+        super()._post_clean()
+        # Model validation reports value problems against the hidden `parameter_values` field; show each message
+        # beside the parameter it names (the messages quote the parameter name) so the author can see it.
+        for message in self._errors.pop("parameter_values", []):
+            match = re.search(r"'([a-z][a-z0-9_]*)'", str(message))
+            target = f"param__{match.group(1)}" if match else None
+            if target in self.fields and message not in self.errors.get(target, []):
+                self.add_error(target, message)
+            elif target not in self.fields:
+                self.add_error(None, message)
+
+
+class PolicyAssignmentBulkEditForm(BootstrapMixin, BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(queryset=PolicyAssignment.objects.all(), widget=forms.MultipleHiddenInput())
+    enabled = forms.NullBooleanField(required=False, widget=BulkEditNullBooleanSelect())
+    description = forms.CharField(max_length=255, required=False)
+
+    class Meta:
+        nullable_fields = ["description"]
+
+
+class PolicyAssignmentFilterForm(NautobotFilterForm):
+    model = PolicyAssignment
+    field_order = ["q", "name", "policy", "enabled", "users", "groups"]
+
+    q = forms.CharField(required=False, label="Search")
+    name = MultiValueCharField(required=False)
+    policy = DynamicModelMultipleChoiceField(
+        queryset=PermissionPolicy.objects.all(), to_field_name="name", required=False
+    )
+    enabled = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+    users = DynamicModelMultipleChoiceField(
+        queryset=get_user_model().objects.all(), to_field_name="username", required=False
+    )
+    groups = DynamicModelMultipleChoiceField(queryset=Group.objects.all(), to_field_name="name", required=False)
+
+
+class PolicyPreviewForm(BootstrapMixin, forms.Form):
+    """Parameter values for previewing a policy before it is assigned."""
+
+    def __init__(self, policy, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.policy = policy
+        add_parameter_fields(self, policy)
+
+    def cleaned_parameter_values(self):
+        return parameter_values_from_cleaned_data(self.cleaned_data, self.policy)

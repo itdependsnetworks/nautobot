@@ -11,10 +11,12 @@ from rest_framework import HTTP_HEADER_ENCODING, status
 
 from nautobot.core.testing import APITestCase, APIViewTestCases, get_deletable_objects
 from nautobot.core.utils.data import deepmerge
+from nautobot.tenancy.models import Tenant
 from nautobot.users.filters import GroupFilterSet
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
@@ -521,6 +523,17 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
         cls.update_data = {"name": "Policy X", "description": "Updated"}
         cls.bulk_update_data = {"description": "New description"}
 
+    def test_nested_create_generates_template_and_reports_children(self):
+        self.add_permissions("users.add_permissionpolicy")
+        response = self.client.post(self._get_list_url(), self.create_data[0], format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        policy = PermissionPolicy.objects.get(name="Policy 4")
+        device_rule = policy.rules.get(content_type__model="device")
+        self.assertEqual(device_rule.constraint_template, {"tenant__in": "{{ tenant }}"})
+        self.assertEqual(len(response.data["parameters"]), 1)
+        self.assertEqual(len(response.data["rules"]), 2)
+        self.assertEqual(response.data["assignment_count"], 0)
+
     def test_nested_update_upserts_children(self):
         self.add_permissions("users.change_permissionpolicy")
         policy = PermissionPolicy.objects.get(name="Policy 1")
@@ -787,6 +800,94 @@ class PolicyRuleTest(PolicyReferenceMixin, APIViewTestCases.APIViewTestCase):
         response = self.client.post(self._get_list_url(), data, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertIn("dcim.location", str(response.data))
+
+
+class PolicyAssignmentTest(APIViewTestCases.APIViewTestCase):
+    model = PolicyAssignment
+    validation_excluded_fields = ["groups", "users"]
+
+    def _allow_policy_reference(self):
+        # PermissionPolicy is excluded from wildcard view exemption, so referencing one needs explicit permission.
+        self.add_permissions("users.view_permissionpolicy")
+
+    def test_create_object(self):
+        self._allow_policy_reference()
+        super().test_create_object()
+
+    def test_bulk_create_objects(self):
+        self._allow_policy_reference()
+        super().test_bulk_create_objects()
+
+    def test_update_object(self):
+        self._allow_policy_reference()
+        super().test_update_object()
+
+    def test_get_put_round_trip(self):
+        self._allow_policy_reference()
+        super().test_get_put_round_trip()
+
+    def test_recreate_object_csv(self):
+        self._allow_policy_reference()
+        super().test_recreate_object_csv()
+
+    @classmethod
+    def setUpTestData(cls):
+        policy = create_tenant_policy(name="Assignment policy")
+        tenants = list(Tenant.objects.all()[:3])
+        groups = [Group.objects.create(name=f"Group {i + 1}") for i in range(3)]
+        users = [User.objects.create(username=f"User {i + 1}", is_active=True) for i in range(3)]
+        for i in range(3):
+            assignment = PolicyAssignment(
+                policy=policy, name=f"Assignment {i + 1}", parameter_values={"tenant": [str(tenants[i].pk)]}
+            )
+            assignment.validated_save()
+            assignment.groups.add(groups[i])
+            assignment.users.add(users[i])
+
+        cls.create_data = [
+            {
+                "name": f"Assignment {i + 4}",
+                "policy": policy.pk,
+                "enabled": True,
+                "parameter_values": {"tenant": [str(tenants[i].pk)]},
+                "groups": [groups[i].pk],
+                "users": [users[i].pk],
+            }
+            for i in range(3)
+        ]
+        cls.bulk_update_data = {"description": "New description"}
+
+    def test_parameter_values_are_stored_normalized(self):
+        """Whatever shape the client sends, the stored values use string pks and lists for multi-valued parameters."""
+        self._allow_policy_reference()
+        self.add_permissions("users.change_policyassignment")
+        assignment = PolicyAssignment.objects.get(name="Assignment 1")
+        tenant = Tenant.objects.last()
+        data = {"parameter_values": {"tenant": [str(tenant.pk).upper()]}}  # a valid but non-canonical pk spelling
+        response = self.client.patch(self._get_detail_url(assignment), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.parameter_values, {"tenant": [str(tenant.pk)]})
+
+    def test_constraints_action(self):
+        self.add_permissions("users.view_policyassignment")
+        assignment = PolicyAssignment.objects.get(name="Assignment 1")
+        url = reverse("users-api:policyassignment-constraints", kwargs={"pk": assignment.pk})
+        response = self.client.get(url, **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        by_type = {rule["content_type"]: rule for rule in response.data["rules"]}
+        self.assertEqual(by_type["dcim.device"]["constraints"], [{"tenant__in": assignment.parameter_values["tenant"]}])
+        self.assertEqual(by_type["dcim.device"]["permissions"], ["dcim.view_device"])
+        self.assertEqual(response.data["policy"]["name"], "Assignment policy")
+
+    # TODO: Unskip after resolving #2908, #2909
+    @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")
+    def test_list_objects_ascending_ordered(self):
+        pass
+
+    @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")
+    def test_list_objects_descending_ordered(self):
+        pass
 
 
 class UserConfigTest(APITestCase):

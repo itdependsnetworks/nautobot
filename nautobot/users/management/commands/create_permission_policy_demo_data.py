@@ -9,11 +9,14 @@ import importlib
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from nautobot.dcim.models import Location, LocationType
+from nautobot.extras.models import Job, Status
+from nautobot.tenancy.models import Tenant
 from nautobot.users.choices import PolicyParameterKindChoices
-from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
+from nautobot.users.models import PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
 
 DEMO_PASSWORD = "nautobot"  # noqa: S105  # deliberately well-known: demo data for development environments
 DEMO_PREFIX = "demo-"
@@ -56,10 +59,11 @@ class Command(BaseCommand):
             self.ensure_builtin_policies()
             groups = {name: Group.objects.get_or_create(name=name)[0] for _, (name, _) in DEMO_USERS.items()}
             self.create_users(groups)
+            self.create_tenant_assignment(groups["network-to-code"])
             self.create_regional_it(groups)
             self.create_telco_owner(groups["telco"])
             self.create_job_runner(groups["job-runners"])
-            # PLACEHOLDER: will be replaced in C11 (Policy assignment model and stack): the demo assignments.
+            self.create_reference_data_assignment(groups.values())
         self.print_summary()
 
     # ----- helpers ------------------------------------------------------------------------------------------
@@ -119,7 +123,31 @@ class Command(BaseCommand):
         """Delete rules of `policy` that this run did not (re)create."""
         policy.rules.exclude(pk__in=self._touched_rules.get(policy.pk, set())).delete()
 
+    def assignment(self, name, policy, parameter_values, groups, description=""):
+        assignment = PolicyAssignment.objects.filter(name=name).first()
+        if assignment is None:
+            assignment = PolicyAssignment(name=name, policy=policy)
+        assignment.policy = policy
+        assignment.description = description
+        assignment.enabled = True
+        assignment.parameter_values = parameter_values
+        assignment.validated_save()
+        assignment.groups.set(groups)
+        return assignment
+
     # ----- patterns -----------------------------------------------------------------------------------------
+
+    def create_tenant_assignment(self, group):
+        """Pattern 1: a built-in parameterized policy, assigned for one tenant."""
+        tenant, _ = Tenant.objects.get_or_create(name="Network to Code")
+        policy = PermissionPolicy.objects.get(name="nautobot-default-tenant-device-operator")
+        self.assignment(
+            f"{DEMO_PREFIX}network-to-code-operators",
+            policy,
+            {"tenant": [str(tenant.pk)]},
+            [group],
+            description="Operators of the Network to Code tenant.",
+        )
 
     def create_regional_it(self, groups):
         """Pattern 2: a custom policy with a single tree-node parameter (`in_tree`), assigned once per region."""
@@ -149,6 +177,21 @@ class Command(BaseCommand):
 
         self.prune_rules(policy)
 
+        region_type, _ = LocationType.objects.get_or_create(name="Region", defaults={"nestable": True})
+        status = Status.objects.get_for_model(Location).first()
+        for key, region_name in REGIONS.items():
+            region = Location.objects.filter(name=region_name, location_type=region_type).first()
+            if region is None:
+                region = Location(name=region_name, location_type=region_type, status=status)
+                region.validated_save()
+            self.assignment(
+                f"{DEMO_PREFIX}it-{key}",
+                policy,
+                {"region": str(region.pk)},
+                [groups[f"it-{key}"]],
+                description=f"IT operators for everything within the {region_name} region.",
+            )
+
     def create_telco_owner(self, group):
         """Pattern 3: an unparameterized custom policy spanning several object types."""
         policy = self.policy(
@@ -159,6 +202,7 @@ class Command(BaseCommand):
             self.rule(policy, ("circuits", model), CRUD, {}, {})
         self.rule(policy, ("dcim", "location"), ["view"], {}, {})
         self.prune_rules(policy)
+        self.assignment(f"{DEMO_PREFIX}telco-owners", policy, {}, [group], description="Owners of the circuit data.")
 
     def create_job_runner(self, group):
         """Pattern 4: a multi-valued object parameter selecting which jobs may be run."""
@@ -179,18 +223,49 @@ class Command(BaseCommand):
         self.rule(policy, ("extras", "joblogentry"), ["view"], {"job_result__user": "$user"}, {})
         self.rule(policy, ("extras", "jobqueue"), ["view"], {}, {})
         self.prune_rules(policy)
+        jobs = Job.objects.filter(
+            module_name="nautobot.core.jobs", job_class_name__in=["ExportObjectList", "ImportObjects"]
+        )
+        self.assignment(
+            f"{DEMO_PREFIX}job-runners",
+            policy,
+            {"jobs": [str(pk) for pk in jobs.values_list("pk", flat=True)]},
+            [group],
+            description="May run the export and import jobs.",
+        )
+
+    def create_reference_data_assignment(self, groups):
+        """Every demo user can browse reference data so the UI is navigable."""
+        policy = PermissionPolicy.objects.get(name="nautobot-default-reference-data-viewer")
+        self.assignment(
+            f"{DEMO_PREFIX}reference-data-viewers",
+            policy,
+            {},
+            list(groups),
+            description="Read access to locations, roles, statuses, tags and tenants for all demo users.",
+        )
 
     # ----- flush and summary --------------------------------------------------------------------------------
 
     def flush(self):
         User = get_user_model()
+        blocking = PolicyAssignment.objects.filter(policy__name__startswith=DEMO_PREFIX).exclude(
+            name__startswith=DEMO_PREFIX
+        )
+        if blocking.exists():
+            names = ", ".join(blocking.values_list("name", flat=True))
+            raise CommandError(
+                f"Cannot flush: assignment(s) not created by this command still use a demo policy: {names}. "
+                "Delete them first."
+            )
         with transaction.atomic():
+            assignments = PolicyAssignment.objects.filter(name__startswith=DEMO_PREFIX).delete()[0]
             policies = PermissionPolicy.objects.filter(name__startswith=DEMO_PREFIX).delete()[0]
             users = User.objects.filter(username__in=DEMO_USERS).delete()[0]
             groups = Group.objects.filter(name__in={group for group, _ in DEMO_USERS.values()}).delete()[0]
         self.stdout.write(
-            # PLACEHOLDER: will be replaced in C11 (Policy assignment model and stack): assignments and fixtures.
-            f"Removed {policies} policies, {users} users and {groups} groups."
+            f"Removed {assignments} assignments, {policies} policies, {users} users and {groups} groups. "
+            "The 'Network to Code' tenant and the AMER/EMEA/APAC regions were left in place."
         )
 
     def print_summary(self):

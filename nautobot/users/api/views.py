@@ -8,6 +8,7 @@ from rest_framework.authentication import BasicAuthentication
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.reverse import reverse
 from rest_framework.viewsets import ViewSet
 
 from nautobot.core.api.serializers import BulkOperationIntegerIDSerializer
@@ -20,12 +21,24 @@ from nautobot.users import filters
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyAssignment,
     PolicyParameter,
     PolicyRule,
     Token,
 )
+from nautobot.users.policies import (
+    permission_names_for_rule,
+    PolicyRenderError,
+    render_rule_constraints,
+    rule_content_type,
+)
 
 from . import serializers
+
+
+def _absolute_url(request, viewname, pk):
+    return request.build_absolute_uri(reverse(viewname, kwargs={"pk": pk}))
+
 
 #
 # Users and groups
@@ -106,8 +119,7 @@ def _model_from_label(label, parameter):
 
 
 class PermissionPolicyViewSet(ModelViewSet):
-    # PLACEHOLDER: will be replaced in C12 (Policy assignment model and stack): annotate assignment_count.
-    queryset = PermissionPolicy.objects.all()
+    queryset = PermissionPolicy.objects.annotate(assignment_count=Count("assignments", distinct=True))
     serializer_class = serializers.PermissionPolicySerializer
     filterset_class = filters.PermissionPolicyFilterSet
 
@@ -158,6 +170,54 @@ class PolicyRuleViewSet(ModelViewSet):
     queryset = PolicyRule.objects.select_related("policy", "content_type")
     serializer_class = serializers.PolicyRuleSerializer
     filterset_class = filters.PolicyRuleFilterSet
+
+
+class PolicyAssignmentViewSet(ModelViewSet):
+    queryset = PolicyAssignment.objects.select_related("policy")
+    serializer_class = serializers.PolicyAssignmentSerializer
+    filterset_class = filters.PolicyAssignmentFilterSet
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action == "constraints":
+            queryset = queryset.prefetch_related("policy__rules")
+        return queryset
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["get"])
+    def constraints(self, request, pk=None):
+        """The constraints this assignment grants, per object type, as rendered by permission resolution."""
+        assignment = self.get_object()
+        rules = []
+        for rule in assignment.policy.rules.all():
+            try:
+                constraints = render_rule_constraints(rule, assignment.parameter_values or {})
+            except PolicyRenderError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            content_type = rule_content_type(rule)
+            rules.append(
+                {
+                    "content_type": f"{content_type.app_label}.{content_type.model}",
+                    "actions": list(rule.actions),
+                    "permissions": permission_names_for_rule(rule),
+                    "constraints": constraints,
+                }
+            )
+        return Response(
+            {
+                "assignment": {
+                    "id": str(assignment.pk),
+                    "name": assignment.name,
+                    "url": _absolute_url(request, "users-api:policyassignment-detail", assignment.pk),
+                },
+                "policy": {
+                    "id": str(assignment.policy.pk),
+                    "name": assignment.policy.name,
+                    "url": _absolute_url(request, "users-api:permissionpolicy-detail", assignment.policy.pk),
+                },
+                "rules": rules,
+            }
+        )
 
 
 #
