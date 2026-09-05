@@ -13,9 +13,10 @@ from social_django.utils import load_backend, load_strategy
 from nautobot.core.testing import TestCase, utils, ViewTestCases
 from nautobot.core.testing.context import load_event_broker_override_settings
 from nautobot.core.testing.utils import post_data
-from nautobot.dcim.models import Location
+from nautobot.dcim.models import Device, Interface, Location
+from nautobot.extras.models import Status
 from nautobot.tenancy.models import Tenant
-from nautobot.users.models import PermissionPolicy, PolicyParameter
+from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
 from nautobot.users.tests.test_policies import create_tenant_policy
 from nautobot.users.utils import serialize_user_without_config_and_views
 
@@ -287,8 +288,9 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         for i in range(3):
             create_tenant_policy(name=f"Policy {i + 1}")
         tenant_ct = ContentType.objects.get_for_model(Tenant)
+        device_ct = ContentType.objects.get_for_model(Device)
+        interface_ct = ContentType.objects.get_for_model(Interface)
 
-        # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): the rules formset.
         cls.form_data = {
             "name": "Policy X",
             "description": "Created through the UI",
@@ -297,14 +299,121 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             "parameters-0-kind": "object",
             "parameters-0-target_content_type": tenant_ct.pk,
             "parameters-0-multiple": True,
+            **_formset_management("rules", 2),
+            "rules-0-content_type": device_ct.pk,
+            "rules-0-actions": ["view"],
+            "rules-0-constraint_template": '{"tenant__in": "{{ tenant }}"}',
+            "rules-1-content_type": interface_ct.pk,
+            "rules-1-actions": ["view", "change"],
+            "rules-1-constraint_template": '{"device__tenant__in": "{{ tenant }}"}',
         }
-        # Editing posts no parameter rows (leaving them untouched).
+        # Editing posts no parameter rows (leaving them untouched) and adds one rule; existing rules, when re-posted
+        # by the browser, carry their ids.
         cls.update_data = {
             "name": "Policy Y",
             "description": "Edited through the UI",
             **_formset_management("parameters", 0),
+            **_formset_management("rules", 1),
+            "rules-0-content_type": ContentType.objects.get_for_model(Location).pk,
+            "rules-0-actions": ["view"],
+            "rules-0-constraint_template": '{"tenant__in": "{{ tenant }}"}',
         }
         cls.bulk_edit_data = {"description": "Bulk edited"}
+
+    def test_create_object_with_constrained_permission(self):
+        super().test_create_object_with_constrained_permission()
+        policy = PermissionPolicy.objects.get(name="Policy X")
+        self.assertEqual(policy.parameters.count(), 1)
+        rules = {rule.content_type.model: rule for rule in policy.rules.all()}
+        self.assertEqual(rules["interface"].path_map, {"tenant": {"path": "device__tenant", "lookup": "in"}})
+        self.assertEqual(rules["interface"].actions, ["view", "change"])
+
+    def test_duplicate_object_type_across_rows_is_rejected(self):
+        self.add_permissions("users.add_permissionpolicy")
+        device_ct = ContentType.objects.get_for_model(Device)
+        data = {**self.form_data, "rules-1-content_type": device_ct.pk}
+        response = self.client.post(self._get_url("add"), data=post_data(data))
+        self.assertHttpStatus(response, 200)
+        self.assertIn("more than one rule", response.content.decode(response.charset))
+        self.assertFalse(PermissionPolicy.objects.filter(name="Policy X").exists())
+
+    def test_create_with_rule_not_using_parameter_succeeds(self):
+        """A rule need not use every parameter; the interface rule here is not scoped by tenant."""
+        self.add_permissions("users.add_permissionpolicy", "users.view_policyrule")
+        data = {**self.form_data, "rules-1-constraint_template": "{}"}
+        response = self.client.post(self._get_url("add"), data=post_data(data))
+        self.assertHttpStatus(response, 302)
+        policy = PermissionPolicy.objects.get(name="Policy X")
+        interface_rule = policy.rules.get(content_type=ContentType.objects.get_for_model(Interface))
+        self.assertEqual(interface_rule.path_map, {})
+        self.add_permissions("users.view_permissionpolicy")
+        self.assertIn("not scoped by this parameter", self.client.get(policy.get_absolute_url()).content.decode())
+
+    def test_clone_prefills_parameters_and_rules(self):
+        self.add_permissions("users.add_permissionpolicy", "users.view_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        response = self.client.get(policy.get_absolute_url())
+        body = response.content.decode(response.charset)
+        self.assertIn(f"clone_from={policy.pk}", body)
+
+        response = self.client.get(f"{self._get_url('add')}?description=Copy&clone_from={policy.pk}")
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn('name="parameters-0-name" value="tenant"', body)
+        self.assertIn('name="rules-TOTAL_FORMS" value="2"', body)
+        self.assertIn("device__tenant__in", body)
+        # Nothing is created until the form is submitted.
+        self.assertEqual(PermissionPolicy.objects.filter(description="Copy").count(), 0)
+
+    def test_rule_paths_fragment(self):
+        self.add_permissions("users.view_permissionpolicy")
+        tenant_ct = ContentType.objects.get_for_model(Tenant)
+        interface_ct = ContentType.objects.get_for_model(Interface)
+        status_ct = ContentType.objects.get_for_model(Status)
+        params = {
+            "content_type": interface_ct.pk,
+            "prefix": "rules-0",
+            **_formset_management("parameters", 1),
+            "parameters-0-name": "tenant",
+            "parameters-0-kind": "object",
+            "parameters-0-target_content_type": tenant_ct.pk,
+            "parameters-0-multiple": "on",
+        }
+        response = self.client.get(reverse("users:permissionpolicy_rule_paths"), data=params)
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn('data-path="device__tenant"', body)
+        self.assertIn('data-lookup="in"', body)
+        # Shortest candidate comes first.
+        self.assertLess(body.index('data-path="device__tenant"'), body.index('data-path="device__location__tenant"'))
+
+        params["content_type"] = status_ct.pk
+        response = self.client.get(reverse("users:permissionpolicy_rule_paths"), data=params)
+        self.assertIn("No path from", response.content.decode(response.charset))
+
+        # The rule's own form names a saved policy instead of posting parameter rows.
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        response = self.client.get(
+            reverse("users:permissionpolicy_rule_paths"),
+            data={"content_type": interface_ct.pk, "policy": policy.pk, "prefix": ""},
+        )
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn('data-path="device__tenant"', body)
+        # The editor learns the policy's parameter names from hidden inputs in the fragment.
+        self.assertIn('class="nb-rule-parameter-name" value="tenant"', body)
+
+    def test_detail_view_lists_rules_and_parameters(self):
+        # The parameter and rule panels are permission-restricted tables of their own models.
+        self.add_permissions("users.view_permissionpolicy", "users.view_policyparameter", "users.view_policyrule")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        response = self.client.get(policy.get_absolute_url())
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("device__tenant", body)
+        self.assertIn("parameters", body.lower())
+        # The assignments panel excludes the redundant "policy" column, so the table configuration must not offer it.
+        self.assertNotIn('value="policy"', body)
 
 
 class PolicyChildViewTestCases:
@@ -351,3 +460,50 @@ class PolicyParameterTestCase(PolicyChildViewTestCases.ViewTestCase):
         response = self.client.get(f"{self._get_url('add')}?policy={policy.pk}")
         self.assertHttpStatus(response, 200)
         self.assertIn(f'value="{policy.pk}"', response.content.decode(response.charset))
+
+
+@override_settings(EXEMPT_EXCLUDE_MODELS=POLICY_TEST_EXEMPT_EXCLUDE_MODELS)
+class PolicyRuleTestCase(PolicyChildViewTestCases.ViewTestCase):
+    model = PolicyRule
+
+    @classmethod
+    def setUpTestData(cls):
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        cls.form_data = {
+            "policy": policies[0].pk,
+            "content_type": ContentType.objects.get_for_model(Location).pk,
+            "actions": ["view"],
+            "constraint_template": '{"tenant__in": "{{ tenant }}"}',
+        }
+        # The edited rule keeps its policy; Location has no rule yet, so the object type can change to it.
+        cls.update_data = {
+            "policy": policies[0].pk,
+            "content_type": ContentType.objects.get_for_model(Location).pk,
+            "actions": ["view", "change"],
+            "constraint_template": '{"tenant__in": "{{ tenant }}"}',
+        }
+
+    def assertInstanceEqual(self, instance, data, exclude=None, api=False):
+        # `model_to_dict` renders the JSON array of actions as comma-separated text.
+        data = {**data}
+        if isinstance(data.get("actions"), list):
+            data["actions"] = ",".join(data["actions"])
+        super().assertInstanceEqual(instance, data, exclude=exclude, api=api)
+
+    def test_create_derives_path_map_and_merges_actions(self):
+        self.add_permissions("users.add_policyrule", "users.view_permissionpolicy")
+        data = {**self.form_data, "additional_actions": ["run"]}
+        response = self.client.post(self._get_url("add"), data=post_data(data))
+        self.assertHttpStatus(response, 302)
+        rule = PolicyRule.objects.get(content_type=ContentType.objects.get_for_model(Location))
+        self.assertEqual(rule.actions, ["view", "run"])
+        self.assertEqual(rule.path_map, {"tenant": {"path": "tenant", "lookup": "in"}})
+
+    def test_detail_view_shows_the_template_and_path_map(self):
+        self.add_permissions("users.view_policyrule")
+        rule = PolicyRule.objects.filter(content_type=ContentType.objects.get_for_model(Interface)).first()
+        response = self.client.get(rule.get_absolute_url())
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("device__tenant", body)
+        self.assertIn(str(rule.policy), body)

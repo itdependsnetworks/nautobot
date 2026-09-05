@@ -1,3 +1,5 @@
+from collections import namedtuple
+
 from django import forms
 from django.contrib.auth.forms import (
     AdminPasswordChangeForm as _AdminPasswordChangeForm,
@@ -5,6 +7,7 @@ from django.contrib.auth.forms import (
     PasswordChangeForm as DjangoPasswordChangeForm,
 )
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.forms import inlineformset_factory
 from timezone_field import TimeZoneFormField
 
@@ -14,20 +17,27 @@ from nautobot.core.forms import (
     BOOLEAN_WITH_BLANK_CHOICES,
     BootstrapMixin,
     BulkEditForm,
+    ConstraintEditorField,
     DateTimePicker,
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
+    MultipleContentTypeField,
     MultiValueCharField,
 )
-from nautobot.core.forms.widgets import StaticSelect2
+from nautobot.core.forms.widgets import StaticSelect2, StaticSelect2Multiple
+from nautobot.core.models.tree_queries import TreeModel
 from nautobot.core.utils.config import get_settings_or_config
+from nautobot.core.utils.orm_paths import find_relation_paths, split_path_and_lookup
+from nautobot.core.utils.permissions import CONSTRAINT_PLACEHOLDER_PATTERN
 from nautobot.extras.forms import NautobotFilterForm
 from nautobot.users.choices import PolicyParameterKindChoices
 from nautobot.users.utils import serialize_user_without_config_and_views
 
 from .models import (
+    PERMISSION_OBJECT_TYPE_LIMIT_CHOICES,
     PermissionPolicy,
     PolicyParameter,
+    PolicyRule,
     Token,
 )
 
@@ -126,12 +136,68 @@ class AdminPasswordChangeForm(_AdminPasswordChangeForm):
 
 #: The declared parameters of a policy, as needed by the rule form. Built from saved parameters or from the
 #: (possibly unsaved) parameter formset so that the create and edit flows behave identically.
+ParameterSpec = namedtuple("ParameterSpec", ["name", "kind", "target_content_type", "multiple"])
+
 #: Formset prefixes shared by the policy form, its templates and the views that bind the formsets.
 PARAMETER_FORMSET_PREFIX = "parameters"
-
+RULE_FORMSET_PREFIX = "rules"
 
 #: Inputs whose values are parameter names the constraint editor should offer, besides the saved ones: the name cells
 #: of the policy form's parameter rows, and the hidden names the suggested-paths fragment emits on the rule form.
+PARAMETER_NAME_INPUTS_SELECTOR = (
+    f"input[name^='{PARAMETER_FORMSET_PREFIX}-'][name$='-name'], input.nb-rule-parameter-name"
+)
+
+CRUD_ACTION_CHOICES = (
+    ("view", "View"),
+    ("add", "Add"),
+    ("change", "Change"),
+    ("delete", "Delete"),
+)
+
+
+def parameter_specs_from_policy(policy):
+    """Return the `ParameterSpec`s of a saved policy."""
+    return [
+        ParameterSpec(parameter.name, parameter.kind, parameter.target_content_type, parameter.multiple)
+        for parameter in policy.parameters.all()
+    ]
+
+
+def parameter_specs_from_formset(formset):
+    """Return the `ParameterSpec`s described by a bound parameter formset, skipping deleted and invalid rows."""
+    specs = []
+    for form in formset.forms:
+        if not form.is_valid() or form.cleaned_data.get("DELETE") or not form.cleaned_data.get("name"):
+            continue
+        data = form.cleaned_data
+        specs.append(ParameterSpec(data["name"], data["kind"], data.get("target_content_type"), data.get("multiple")))
+    return specs
+
+
+def suggested_parameter_paths(content_type, parameter_specs):
+    """
+    For each object-kind parameter, the candidate lookup paths from `content_type` to the parameter's target model.
+
+    Returns:
+        (list[tuple[ParameterSpec, str, list[PathCandidate]]]): `(spec, lookup, candidates)`; `candidates` is empty
+            when no path exists, and `lookup` is `in` for a multi-valued parameter, else `exact`.
+    """
+    model = content_type.model_class() if content_type is not None else None
+    suggestions = []
+    for spec in parameter_specs:
+        lookup = "in" if spec.multiple else "exact"
+        target_model = spec.target_content_type.model_class() if spec.target_content_type is not None else None
+        if target_model is not None and issubclass(target_model, TreeModel):
+            # `in_tree` is provisional (see `InTreeLookup`); fall back to `in`/`exact` here if it is withdrawn.
+            lookup = "in_tree"  # the selected node(s) and everything beneath them
+        if model is None or spec.kind != PolicyParameterKindChoices.KIND_OBJECT or target_model is None:
+            suggestions.append((spec, lookup, []))
+            continue
+        suggestions.append((spec, lookup, find_relation_paths(model, target_model)))
+    return suggestions
+
+
 def _drop_required_attribute(form):
     """
     Remove the HTML `required` attribute from a formset row's widgets.
@@ -203,6 +269,172 @@ PolicyParameterFormSet = inlineformset_factory(
 )
 
 
+class PolicyContentTypeSelect(StaticSelect2):
+    """A content type select whose options carry `data-content-type="app_label.model"` for client-side scripts."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex=subindex, attrs=attrs)
+        instance = getattr(value, "instance", None)
+        if instance is not None:
+            option["attrs"]["data-content-type"] = f"{instance.app_label}.{instance.model}"
+        return option
+
+
+def _policy_from_form(form):
+    """The policy a bound or initial-populated form refers to, or None (shared by the rule and assignment forms)."""
+    policy_pk = None
+    if form.is_bound:
+        policy_pk = form.data.get(form.add_prefix("policy"))
+    if not policy_pk and getattr(form.instance, "policy_id", None):
+        return form.instance.policy
+    if not policy_pk:
+        policy_pk = form.initial.get("policy")
+    if not policy_pk:
+        return None
+    if isinstance(policy_pk, PermissionPolicy):
+        return policy_pk
+    return PermissionPolicy.objects.filter(pk=policy_pk).first()
+
+
+class PolicyRuleForm(BootstrapMixin, forms.ModelForm):
+    """
+    One rule: an object type, the actions granted on it and the constraint template.
+
+    The `path_map` is derived from the template (every `{{ parameter }}` placeholder yields the path and lookup of
+    the key it sits under), so the author edits one thing. The form serves the rule's own create and edit pages and,
+    through `PolicyRuleFormSet` (which replaces `policy` with the parent link), the rows of the policy form's rule
+    editor, where the parameters may not be saved yet and are passed in as `parameter_specs`.
+    """
+
+    policy = DynamicModelChoiceField(queryset=PermissionPolicy.objects.all())
+    content_type = forms.ModelChoiceField(
+        queryset=ContentType.objects.filter(PERMISSION_OBJECT_TYPE_LIMIT_CHOICES).order_by("app_label", "model"),
+        widget=PolicyContentTypeSelect(),
+        label="Object type",
+    )
+    actions = forms.MultipleChoiceField(
+        choices=CRUD_ACTION_CHOICES,
+        required=False,
+        widget=StaticSelect2Multiple(),
+    )
+    additional_actions = MultiValueCharField(
+        required=False,
+        help_text="Custom actions such as 'run'",
+    )
+    constraint_template = ConstraintEditorField(
+        required=False,
+        content_type_source="$content_type",
+        parameter_inputs_selector=PARAMETER_NAME_INPUTS_SELECTOR,
+        label="Constraint template",
+    )
+
+    class Meta:
+        model = PolicyRule
+        fields = ("policy", "content_type", "actions", "constraint_template")
+
+    def __init__(self, *args, parameter_specs=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        _drop_required_attribute(self)
+        if self.instance.present_in_database:
+            crud_actions = [action for action, _ in CRUD_ACTION_CHOICES]
+            self.initial["actions"] = [action for action in self.instance.actions if action in crud_actions]
+            self.initial["additional_actions"] = [
+                action for action in self.instance.actions if action not in crud_actions
+            ]
+        if parameter_specs is None:
+            policy = _policy_from_form(self)
+            parameter_specs = parameter_specs_from_policy(policy) if policy is not None else []
+        self.parameter_specs = list(parameter_specs)
+        names = [spec.name for spec in self.parameter_specs]
+        self.fields["constraint_template"].parameter_names = names
+        self.fields["constraint_template"].widget.attrs["data-parameters"] = ",".join(names)
+
+    def add_error(self, field, error):
+        # The model validates `path_map`, which this form derives rather than exposes; show those messages at the
+        # form level instead of failing on an unknown field.
+        if field is None and isinstance(error, ValidationError) and hasattr(error, "error_dict"):
+            remapped = {}
+            for key, messages in error.error_dict.items():
+                target = key if key in self.fields or key == NON_FIELD_ERRORS else NON_FIELD_ERRORS
+                remapped.setdefault(target, []).extend(messages)
+            error = ValidationError(remapped)
+        elif field is not None and field != NON_FIELD_ERRORS and field not in self.fields:
+            field = None
+        super().add_error(field, error)
+
+    def clean(self):
+        super().clean()
+        actions = list(self.cleaned_data.get("actions") or [])
+        for action in self.cleaned_data.get("additional_actions") or []:
+            if action and action not in actions:
+                actions.append(action)
+        if not actions:
+            self.add_error("actions", "At least one action must be selected.")
+        self.cleaned_data["actions"] = actions
+
+        template = self.cleaned_data.get("constraint_template")
+        if template in (None, ""):
+            template = {}
+        self.cleaned_data["constraint_template"] = template
+        content_type = self.cleaned_data.get("content_type")
+        model = content_type.model_class() if content_type is not None else None
+        self.instance.path_map = self._derive_path_map(model, template)
+        # The model's clean() validates the template against these parameters, saved or not.
+        self.instance._pending_parameters = {spec.name: spec for spec in self.parameter_specs}
+        return self.cleaned_data
+
+    def _derive_path_map(self, model, template):
+        """Every `{{ name }}` placeholder in the template gives the path map one entry: its key split into path and lookup."""
+        path_map = {}
+        groups = template if isinstance(template, list) else [template]
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            for key, value in group.items():
+                match = CONSTRAINT_PLACEHOLDER_PATTERN.match(value) if isinstance(value, str) else None
+                if match is None or model is None:
+                    continue
+                path, lookup = split_path_and_lookup(model, key)
+                path_map[match.group(1)] = {"path": path, "lookup": lookup}
+        return path_map
+
+
+class BasePolicyRuleFormSet(forms.BaseInlineFormSet):
+    """Rules formset: an object type may appear in only one row."""
+
+    def clean(self):
+        # Checked before Django's own unique_together pass so the message names the object type.
+        seen = set()
+        for form in self.forms:
+            if not hasattr(form, "cleaned_data") or form.cleaned_data.get("DELETE"):
+                continue
+            content_type = form.cleaned_data.get("content_type")
+            if content_type is None:
+                continue
+            if content_type.pk in seen:
+                raise ValidationError(
+                    f"Object type '{content_type}' appears in more than one rule; each object type may have "
+                    "only one rule per policy."
+                )
+            seen.add(content_type.pk)
+        super().clean()
+
+
+def rule_formset_class(extra=0):
+    """`PolicyRuleFormSet` with `extra` blank forms, so prefilled (cloned) rows have forms to occupy."""
+    return inlineformset_factory(
+        parent_model=PermissionPolicy,
+        model=PolicyRule,
+        form=PolicyRuleForm,
+        formset=BasePolicyRuleFormSet,
+        extra=extra,
+        can_delete=True,
+    )
+
+
+PolicyRuleFormSet = rule_formset_class()
+
+
 def policy_parameter_rows(policy):
     """Initial data for `PolicyParameterFormSet` copied from an existing policy (used when cloning)."""
     return [
@@ -229,6 +461,22 @@ def parameter_formset_class(extra=0):
     )
 
 
+def policy_rule_rows(policy):
+    """Initial data for `PolicyRuleFormSet` copied from an existing policy's rules (used when cloning)."""
+    crud_actions = [action for action, _ in CRUD_ACTION_CHOICES]
+    return [
+        {
+            "content_type": rule.content_type_id,
+            "actions": [action for action in rule.actions if action in crud_actions],
+            "additional_actions": [action for action in rule.actions if action not in crud_actions],
+            "constraint_template": rule.constraint_template,
+        }
+        for rule in policy.rules.select_related("content_type").order_by(
+            "content_type__app_label", "content_type__model"
+        )
+    ]
+
+
 class PermissionPolicyBulkEditForm(BootstrapMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(queryset=PermissionPolicy.objects.all(), widget=forms.MultipleHiddenInput())
     description = forms.CharField(max_length=255, required=False)
@@ -239,10 +487,15 @@ class PermissionPolicyBulkEditForm(BootstrapMixin, BulkEditForm):
 
 class PermissionPolicyFilterForm(NautobotFilterForm):
     model = PermissionPolicy
-    field_order = ["q", "name"]
+    field_order = ["q", "name", "content_types"]
 
     q = forms.CharField(required=False, label="Search")
     name = MultiValueCharField(required=False)
+    content_types = MultipleContentTypeField(
+        required=False,
+        label="Object types",
+        queryset=ContentType.objects.filter(PERMISSION_OBJECT_TYPE_LIMIT_CHOICES),
+    )
 
 
 class PolicyParameterFilterForm(NautobotFilterForm):
@@ -263,3 +516,19 @@ class PolicyParameterFilterForm(NautobotFilterForm):
         widget=StaticSelect2(),
     )
     multiple = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+
+
+class PolicyRuleFilterForm(NautobotFilterForm):
+    model = PolicyRule
+    field_order = ["q", "policy", "content_type"]
+
+    q = forms.CharField(required=False, label="Search")
+    policy = DynamicModelMultipleChoiceField(
+        queryset=PermissionPolicy.objects.all(), to_field_name="name", required=False
+    )
+    content_type = forms.ModelChoiceField(
+        queryset=ContentType.objects.filter(PERMISSION_OBJECT_TYPE_LIMIT_CHOICES).order_by("app_label", "model"),
+        required=False,
+        label="Object type",
+        widget=StaticSelect2(),
+    )

@@ -16,6 +16,7 @@ from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
     PolicyParameter,
+    PolicyRule,
     Token,
 )
 from nautobot.users.tests.test_policies import create_tenant_policy
@@ -477,7 +478,6 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
         for i in range(3):
             create_tenant_policy(name=f"Policy {i + 1}")
 
-        # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): nested rules.
         cls.create_data = [
             {
                 "name": "Policy 4",
@@ -485,15 +485,94 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
                 "parameters": [
                     {"name": "tenant", "kind": "object", "target_content_type": "tenancy.tenant", "multiple": True}
                 ],
+                "rules": [
+                    {
+                        "content_type": "dcim.device",
+                        "actions": ["view"],
+                        "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+                    },
+                    {
+                        "content_type": "dcim.interface",
+                        "actions": ["view"],
+                        "constraint_template": {"device__tenant__in": "{{ tenant }}"},
+                        "path_map": {"tenant": {"path": "device__tenant", "lookup": "in"}},
+                    },
+                ],
             },
-            {"name": "Policy 5"},
+            {
+                "name": "Policy 5",
+                "rules": [
+                    {"content_type": "dcim.location", "actions": ["view"], "constraint_template": {}, "path_map": {}}
+                ],
+            },
             {
                 "name": "Policy 6",
                 "parameters": [{"name": "prefix", "kind": "string", "multiple": False}],
+                "rules": [
+                    {
+                        "content_type": "dcim.device",
+                        "actions": ["view", "change"],
+                        "constraint_template": {"name__istartswith": "{{ prefix }}"},
+                        "path_map": {"prefix": {"path": "name", "lookup": "istartswith"}},
+                    }
+                ],
             },
         ]
         cls.update_data = {"name": "Policy X", "description": "Updated"}
         cls.bulk_update_data = {"description": "New description"}
+
+    def test_nested_update_upserts_children(self):
+        self.add_permissions("users.change_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        device_rule = policy.rules.get(content_type__model="device")
+        data = {
+            "rules": [
+                {
+                    "content_type": "dcim.device",
+                    "actions": ["view", "change"],
+                    "constraint_template": {"tenant__in": "{{ tenant }}"},
+                    "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+                }
+            ]
+        }
+        response = self.client.patch(self._get_detail_url(policy), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(policy.rules.count(), 1)  # interface rule removed
+        device_rule.refresh_from_db()  # same record, updated in place
+        self.assertEqual(device_rule.actions, ["view", "change"])
+        self.assertEqual(policy.parameters.count(), 1)  # parameters untouched when omitted
+
+    def test_put_without_child_ids_keeps_children(self):
+        """A full update that lists the children by natural key (no ids) updates them in place."""
+        self.add_permissions("users.change_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        parameter_pk = policy.parameters.get(name="tenant").pk
+        data = {
+            "name": "Policy 1",
+            "description": "Same children, described again",
+            "parameters": [
+                {"name": "tenant", "kind": "object", "target_content_type": "tenancy.tenant", "multiple": True}
+            ],
+            "rules": [
+                {
+                    "content_type": "dcim.device",
+                    "actions": ["view"],
+                    "constraint_template": {"tenant__in": "{{ tenant }}"},
+                    "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+                },
+                {
+                    "content_type": "dcim.interface",
+                    "actions": ["view"],
+                    "constraint_template": {"device__tenant__in": "{{ tenant }}"},
+                    "path_map": {"tenant": {"path": "device__tenant", "lookup": "in"}},
+                },
+            ],
+        }
+        response = self.client.put(self._get_detail_url(policy), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(policy.parameters.get(name="tenant").pk, parameter_pk)  # same record
+        self.assertEqual(policy.rules.count(), 2)
+        self.assertEqual(response.data["parameters"][0]["kind"], {"value": "object", "label": "Object reference"})
 
     def test_duplicate_children_rejected(self):
         self.add_permissions("users.change_permissionpolicy")
@@ -508,6 +587,25 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Duplicate entry", str(response.data["parameters"][1]["name"]))
         self.assertEqual(policy.parameters.get(name="tenant").kind, "object")  # unchanged
+
+    def test_resolve_path(self):
+        self.add_permissions("users.view_permissionpolicy")
+        url = reverse("users-api:permissionpolicy-resolve-path")
+        response = self.client.get(
+            f"{url}?content_type=dcim.interface&target_content_type=tenancy.tenant", **self.header
+        )
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(response.data["candidates"][0]["path"], "device__tenant")
+        self.assertEqual(response.data["candidates"][0]["relations"][0]["model"], "dcim.device")
+
+        response = self.client.get(
+            f"{url}?content_type=extras.status&target_content_type=tenancy.tenant", **self.header
+        )
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(response.data["candidates"], [])
+
+        response = self.client.get(f"{url}?content_type=dcim.interface", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
 
     @skip("Nested parameters and rules are not part of the CSV representation; use the JSON API to recreate them")
     def test_recreate_object_csv(self):
@@ -582,6 +680,41 @@ class PolicyParameterTest(PolicyReferenceMixin, APIViewTestCases.APIViewTestCase
         response = self.client.post(self._get_list_url(), data, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
         self.assertIn("target object type", str(response.data["target_content_type"]))
+
+
+class PolicyRuleTest(PolicyReferenceMixin, APIViewTestCases.APIViewTestCase):
+    model = PolicyRule
+    choices_fields = ["content_type"]
+
+    @classmethod
+    def setUpTestData(cls):
+        # Each policy already has a Device and an Interface rule scoped by its `tenant` parameter.
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        cls.create_data = [
+            {
+                "policy": policies[0].pk,
+                "content_type": "dcim.location",
+                "actions": ["view"],
+                "constraint_template": {"tenant__in": "{{ tenant }}"},
+                "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+            },
+            {
+                # `constraint_template` omitted: generated from `path_map`.
+                "policy": policies[1].pk,
+                "content_type": "ipam.prefix",
+                "actions": ["view", "change"],
+                "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+            },
+            {
+                "policy": policies[2].pk,
+                "content_type": "extras.status",
+                "actions": ["view"],
+                "constraint_template": {},
+                "path_map": {},
+            },
+        ]
+        cls.update_data = {"actions": ["view", "change"]}
+        cls.bulk_update_data = {"actions": ["view", "delete"]}
 
 
 class UserConfigTest(APITestCase):

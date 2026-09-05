@@ -1,0 +1,42 @@
+{% extends 'generic/object_create.html' %}
+{% load form_helpers %}
+
+{% block form %}
+    <div class="card">
+        <div class="card-header"><strong>Policy Rule</strong></div>
+        <div class="card-body">
+            {% render_field form.policy %}
+            {% render_field form.content_type %}
+            {% render_field form.actions %}
+            {% render_field form.additional_actions %}
+            <div class="rule-paths mb-10"
+                 hx-get="{{ rule_paths_url }}"
+                 hx-trigger="load, change from:#id_policy, change from:#id_content_type"
+                 hx-target="this"
+                 hx-swap="innerHTML"
+                 hx-on::config-request="policyRulePathsConfigRequest(event)"
+                 hx-on::after-swap="this.closest('form').dispatchEvent(new Event('change', {bubbles: true}))">
+                <div class="col-md-9 offset-md-3 text-secondary small">Select an object type to see suggested parameter paths.</div>
+            </div>
+            {% render_field form.constraint_template %}
+        </div>
+    </div>
+{% endblock form %}
+
+{% block javascript %}
+    {{ block.super }}
+    <script type="text/javascript">
+        // The suggested-paths fragment needs the selected policy (for its parameters) and object type at request time.
+        window.policyRulePathsConfigRequest = function (event) {
+            const policy = document.getElementById("id_policy");
+            const contentType = document.getElementById("id_content_type");
+            event.detail.parameters.policy = policy ? policy.value : "";
+            event.detail.parameters.content_type = contentType ? contentType.value : "";
+            event.detail.parameters.prefix = "";
+        };
+        // select2 fires only jQuery events; re-broadcast a native change so the HTMX triggers above see it.
+        $(document).on("select2:select select2:unselect select2:clear", "select", function () {
+            this.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+    </script>
+{% endblock javascript %}

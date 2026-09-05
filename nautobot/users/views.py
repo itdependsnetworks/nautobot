@@ -9,6 +9,7 @@ from django.contrib.auth import (
     logout as auth_logout,
     update_session_auth_hash,
 )
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.http import HttpResponse, HttpResponseForbidden, HttpResponseRedirect
@@ -20,6 +21,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.timezone import get_default_timezone_name
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.generic import View
+from rest_framework.decorators import action
 
 from nautobot.core.choices import NautobotEditionChoices
 from nautobot.core.constants import NAUTOBOT_EDITION_URLS
@@ -55,18 +57,26 @@ from .forms import (
     NavbarFavoritesRemoveForm,
     NavbarFavoritesReorderForm,
     parameter_formset_class,
+    parameter_specs_from_formset,
+    parameter_specs_from_policy,
     PasswordChangeForm,
     PermissionPolicyBulkEditForm,
     PermissionPolicyFilterForm,
     PermissionPolicyForm,
     policy_parameter_rows,
+    policy_rule_rows,
     PolicyParameterFilterForm,
     PolicyParameterForm,
     PolicyParameterFormSet,
+    PolicyRuleFilterForm,
+    PolicyRuleForm,
+    PolicyRuleFormSet,
     PreferenceProfileSettingsForm,
+    rule_formset_class,
+    suggested_parameter_paths,
     TokenForm,
 )
-from .models import PermissionPolicy, PolicyParameter, Token
+from .models import PermissionPolicy, PolicyParameter, PolicyRule, Token
 
 #
 # Login/logout
@@ -627,6 +637,17 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
                 exclude_columns=("policy",),
                 select_related_fields=("target_content_type",),
             ),
+            object_detail.ObjectsTablePanel(
+                section=SectionChoices.FULL_WIDTH,
+                weight=200,
+                table_class=users_tables.PolicyRuleTable,
+                table_filter="policy",
+                table_title="Rules",
+                exclude_columns=("policy",),
+                select_related_fields=("content_type",),
+                # The parameter-paths column lists, per rule, the parameters it does not use.
+                prefetch_related_fields=("policy__parameters",),
+            ),
         ),
     )
 
@@ -635,8 +656,9 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
         if self.action in ("list", "bulk_update", "bulk_destroy"):
             # The same table renders the list and the bulk confirmation pages; subquery counts avoid the join
             # cross-product that three `Count(distinct=True)` annotations would produce.
-            queryset = queryset.annotate(
+            queryset = queryset.prefetch_related("rules__content_type").annotate(
                 parameter_count=count_related(PolicyParameter, "policy"),
+                rule_count=count_related(PolicyRule, "policy"),
             )
         return queryset
 
@@ -658,11 +680,30 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
             return parameter_formset_class(extra=len(initial))(instance=instance, prefix="parameters", initial=initial)
         return PolicyParameterFormSet(instance=instance, prefix="parameters")
 
+    def _rule_formset(self, request, instance, specs):
+        kwargs = {"instance": instance, "prefix": "rules", "form_kwargs": {"parameter_specs": specs}}
+        if request.method == "POST":
+            return PolicyRuleFormSet(data=request.POST, **kwargs)
+        source = self._clone_source(request, instance)
+        if source is not None:
+            initial = policy_rule_rows(source)
+            return rule_formset_class(extra=len(initial))(initial=initial, **kwargs)
+        return PolicyRuleFormSet(**kwargs)
+
     def get_extra_context(self, request, instance):
         context = super().get_extra_context(request, instance)
         if self.action in ("create", "update"):
-            # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): the rules formset and path suggestions.
-            context["parameters"] = self._parameter_formset(request, instance)
+            parameters = self._parameter_formset(request, instance)
+            if request.method == "POST":
+                specs = parameter_specs_from_formset(parameters)
+            elif instance.present_in_database:
+                specs = parameter_specs_from_policy(instance)
+            else:
+                source = self._clone_source(request, instance)
+                specs = parameter_specs_from_policy(source) if source is not None else []
+            context["parameters"] = parameters
+            context["rules"] = self._rule_formset(request, instance, specs)
+            context["rule_paths_url"] = reverse("users:permissionpolicy_rule_paths")
         return context
 
     def form_save(self, form, **kwargs):
@@ -676,8 +717,40 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
                 )
             parameters.save()
             obj.refresh_from_db()
-            # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): validate and save the rules formset.
+            rules = self._rule_formset(self.request, obj, parameter_specs_from_policy(obj))
+            if not rules.is_valid():
+                raise ValidationError(list(rules.non_form_errors()) or ["Correct the errors in the rules below."])
+            rules.save()
+            obj.refresh_from_db()
         return obj
+
+    @action(detail=False, methods=["get"], url_path="rule-paths", url_name="rule_paths", custom_view_base_action="view")
+    def rule_paths(self, request, *args, **kwargs):
+        """
+        HTMX fragment: candidate lookup paths from a rule's object type to each declared parameter.
+
+        The rule's own form names its saved policy (`?policy=<pk>`); the policy form's rule rows instead pass the
+        (possibly unsaved) parameter formset in the query string, so the fragment works before anything is saved.
+        """
+        content_type_pks = [pk for pk in request.GET.getlist("content_type") if pk]
+        content_types = list(ContentType.objects.filter(pk__in=content_type_pks).order_by("app_label", "model"))
+        policy_pk = request.GET.get("policy")
+        if policy_pk:
+            policy = PermissionPolicy.objects.restrict(request.user, "view").filter(pk=policy_pk).first()
+            specs = parameter_specs_from_policy(policy) if policy is not None else []
+        else:
+            specs = parameter_specs_from_formset(PolicyParameterFormSet(data=request.GET, prefix="parameters"))
+        suggestions = [(content_type, suggested_parameter_paths(content_type, specs)) for content_type in content_types]
+        return render(
+            request,
+            "users/inc/policy_rule_paths.html",
+            {
+                "content_types": content_types,
+                "specs": specs,
+                "suggestions": suggestions,
+                "prefix": request.GET.get("prefix", ""),
+            },
+        )
 
 
 class PolicyParameterUIViewSet(PolicyChildUIViewSetBase):
@@ -697,3 +770,34 @@ class PolicyParameterUIViewSet(PolicyChildUIViewSetBase):
             ),
         ),
     )
+
+
+class PolicyRuleUIViewSet(PolicyChildUIViewSetBase):
+    filterset_class = users_filters.PolicyRuleFilterSet
+    filterset_form_class = PolicyRuleFilterForm
+    form_class = PolicyRuleForm
+    queryset = PolicyRule.objects.select_related("policy", "content_type")
+    serializer_class = users_serializers.PolicyRuleSerializer
+    table_class = users_tables.PolicyRuleTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            object_detail.ObjectFieldsPanel(
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("policy", "content_type", "actions"),
+            ),
+            object_detail.ObjectFieldsPanel(
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                label="Constraint",
+                fields=("constraint_template", "path_map"),
+            ),
+        ),
+    )
+
+    def get_extra_context(self, request, instance):
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            context["rule_paths_url"] = reverse("users:permissionpolicy_rule_paths")
+        return context

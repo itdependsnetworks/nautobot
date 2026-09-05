@@ -10,6 +10,7 @@ app_name = "user"
 router = NautobotUIViewSetRouter()
 router.register("permission-policies", views.PermissionPolicyUIViewSet)
 router.register("policy-parameters", views.PolicyParameterUIViewSet)
+router.register("policy-rules", views.PolicyRuleUIViewSet)
 
 urlpatterns = [
     path("profile/", views.ProfileView.as_view(), name="profile"),

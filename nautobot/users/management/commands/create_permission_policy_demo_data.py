@@ -13,7 +13,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from nautobot.users.choices import PolicyParameterKindChoices
-from nautobot.users.models import PermissionPolicy, PolicyParameter
+from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
 
 DEMO_PASSWORD = "nautobot"  # noqa: S105  # deliberately well-known: demo data for development environments
 DEMO_PREFIX = "demo-"
@@ -51,6 +51,7 @@ class Command(BaseCommand):
         if options["flush"]:
             self.flush()
             return
+        self._touched_rules = {}
         with transaction.atomic():
             self.ensure_builtin_policies()
             groups = {name: Group.objects.get_or_create(name=name)[0] for _, (name, _) in DEMO_USERS.items()}
@@ -103,6 +104,21 @@ class Command(BaseCommand):
         )
         return parameter
 
+    def rule(self, policy, target, actions, template, path_map):
+        rule = PolicyRule.objects.filter(policy=policy, content_type=content_type(*target)).first()
+        if rule is None:
+            rule = PolicyRule(policy=policy, content_type=content_type(*target))
+        rule.actions = list(actions)
+        rule.constraint_template = template
+        rule.path_map = path_map
+        rule.validated_save()
+        self._touched_rules.setdefault(policy.pk, set()).add(rule.pk)
+        return rule
+
+    def prune_rules(self, policy):
+        """Delete rules of `policy` that this run did not (re)create."""
+        policy.rules.exclude(pk__in=self._touched_rules.get(policy.pk, set())).delete()
+
     # ----- patterns -----------------------------------------------------------------------------------------
 
     def create_regional_it(self, groups):
@@ -113,15 +129,36 @@ class Command(BaseCommand):
             "read access to the region and its child locations.",
         )
         self.parameter(policy, "region", ("dcim", "location"), multiple=False)
-        # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the region-scoped rules.
+        in_region = {"region": {"path": "location", "lookup": "in_tree"}}
+        for target in (("dcim", "device"), ("dcim", "rack"), ("dcim", "rackgroup"), ("dcim", "powerpanel")):
+            self.rule(policy, target, CRUD, {"location__in_tree": "{{ region }}"}, in_region)
+        self.rule(
+            policy,
+            ("dcim", "interface"),
+            CRUD,
+            {"device__location__in_tree": "{{ region }}"},
+            {"region": {"path": "device__location", "lookup": "in_tree"}},
+        )
+        self.rule(
+            policy,
+            ("dcim", "location"),
+            ["view"],
+            {"pk__in_tree": "{{ region }}"},
+            {"region": {"path": "pk", "lookup": "in_tree"}},
+        )
+
+        self.prune_rules(policy)
 
     def create_telco_owner(self, group):
         """Pattern 3: an unparameterized custom policy spanning several object types."""
-        self.policy(
+        policy = self.policy(
             f"{DEMO_PREFIX}telco-owner",
             "Full access to everything circuit related, plus read access to locations.",
         )
-        # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the circuit rules.
+        for model in ("circuit", "circuittype", "provider", "providernetwork", "circuittermination"):
+            self.rule(policy, ("circuits", model), CRUD, {}, {})
+        self.rule(policy, ("dcim", "location"), ["view"], {}, {})
+        self.prune_rules(policy)
 
     def create_job_runner(self, group):
         """Pattern 4: a multi-valued object parameter selecting which jobs may be run."""
@@ -130,7 +167,18 @@ class Command(BaseCommand):
             "Run a selected set of jobs and see one's own job results and logs.",
         )
         self.parameter(policy, "jobs", ("extras", "job"))
-        # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the job rules.
+        self.rule(
+            policy,
+            ("extras", "job"),
+            ["view", "run"],
+            {"pk__in": "{{ jobs }}"},
+            {"jobs": {"path": "pk", "lookup": "in"}},
+        )
+        # These rules do not use the `jobs` parameter: they are scoped by the requesting user, or not at all.
+        self.rule(policy, ("extras", "jobresult"), ["view"], {"user": "$user"}, {})
+        self.rule(policy, ("extras", "joblogentry"), ["view"], {"job_result__user": "$user"}, {})
+        self.rule(policy, ("extras", "jobqueue"), ["view"], {}, {})
+        self.prune_rules(policy)
 
     # ----- flush and summary --------------------------------------------------------------------------------
 

@@ -17,8 +17,10 @@ from nautobot.core.api import (
 from nautobot.users.choices import PolicyParameterKindChoices
 from nautobot.users.models import (
     ObjectPermission,
+    PERMISSION_OBJECT_TYPE_LIMIT_CHOICES,
     PermissionPolicy,
     PolicyParameter,
+    PolicyRule,
     Token,
 )
 
@@ -142,6 +144,51 @@ class PolicyParameterChildSerializer(BaseModelSerializer):
         validators = []  # the (policy, name) unique_together is enforced by the parent serializer
 
 
+class PolicyRuleSerializer(ValidatedModelSerializer):
+    """A `PolicyRule` on its own endpoint; `policy` is writable and the model's `clean()` runs on save."""
+
+    content_type = ContentTypeField(queryset=ContentType.objects.filter(PERMISSION_OBJECT_TYPE_LIMIT_CHOICES))
+    actions = serializers.ListField(
+        child=serializers.CharField(max_length=30),
+        help_text="The list of actions granted on this object type",
+    )
+    constraint_template = serializers.JSONField(required=False)
+    path_map = serializers.JSONField(required=False)
+
+    class Meta:
+        model = PolicyRule
+        fields = "__all__"
+
+    def validate(self, attrs):
+        # PLACEHOLDER: will be replaced in C10 (Policy rule validation and rendering): generate an omitted
+        # `constraint_template` from `path_map`.
+        return super().validate(attrs)
+
+
+class PolicyRuleChildSerializer(BaseModelSerializer):
+    """A `PolicyRule` nested in `PermissionPolicySerializer`; see `PolicyParameterChildSerializer`."""
+
+    id = serializers.UUIDField(read_only=True)
+    content_type = ContentTypeField(queryset=ContentType.objects.filter(PERMISSION_OBJECT_TYPE_LIMIT_CHOICES))
+    actions = serializers.ListField(
+        child=serializers.CharField(max_length=30),
+        help_text="The list of actions granted on this object type",
+    )
+    constraint_template = serializers.JSONField(required=False)
+    path_map = serializers.JSONField(required=False)
+
+    class Meta:
+        model = PolicyRule
+        fields = "__all__"
+        read_only_fields = ["policy"]
+        validators = []  # the (policy, content_type) unique_together is enforced by the parent serializer
+
+    def validate(self, attrs):
+        # PLACEHOLDER: will be replaced in C10 (Policy rule validation and rendering): generate an omitted
+        # `constraint_template` from `path_map`.
+        return super().validate(attrs)
+
+
 class PermissionPolicySerializer(ValidatedModelSerializer):
     """
     A `PermissionPolicy` with its parameters and rules as writable nested lists.
@@ -153,12 +200,13 @@ class PermissionPolicySerializer(ValidatedModelSerializer):
     """
 
     parameters = PolicyParameterChildSerializer(many=True, required=False)
+    rules = PolicyRuleChildSerializer(many=True, required=False)
 
     class Meta:
         model = PermissionPolicy
         fields = "__all__"
         # Nested lists are treated like M2M fields: shown by default here, hidden with `?exclude_m2m=true`.
-        default_m2m_fields = ("parameters",)
+        default_m2m_fields = ("parameters", "rules")
 
     def validate(self, attrs):
         nested = {key: attrs.pop(key) for key in ("parameters", "rules") if key in attrs}
@@ -223,7 +271,12 @@ class PermissionPolicySerializer(ValidatedModelSerializer):
             self._sync(policy, policy.parameters, parameters, "name", errors, "parameters")
             if errors:
                 raise ValidationError(errors)
-        # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): sync the nested rules.
+        # Rule validation reads `policy.parameters`; drop any prefetched cache so it sees what was just saved.
+        policy.refresh_from_db()
+        if rules is not None:
+            self._sync(policy, policy.rules, rules, "content_type", errors, "rules")
+            if errors:
+                raise ValidationError(errors)
         # PLACEHOLDER: will be replaced in C11 (Policy definition validation): validate the policy as a whole.
 
 

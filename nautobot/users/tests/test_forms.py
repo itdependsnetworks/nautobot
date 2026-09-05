@@ -1,9 +1,13 @@
 from django.contrib.contenttypes.models import ContentType
 
 from nautobot.core.testing import TestCase
+from nautobot.dcim.models import Device, Interface, Location
 from nautobot.tenancy.models import Tenant
 from nautobot.users.forms import (
+    parameter_specs_from_policy,
     PolicyParameterForm,
+    PolicyRuleForm,
+    PolicyRuleFormSet,
 )
 from nautobot.users.tests.test_policies import create_tenant_policy
 
@@ -30,3 +34,98 @@ class PolicyParameterFormTest(TestCase):
         form = PolicyParameterForm()
         for name, field in form.fields.items():
             self.assertEqual(field.widget.attrs.get("aria-label"), field.label, name)
+
+
+class PolicyRuleFormTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.policy = create_tenant_policy()
+        cls.specs = parameter_specs_from_policy(cls.policy)
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+        cls.interface_ct = ContentType.objects.get_for_model(Interface)
+        cls.location_ct = ContentType.objects.get_for_model(Location)
+
+    def test_additional_actions_are_merged_once_and_path_map_is_derived(self):
+        form = PolicyRuleForm(
+            data={
+                "policy": self.policy.pk,
+                "content_type": self.location_ct.pk,
+                "actions": ["view"],
+                "additional_actions": ["run", "view"],
+                "constraint_template": '{"tenant__in": "{{ tenant }}"}',
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["actions"], ["view", "run"])
+        self.assertEqual(form.instance.actions, ["view", "run"])
+        self.assertEqual(form.instance.path_map, {"tenant": {"path": "tenant", "lookup": "in"}})
+        # The parameters the editor offers come from the selected policy when none are passed in.
+        self.assertEqual(form.fields["constraint_template"].parameter_names, ["tenant"])
+
+    def test_actions_required(self):
+        form = PolicyRuleForm(
+            data={
+                "policy": self.policy.pk,
+                "content_type": self.location_ct.pk,
+                "actions": [],
+                "constraint_template": "{}",
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("actions", form.errors)
+
+    def test_editing_a_rule_splits_custom_actions(self):
+        rule = self.policy.rules.get(content_type=self.device_ct)
+        rule.actions = ["view", "run"]
+        rule.save()
+        form = PolicyRuleForm(instance=rule)
+        self.assertEqual(form.initial["actions"], ["view"])
+        self.assertEqual(form.initial["additional_actions"], ["run"])
+
+    def test_formset_save_removes_rules_no_longer_listed(self):
+        self.assertEqual(self.policy.rules.count(), 2)
+        device_rule = self.policy.rules.get(content_type=self.device_ct)
+        interface_rule = self.policy.rules.get(content_type=self.interface_ct)
+        data = {
+            "rules-TOTAL_FORMS": "2",
+            "rules-INITIAL_FORMS": "2",
+            "rules-MIN_NUM_FORMS": "0",
+            "rules-MAX_NUM_FORMS": "1000",
+            "rules-0-id": device_rule.pk,
+            "rules-0-policy": self.policy.pk,
+            "rules-0-content_type": self.device_ct.pk,
+            "rules-0-actions": ["view", "change"],
+            "rules-0-constraint_template": '{"tenant__in": "{{ tenant }}"}',
+            "rules-1-id": interface_rule.pk,
+            "rules-1-policy": self.policy.pk,
+            "rules-1-content_type": self.interface_ct.pk,
+            "rules-1-actions": ["view"],
+            "rules-1-constraint_template": '{"device__tenant__in": "{{ tenant }}"}',
+            "rules-1-DELETE": "on",
+        }
+        formset = PolicyRuleFormSet(
+            data=data, instance=self.policy, prefix="rules", form_kwargs={"parameter_specs": self.specs}
+        )
+        self.assertTrue(formset.is_valid(), formset.errors)
+        formset.save()
+        self.assertEqual(list(self.policy.rules.values_list("content_type", flat=True)), [self.device_ct.pk])
+        self.assertEqual(self.policy.rules.get().actions, ["view", "change"])
+
+    def test_formset_rejects_duplicate_object_types(self):
+        data = {
+            "rules-TOTAL_FORMS": "2",
+            "rules-INITIAL_FORMS": "0",
+            "rules-MIN_NUM_FORMS": "0",
+            "rules-MAX_NUM_FORMS": "1000",
+            "rules-0-content_type": self.location_ct.pk,
+            "rules-0-actions": ["view"],
+            "rules-0-constraint_template": "{}",
+            "rules-1-content_type": self.location_ct.pk,
+            "rules-1-actions": ["view"],
+            "rules-1-constraint_template": "{}",
+        }
+        formset = PolicyRuleFormSet(
+            data=data, instance=self.policy, prefix="rules", form_kwargs={"parameter_specs": self.specs}
+        )
+        self.assertFalse(formset.is_valid())
+        self.assertIn("more than one rule", str(formset.non_form_errors()))

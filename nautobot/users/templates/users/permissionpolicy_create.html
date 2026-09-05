@@ -69,12 +69,103 @@
         </div>
     </div>
 
-    {# PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): the rules editor. #}
+    <div class="card">
+        <div class="card-header">
+            <strong>Rules</strong>
+            <span class="text-secondary small ms-8">What this policy grants on each object type, and how that object type reaches each parameter.</span>
+        </div>
+        <div class="card-body">
+            {% if rules.non_form_errors %}
+                <div class="alert alert-danger">{% for error in rules.non_form_errors %}<div>{{ error }}</div>{% endfor %}</div>
+            {% endif %}
+            {{ rules.management_form }}
+            <div id="policy-rules">
+                {% for rule in rules.forms %}
+                    <div class="card mb-16 rule-card formset_row-{{ rules.prefix }}">
+                        <div class="card-body">
+                            {% for hidden in rule.hidden_fields %}{{ hidden }}{% endfor %}
+                            {% if rule.non_field_errors %}
+                                <div class="alert alert-danger">
+                                    {% for error in rule.non_field_errors %}
+                                        <div>{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            {% render_field rule.content_type %}
+                            {% render_field rule.actions %}
+                            {% render_field rule.additional_actions %}
+                            <div class="rule-paths mb-10"
+                                 hx-get="{{ rule_paths_url }}"
+                                 hx-trigger="load, refresh-paths, change[target.name.endsWith('-content_type')] from:closest .rule-card, change from:#policy-parameters"
+                                 hx-include="[name^='{{ parameters.prefix }}-']"
+                                 hx-target="this"
+                                 hx-swap="innerHTML"
+                                 hx-on::config-request="policyRulePathsConfigRequest(this, event)">
+                                <div class="col-md-9 offset-md-3 text-secondary small">Select an object type to see suggested parameter paths.</div>
+                            </div>
+                            {% render_field rule.constraint_template %}
+                            {% if rule.DELETE %}
+                                <div class="col-md-9 offset-md-3">{{ rule.DELETE }} <label for="{{ rule.DELETE.id_for_label }}">Remove this rule</label></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+                {# Invisible anchor so the formset plugin has a row to attach its "Add" button to when there are no rules. #}
+                <div class="rule-card formset_row-{{ rules.prefix }} nb-formset-anchor" style="display: none"></div>
+            </div>
+            {# Cloned by "Add rule". Kept out of the live DOM so select2 and the constraint editor never initialize the template. #}
+            {% with rule=rules.empty_form %}
+            <template id="{{ rules.prefix }}-template">
+                <div class="card mb-16 rule-card formset_row-{{ rules.prefix }}">
+                    <div class="card-body">
+                        {% for hidden in rule.hidden_fields %}{{ hidden }}{% endfor %}
+                        {% render_field rule.content_type %}
+                        {% render_field rule.actions %}
+                        {% render_field rule.additional_actions %}
+                        <div class="rule-paths mb-10"
+                             hx-get="{{ rule_paths_url }}"
+                             hx-trigger="load, refresh-paths, change[target.name.endsWith('-content_type')] from:closest .rule-card, change from:#policy-parameters"
+                             hx-include="[name^='{{ parameters.prefix }}-']"
+                             hx-target="this"
+                             hx-swap="innerHTML"
+                             hx-on::config-request="policyRulePathsConfigRequest(this, event)">
+                            <div class="col-md-9 offset-md-3 text-secondary small">Select an object type to see suggested parameter paths.</div>
+                        </div>
+                        {% render_field rule.constraint_template %}
+                        {% if rule.DELETE %}
+                            <div class="col-md-9 offset-md-3">{{ rule.DELETE }} <label for="{{ rule.DELETE.id_for_label }}">Remove this rule</label></div>
+                        {% endif %}
+                    </div>
+                </div>
+            </template>
+            {% endwith %}
+        </div>
+    </div>
 {% endblock form %}
 
 {% block javascript %}
     {{ block.super }}
     <script type="text/javascript">
+        // The suggested-paths fragment reads its row's object type and prefix at request time, so rows cloned by
+        // the formset plugin (whose ids change) keep working.
+        window.policyRulePathsConfigRequest = function (element, event) {
+            const card = element.closest(".rule-card");
+            const select = card ? card.querySelector('select[name$="-content_type"]') : null;
+            if (!select) {
+                event.preventDefault();
+                return;
+            }
+            event.detail.parameters.prefix = select.name.replace(/-content_type$/, "");
+            event.detail.parameters.content_type = select.value;
+        };
+
+        // Adding or removing a parameter row changes the suggestions of every rule; HTMX cannot observe that itself.
+        function refreshAllRulePaths() {
+            document.querySelectorAll(".rule-card:not(.nb-formset-anchor) .rule-paths").forEach(function (target) {
+                if (window.htmx) { htmx.trigger(target, "refresh-paths"); }
+            });
+        }
+
         // "Target object type" applies only to object parameters: hide and clear it for string parameters.
         function toggleTargetObjectType(kindSelect) {
             const row = kindSelect.closest("tr");
@@ -101,6 +192,21 @@
             added: function (row) {
                 jsify_form(row);
                 initializeParameterRow(row[0]);
+                refreshAllRulePaths();
+            },
+            removed: refreshAllRulePaths
+        });
+        $('.formset_row-{{ rules.prefix }}').formset({
+            addText: '<span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add rule',
+            addCssClass: 'btn btn-primary add-row',
+            deleteText: '<span class="mdi mdi-trash-can-outline" aria-hidden="true"></span> Remove rule',
+            deleteCssClass: 'btn btn-danger delete-row',
+            prefix: '{{ rules.prefix }}',
+            formCssClass: 'dynamic-formset-{{ rules.prefix }}',
+            formTemplate: $($('#{{ rules.prefix }}-template').html()),
+            added: function (row) {
+                jsify_form(row);
+                if (window.htmx) { htmx.process(row[0]); }  // fires the fragment's `load` trigger
             }
         });
         document.querySelectorAll('.formset_row-{{ parameters.prefix }}:not(.nb-formset-anchor)').forEach(initializeParameterRow);

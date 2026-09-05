@@ -38,6 +38,7 @@ def _content_type(ContentType, app_label, model):
 def _create_tenant_policy(apps, name, description, actions):
     PermissionPolicy = apps.get_model("users", "PermissionPolicy")
     PolicyParameter = apps.get_model("users", "PolicyParameter")
+    PolicyRule = apps.get_model("users", "PolicyRule")
     ContentType = apps.get_model("contenttypes", "ContentType")
 
     policy, created = PermissionPolicy.objects.get_or_create(name=name, defaults={"description": description})
@@ -50,15 +51,32 @@ def _create_tenant_policy(apps, name, description, actions):
         target_content_type=_content_type(ContentType, "tenancy", "tenant"),
         multiple=True,
     )
-    # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): one rule per tenant-scoped object type.
+    for (app_label, model), path in TENANT_PATHS.items():
+        PolicyRule.objects.create(
+            policy=policy,
+            content_type=_content_type(ContentType, app_label, model),
+            actions=list(actions),
+            constraint_template={f"{path}__in": "{{ tenant }}"},
+            path_map={"tenant": {"path": path, "lookup": "in"}},
+        )
 
 
 def _create_unparameterized_policy(apps, name, description, rules):
     PermissionPolicy = apps.get_model("users", "PermissionPolicy")
-    _, created = PermissionPolicy.objects.get_or_create(name=name, defaults={"description": description})
+    PolicyRule = apps.get_model("users", "PolicyRule")
+    ContentType = apps.get_model("contenttypes", "ContentType")
+
+    policy, created = PermissionPolicy.objects.get_or_create(name=name, defaults={"description": description})
     if not created:
         return
-    # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the policy's rules.
+    for (app_label, model), actions, constraint_template in rules:
+        PolicyRule.objects.create(
+            policy=policy,
+            content_type=_content_type(ContentType, app_label, model),
+            actions=list(actions),
+            constraint_template=constraint_template,
+            path_map={},
+        )
 
 
 def create_builtin_policies(apps, schema_editor):
@@ -100,7 +118,7 @@ def create_builtin_policies(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("users", "0013_policy_parameter"),
+        ("users", "0014_policy_rule"),
         ("contenttypes", "0002_remove_content_type_name"),
         ("dcim", "0097_virtualdevicecontext_controller_managed_device_group"),
         ("ipam", "0058_iprange_role_data"),

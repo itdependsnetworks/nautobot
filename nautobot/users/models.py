@@ -24,6 +24,7 @@ __all__ = (
     "ObjectPermission",
     "PermissionPolicy",
     "PolicyParameter",
+    "PolicyRule",
     "Token",
     "User",
 )
@@ -453,3 +454,55 @@ class PolicyParameter(BaseModel, ChangeLoggedModel):
             errors["target_content_type"] = "A 'string' parameter must not reference a target object type."
         if errors:
             raise ValidationError(errors)
+
+
+class PolicyRule(BaseModel, ChangeLoggedModel):
+    """
+    What a `PermissionPolicy` grants on one content type, and how that content type reaches each parameter.
+
+    `path_map` records, for every parameter this rule's template uses, the resolved lookup path and lookup
+    (`{"path": "device__tenant", "lookup": "in"}`). A parameter the template does not use has no entry: the rule
+    is simply not scoped by it. `PermissionPolicy.validate_definition()` checks that every parameter is used by at
+    least one rule of the policy.
+    """
+
+    policy = models.ForeignKey(
+        to="users.PermissionPolicy",
+        on_delete=models.CASCADE,  # a rule is owned by its policy and is meaningless without it
+        related_name="rules",
+    )
+    content_type = models.ForeignKey(
+        to=ContentType,
+        on_delete=models.CASCADE,  # removing a content type (uninstalling an App) removes rules that name it
+        limit_choices_to=PERMISSION_OBJECT_TYPE_LIMIT_CHOICES,
+        related_name="policy_rules",
+    )
+    actions = JSONArrayField(
+        base_field=models.CharField(max_length=30),
+        help_text="The list of actions granted on this object type",
+    )
+    constraint_template = models.JSONField(
+        encoder=DjangoJSONEncoder,
+        blank=True,
+        default=dict,
+        help_text="Queryset filter in the shape of a stored permission constraint, with {{ parameter }} "
+        "placeholders. An empty object grants access to all objects of this type.",
+    )
+    path_map = models.JSONField(
+        encoder=DjangoJSONEncoder,
+        blank=True,
+        default=dict,
+        help_text="For each policy parameter used in the constraint template, the resolved lookup path and lookup",
+    )
+
+    documentation_static_path = "docs/user-guide/platform-functionality/users/policyrule.html"
+    is_metadata_associable_model = False
+    natural_key_field_names = ["policy", "content_type"]
+
+    class Meta:
+        ordering = ["policy", "content_type"]
+        unique_together = [["policy", "content_type"]]
+        verbose_name = "policy rule"
+
+    def __str__(self):
+        return f"{self.policy}: {self.content_type}"

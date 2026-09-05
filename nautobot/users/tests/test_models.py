@@ -9,6 +9,7 @@ from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
     PolicyParameter,
+    PolicyRule,
     Token,
 )
 from nautobot.users.tests.test_policies import create_tenant_policy
@@ -34,6 +35,14 @@ class PermissionPolicyTest(ModelTestCases.BaseModelTestCase):
 
 class PolicyParameterTest(ModelTestCases.BaseModelTestCase):
     model = PolicyParameter
+
+    @classmethod
+    def setUpTestData(cls):
+        create_tenant_policy(name="Model test policy")
+
+
+class PolicyRuleTest(ModelTestCases.BaseModelTestCase):
+    model = PolicyRule
 
     @classmethod
     def setUpTestData(cls):

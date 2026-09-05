@@ -37,6 +37,18 @@ menu_items = (
                             ),
                         ),
                     ),
+                    NavMenuItem(
+                        link="users:policyrule_list",
+                        name="Policy Rules",
+                        weight=400,
+                        permissions=["users.view_policyrule"],
+                        buttons=(
+                            NavMenuAddButton(
+                                link="users:policyrule_add",
+                                permissions=["users.add_policyrule"],
+                            ),
+                        ),
+                    ),
                 ),
             ),
         ),

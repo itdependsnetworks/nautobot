@@ -1,7 +1,9 @@
 """Tests for permission policies: placeholder substitution, rendering, the derivation hook, and the path resolver."""
 
+import importlib
 from io import StringIO
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -21,7 +23,7 @@ from nautobot.core.utils.orm_paths import (
 from nautobot.dcim.models import Device, Interface, Location
 from nautobot.extras.models import Status
 from nautobot.tenancy.models import Tenant
-from nautobot.users.models import PermissionPolicy, PolicyParameter
+from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
 
 User = get_user_model()
 
@@ -118,7 +120,20 @@ def create_tenant_policy(name="Tenant device viewer", actions=("view",)):
         target_content_type=ContentType.objects.get_for_model(Tenant),
         multiple=True,
     ).validated_save()
-    # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the Device and Interface rules.
+    PolicyRule(
+        policy=policy,
+        content_type=ContentType.objects.get_for_model(Device),
+        actions=list(actions),
+        constraint_template={"tenant__in": "{{ tenant }}"},
+        path_map={"tenant": {"path": "tenant", "lookup": "in"}},
+    ).validated_save()
+    PolicyRule(
+        policy=policy,
+        content_type=ContentType.objects.get_for_model(Interface),
+        actions=list(actions),
+        constraint_template={"device__tenant__in": "{{ tenant }}"},
+        path_map={"tenant": {"path": "device__tenant", "lookup": "in"}},
+    ).validated_save()
     return policy
 
 
@@ -144,6 +159,9 @@ class PolicyModelValidationTest(TestCase):
     def test_clone_params_reference_source_policy(self):
         self.assertEqual(self.policy.clone_fields, ["description"])
         self.assertEqual(self.policy.get_clone_extra_params(), {"clone_from": str(self.policy.pk)})
+
+
+seed_migration = importlib.import_module("nautobot.users.migrations.0015_permission_policy_seed_data")
 
 
 class ConstraintToFilterParamsTest(TestCase):
@@ -173,6 +191,31 @@ class ConstraintToFilterParamsTest(TestCase):
         )
         # A null value has no query-string representation.
         self.assertIsNone(constraint_to_filter_params(Device, {"asset_tag": None}))
+
+
+class BuiltinPoliciesTest(TestCase):
+    """The test database is flushed after migrations, so the seed function is run explicitly here."""
+
+    @classmethod
+    def setUpTestData(cls):
+        seed_migration.create_builtin_policies(apps, None)
+
+    def test_seed_does_not_overwrite_edited_policy(self):
+        policy = PermissionPolicy.objects.get(name="nautobot-default-reference-data-viewer")
+        policy.description = "Edited by an administrator"
+        policy.validated_save()
+        policy.rules.first().delete()
+        rule_count = policy.rules.count()
+        PermissionPolicy.objects.get(name="nautobot-default-export-job-runner").delete()
+
+        seed_migration.create_builtin_policies(apps, None)
+
+        policy.refresh_from_db()
+        self.assertEqual(policy.description, "Edited by an administrator")
+        self.assertEqual(policy.rules.count(), rule_count)
+        # A deleted built-in policy is recreated (the deployment never had a customized copy), so a fresh
+        # install and an upgraded install converge.
+        self.assertTrue(PermissionPolicy.objects.filter(name="nautobot-default-export-job-runner").exists())
 
 
 class DemoDataCommandTest(TestCase):

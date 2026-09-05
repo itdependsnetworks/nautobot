@@ -17,6 +17,7 @@ from nautobot.users.filters import (
     ObjectPermissionFilterSet,
     PermissionPolicyFilterSet,
     PolicyParameterFilterSet,
+    PolicyRuleFilterSet,
     TokenFilterSet,
     UserFilterSet,
 )
@@ -24,6 +25,7 @@ from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
     PolicyParameter,
+    PolicyRule,
     Token,
 )
 from nautobot.users.tests.test_policies import create_tenant_policy
@@ -222,6 +224,13 @@ class PermissionPolicyTestCase(FilterTestCases.FilterTestCase):
             policy.save()
         PermissionPolicy.objects.create(name="Empty policy", description="No rules")
 
+    def test_content_types(self):
+        interface_ct = ContentType.objects.get(app_label="dcim", model="interface")
+        params = {"content_types": [interface_ct.pk]}
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset(params, self.queryset).qs, self.queryset.filter(rules__content_type=interface_ct).distinct()
+        )
+
     def test_parameter_target_content_types(self):
         tenant_ct = ContentType.objects.get_for_model(Tenant)
         params = {"parameter_target_content_types": [tenant_ct.pk]}
@@ -256,6 +265,33 @@ class PolicyParameterTestCase(FilterTestCases.FilterTestCase):
         self.assertQuerySetEqualAndNotEmpty(
             self.filterset({"target_content_type": "tenancy.tenant"}, self.queryset).qs,
             self.queryset.filter(target_content_type__app_label="tenancy", target_content_type__model="tenant"),
+        )
+
+
+class PolicyRuleTestCase(FilterTestCases.FilterTestCase):
+    queryset = PolicyRule.objects.all()
+    filterset = PolicyRuleFilterSet
+
+    generic_filter_tests = (
+        ["policy", "policy__id"],
+        ["policy", "policy__name"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        for i in range(3):
+            create_tenant_policy(name=f"Policy {i + 1}")
+
+    def test_content_type(self):
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset({"content_type": "dcim.device"}, self.queryset).qs,
+            self.queryset.filter(content_type__app_label="dcim", content_type__model="device"),
+        )
+
+    def test_q(self):
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset({"q": "interface"}, self.queryset).qs,
+            self.queryset.filter(content_type__model="interface"),
         )
 
 

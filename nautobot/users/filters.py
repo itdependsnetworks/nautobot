@@ -17,6 +17,7 @@ from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
     PolicyParameter,
+    PolicyRule,
     Token,
 )
 
@@ -25,6 +26,7 @@ __all__ = (
     "ObjectPermissionFilterSet",
     "PermissionPolicyFilterSet",
     "PolicyParameterFilterSet",
+    "PolicyRuleFilterSet",
     "TokenFilterSet",
     "UserFilterSet",
 )
@@ -132,11 +134,21 @@ class ObjectPermissionFilterSet(BaseFilterSet, NameSearchFilterSet):
 
 
 class PermissionPolicyFilterSet(BaseFilterSet, NameSearchFilterSet):
+    content_types = ModelMultipleChoiceFilter(
+        field_name="rules__content_type",
+        queryset=ContentType.objects.all(),
+        distinct=True,
+        label="Object types (ID)",
+    )
     parameter_target_content_types = ModelMultipleChoiceFilter(
         field_name="parameters__target_content_type",
         queryset=ContentType.objects.all(),
         distinct=True,
         label="Parameter target object types (ID)",
+    )
+    has_rules = RelatedMembershipBooleanFilter(
+        field_name="rules",
+        label="Has rules",
     )
 
     class Meta:
@@ -155,3 +167,16 @@ class PolicyParameterFilterSet(BaseFilterSet):
     class Meta:
         model = PolicyParameter
         fields = ["id", "name", "kind", "multiple"]
+
+
+class PolicyRuleFilterSet(BaseFilterSet):
+    q = SearchFilter(filter_predicates={"policy__name": "icontains", "content_type__model": "icontains"})
+    policy = NaturalKeyOrPKMultipleChoiceFilter(
+        to_field_name="name",
+        queryset=PermissionPolicy.objects.all(),
+    )
+    content_type = ContentTypeFilter()
+
+    class Meta:
+        model = PolicyRule
+        fields = ["id"]

@@ -1,0 +1,56 @@
+{% comment %}
+HTMX fragment: for one rule, the candidate lookup paths from its object type to each policy parameter.
+Context: content_types (at most one), specs, suggestions [(content_type, [(spec, lookup, candidates)])],
+prefix (the formset prefix of a rule row on the policy form, or "" on the rule's own form).
+{% endcomment %}
+<div class="col-md-9 offset-md-3 nb-rule-paths" data-prefix="{{ prefix }}">
+    {% if not prefix %}
+        {# The rule's own form: tell the constraint editor which parameter names the selected policy declares. #}
+        {% for spec in specs %}<input type="hidden" class="nb-rule-parameter-name" value="{{ spec.name }}">{% endfor %}
+    {% endif %}
+    {% if not specs %}
+        <div class="text-secondary small">This policy declares no parameters. Add a parameter to resolve paths, or leave the template empty to grant every object of the selected type.</div>
+    {% elif not content_types %}
+        <div class="text-secondary small">Select an object type to see suggested parameter paths.</div>
+    {% else %}
+        <div class="small text-secondary mb-4">Suggested parameter paths (shortest first). Selecting one adds it to the constraint template.</div>
+        {% for content_type, type_suggestions in suggestions %}
+            <div class="mb-8">
+                <strong>{{ content_type }}</strong>
+                {% for spec, lookup, candidates in type_suggestions %}
+                    <div class="ms-12 mb-4">
+                        <code>{% templatetag openvariable %} {{ spec.name }} {% templatetag closevariable %}</code>
+                        {% if spec.kind != "object" %}
+                            <span class="text-secondary small">is a string parameter: pick a text field in the template, e.g. <code>name__istartswith</code>.</span>
+                        {% elif candidates %}
+                            {% for candidate in candidates|slice:":3" %}
+                                <button type="button" class="btn btn-sm btn-outline-secondary nb-use-path mb-2"
+                                        data-param="{{ spec.name }}" data-path="{{ candidate.path }}" data-lookup="{{ lookup }}"
+                                        title="{% for hop in candidate.relations %}{{ hop.verbose_name|capfirst }}{% if not forloop.last %} › {% endif %}{% endfor %}">
+                                    <code>{{ candidate.path }}</code>
+                                    <span class="text-secondary">{% for hop in candidate.relations %}{{ hop.verbose_name|capfirst }}{% if not forloop.last %} › {% endif %}{% endfor %}</span>
+                                </button>
+                            {% endfor %}
+                            {% if candidates|length > 3 %}
+                                <details class="d-inline-block">
+                                    <summary class="small text-secondary">{{ candidates|length|add:"-3" }} longer path{{ candidates|length|add:"-3"|pluralize }}</summary>
+                                    {% for candidate in candidates|slice:"3:" %}
+                                        <button type="button" class="btn btn-sm btn-outline-secondary nb-use-path mb-2"
+                                                data-param="{{ spec.name }}" data-path="{{ candidate.path }}" data-lookup="{{ lookup }}"
+                                                title="{% for hop in candidate.relations %}{{ hop.verbose_name|capfirst }}{% if not forloop.last %} › {% endif %}{% endfor %}">
+                                            <code>{{ candidate.path }}</code>
+                                            <span class="text-secondary">{% for hop in candidate.relations %}{{ hop.verbose_name|capfirst }}{% if not forloop.last %} › {% endif %}{% endfor %}</span>
+                                        </button>
+                                    {% endfor %}
+                                </details>
+                            {% endif %}
+                        {% else %}
+                            <span class="badge bg-warning text-dark">No path from {{ content_type }} to {{ spec.target_content_type }}</span>
+                            <span class="text-secondary small">Leave this parameter out of this rule's template; the rule is then not scoped by it.</span>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endfor %}
+    {% endif %}
+</div>
