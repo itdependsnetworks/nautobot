@@ -15,6 +15,7 @@ from nautobot.users.filters import GroupFilterSet
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyParameter,
     Token,
 )
 from nautobot.users.tests.test_policies import create_tenant_policy
@@ -476,14 +477,37 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
         for i in range(3):
             create_tenant_policy(name=f"Policy {i + 1}")
 
-        # PLACEHOLDER: will be replaced in C07 and C09 (parameter and rule models): nested parameters and rules.
+        # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): nested rules.
         cls.create_data = [
-            {"name": "Policy 4", "description": "Tenant viewer"},
+            {
+                "name": "Policy 4",
+                "description": "Tenant viewer",
+                "parameters": [
+                    {"name": "tenant", "kind": "object", "target_content_type": "tenancy.tenant", "multiple": True}
+                ],
+            },
             {"name": "Policy 5"},
-            {"name": "Policy 6"},
+            {
+                "name": "Policy 6",
+                "parameters": [{"name": "prefix", "kind": "string", "multiple": False}],
+            },
         ]
         cls.update_data = {"name": "Policy X", "description": "Updated"}
         cls.bulk_update_data = {"description": "New description"}
+
+    def test_duplicate_children_rejected(self):
+        self.add_permissions("users.change_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        data = {
+            "parameters": [
+                {"name": "tenant", "kind": "object", "target_content_type": "tenancy.tenant", "multiple": True},
+                {"name": "tenant", "kind": "string"},
+            ]
+        }
+        response = self.client.patch(self._get_detail_url(policy), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Duplicate entry", str(response.data["parameters"][1]["name"]))
+        self.assertEqual(policy.parameters.get(name="tenant").kind, "object")  # unchanged
 
     @skip("Nested parameters and rules are not part of the CSV representation; use the JSON API to recreate them")
     def test_recreate_object_csv(self):
@@ -497,6 +521,59 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
     @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")
     def test_list_objects_descending_ordered(self):
         pass
+
+
+class PolicyReferenceMixin:
+    """The generic write tests reference a policy, which is excluded from wildcard view exemption."""
+
+    def _allow_policy_reference(self):
+        self.add_permissions("users.view_permissionpolicy")
+
+    def test_create_object(self):
+        self._allow_policy_reference()
+        super().test_create_object()
+
+    def test_bulk_create_objects(self):
+        self._allow_policy_reference()
+        super().test_bulk_create_objects()
+
+    def test_update_object(self):
+        self._allow_policy_reference()
+        super().test_update_object()
+
+    def test_get_put_round_trip(self):
+        self._allow_policy_reference()
+        super().test_get_put_round_trip()
+
+    def test_recreate_object_csv(self):
+        self._allow_policy_reference()
+        super().test_recreate_object_csv()
+
+
+class PolicyParameterTest(PolicyReferenceMixin, APIViewTestCases.APIViewTestCase):
+    model = PolicyParameter
+    choices_fields = ["kind", "target_content_type"]
+
+    @classmethod
+    def setUpTestData(cls):
+        # Each policy already declares a multi-valued `tenant` parameter; a second, distinctly named one per policy
+        # gives the ordering tests something to sort.
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        for index, policy in enumerate(policies):
+            PolicyParameter.objects.create(policy=policy, name=f"prefix_{index}", kind="string")
+        cls.create_data = [
+            {"policy": policies[0].pk, "name": "prefix", "kind": "string", "multiple": False},
+            {
+                "policy": policies[1].pk,
+                "name": "region",
+                "kind": "object",
+                "target_content_type": "dcim.location",
+                "multiple": True,
+            },
+            {"policy": policies[2].pk, "name": "site_code", "kind": "string", "multiple": True},
+        ]
+        cls.update_data = {"multiple": False}
+        cls.bulk_update_data = {"multiple": False}
 
 
 class UserConfigTest(APITestCase):

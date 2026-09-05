@@ -225,6 +225,16 @@ class TableTestCase(TestCase):
         self.assertEqual(job_log_entry_table.configurable_columns, expected_configurable_columns)
 
 
+class ConfigurableColumnsTestCase(TestCase):
+    def test_excluded_columns_are_not_configurable(self):
+        table = LocationTable(Location.objects.all())
+        self.assertIn("status", [name for name, _ in table.configurable_columns])
+        self.assertNotIn("pk", [name for name, _ in table.configurable_columns])
+        table.exclude = ("status",)
+        self.assertNotIn("status", [name for name, _ in table.configurable_columns])
+        self.assertNotIn("status", table.visible_columns)
+
+
 class BaseTableLinkedCountColumnTestCase(TestCase):
     """Covers the `count_fields` annotation pathway in `BaseTable.__init__`."""
 

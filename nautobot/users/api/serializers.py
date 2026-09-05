@@ -3,16 +3,22 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import Group
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from nautobot.core.api import (
+    BaseModelSerializer,
+    ChoiceField,
     ContentTypeField,
     ValidatedModelSerializer,
 )
+from nautobot.users.choices import PolicyParameterKindChoices
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyParameter,
     Token,
 )
 
@@ -107,6 +113,35 @@ class ObjectPermissionSerializer(ValidatedModelSerializer):
 #
 
 
+class PolicyParameterSerializer(ValidatedModelSerializer):
+    """A `PolicyParameter` on its own endpoint; `policy` is writable and the model's `clean()` runs on save."""
+
+    target_content_type = ContentTypeField(queryset=ContentType.objects.all(), required=False, allow_null=True)
+    kind = ChoiceField(choices=PolicyParameterKindChoices)
+
+    class Meta:
+        model = PolicyParameter
+        fields = "__all__"
+
+
+class PolicyParameterChildSerializer(BaseModelSerializer):
+    """
+    A `PolicyParameter` nested in `PermissionPolicySerializer`, which owns the policy: it sets `policy`, matches
+    children by name (never by id, so a writable id would only receive a fresh default on PUT), and runs
+    `full_clean()` itself once the parent is known.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    target_content_type = ContentTypeField(queryset=ContentType.objects.all(), required=False, allow_null=True)
+    kind = ChoiceField(choices=PolicyParameterKindChoices)
+
+    class Meta:
+        model = PolicyParameter
+        fields = "__all__"
+        read_only_fields = ["policy"]
+        validators = []  # the (policy, name) unique_together is enforced by the parent serializer
+
+
 class PermissionPolicySerializer(ValidatedModelSerializer):
     """
     A `PermissionPolicy` with its parameters and rules as writable nested lists.
@@ -117,12 +152,77 @@ class PermissionPolicySerializer(ValidatedModelSerializer):
     deleted. Omit `parameters` or `rules` entirely on PATCH to leave them unchanged.
     """
 
-    # PLACEHOLDER: will be replaced in C07 (Policy parameter model and stack): nested parameters and rules.
+    parameters = PolicyParameterChildSerializer(many=True, required=False)
 
     class Meta:
         model = PermissionPolicy
         fields = "__all__"
+        # Nested lists are treated like M2M fields: shown by default here, hidden with `?exclude_m2m=true`.
+        default_m2m_fields = ("parameters",)
 
+    def validate(self, attrs):
+        nested = {key: attrs.pop(key) for key in ("parameters", "rules") if key in attrs}
+        attrs = super().validate(attrs)
+        attrs.update(nested)
+        return attrs
+
+    def create(self, validated_data):
+        parameters = validated_data.pop("parameters", None)
+        rules = validated_data.pop("rules", None)
+        with transaction.atomic():
+            instance = super().create(validated_data)
+            self._sync_children(instance, parameters, rules)
+        return instance
+
+    def update(self, instance, validated_data):
+        parameters = validated_data.pop("parameters", None)
+        rules = validated_data.pop("rules", None)
+        with transaction.atomic():
+            instance = super().update(instance, validated_data)
+            self._sync_children(instance, parameters, rules)
+        return instance
+
+    @staticmethod
+    def _sync(policy, related_manager, items, key, errors, error_key):
+        existing = {getattr(child, key): child for child in related_manager.all()}
+        keep = set()
+        seen = set()
+        for index, item in enumerate(items):
+            item_key = item.get(key)
+            if item_key in seen:
+                errors.setdefault(error_key, {})[index] = {key: [f"Duplicate entry for {key} '{item_key}'."]}
+                continue
+            seen.add(item_key)
+            child = existing.get(item_key)
+            changed = child is None
+            if child is None:
+                child = related_manager.model(policy=policy)
+            for attribute, value in item.items():
+                try:
+                    current = getattr(child, attribute)
+                except ObjectDoesNotExist:  # unset FK on a new child
+                    current = None
+                if current != value:
+                    setattr(child, attribute, value)
+                    changed = True
+            try:
+                child.full_clean()
+            except DjangoValidationError as exc:
+                errors.setdefault(error_key, {})[index] = exc.message_dict
+                continue
+            if changed:
+                child.save()
+            keep.add(getattr(child, key))
+        for child_key, child in existing.items():
+            if child_key not in keep:
+                child.delete()
+
+    def _sync_children(self, policy, parameters, rules):
+        errors = {}
+        if parameters is not None:
+            self._sync(policy, policy.parameters, parameters, "name", errors, "parameters")
+            if errors:
+                raise ValidationError(errors)
         # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): sync the nested rules.
         # PLACEHOLDER: will be replaced in C11 (Policy definition validation): validate the policy as a whole.
 

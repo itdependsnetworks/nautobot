@@ -333,15 +333,22 @@ class BaseTable(django_tables2.Table):
 
     @property
     def configurable_columns(self):
+        """Columns the user may toggle: everything except the checkbox/actions columns and excluded columns.
+
+        `self.exclude` lists columns this rendering can never show (for example a related-object table on a detail
+        page excludes the column pointing back at the page's object), so offering them would save a preference that
+        has no visible effect.
+        """
+        never_configurable = {"pk", "actions", *self.exclude}
         selected_columns = [
             (name, column.verbose_name)
             for name, column in self.columns.items()
-            if name in self.sequence and name not in ["pk", "actions"]
+            if name in self.sequence and name not in never_configurable
         ]
         available_columns = [
             (name, column.verbose_name)
             for name, column in self.columns.items()
-            if name not in self.sequence and name not in ["pk", "actions"]
+            if name not in self.sequence and name not in never_configurable
         ]
         return selected_columns + available_columns
 

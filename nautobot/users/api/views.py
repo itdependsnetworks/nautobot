@@ -10,11 +10,13 @@ from rest_framework.viewsets import ViewSet
 from nautobot.core.api.serializers import BulkOperationIntegerIDSerializer
 from nautobot.core.api.views import ModelViewSet
 from nautobot.core.models.querysets import RestrictedQuerySet
+from nautobot.core.settings_funcs import is_truthy
 from nautobot.core.utils.data import deepmerge
 from nautobot.users import filters
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyParameter,
     Token,
 )
 
@@ -88,6 +90,20 @@ class PermissionPolicyViewSet(ModelViewSet):
     queryset = PermissionPolicy.objects.all()
     serializer_class = serializers.PermissionPolicySerializer
     filterset_class = filters.PermissionPolicyFilterSet
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        # The nested lists render each child's content type; fetch them with the children unless the lists are
+        # excluded from the response altogether (`?exclude_m2m=true`), in which case nothing extra is needed.
+        if not is_truthy(self.request.query_params.get("exclude_m2m", False)):
+            queryset = queryset.prefetch_related("parameters__target_content_type")
+        return queryset
+
+
+class PolicyParameterViewSet(ModelViewSet):
+    queryset = PolicyParameter.objects.select_related("policy", "target_content_type")
+    serializer_class = serializers.PolicyParameterSerializer
+    filterset_class = filters.PolicyParameterFilterSet
 
 
 #

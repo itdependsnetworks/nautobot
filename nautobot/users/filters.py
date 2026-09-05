@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.contrib.contenttypes.models import ContentType
 
 from nautobot.core.filters import (
     BaseFilterSet,
+    ContentTypeFilter,
     ModelMultipleChoiceFilter,
     NameSearchFilterSet,
     NaturalKeyOrPKMultipleChoiceFilter,
@@ -14,6 +16,7 @@ from nautobot.extras.models import ObjectChange
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyParameter,
     Token,
 )
 
@@ -21,6 +24,7 @@ __all__ = (
     "GroupFilterSet",
     "ObjectPermissionFilterSet",
     "PermissionPolicyFilterSet",
+    "PolicyParameterFilterSet",
     "TokenFilterSet",
     "UserFilterSet",
 )
@@ -128,6 +132,26 @@ class ObjectPermissionFilterSet(BaseFilterSet, NameSearchFilterSet):
 
 
 class PermissionPolicyFilterSet(BaseFilterSet, NameSearchFilterSet):
+    parameter_target_content_types = ModelMultipleChoiceFilter(
+        field_name="parameters__target_content_type",
+        queryset=ContentType.objects.all(),
+        distinct=True,
+        label="Parameter target object types (ID)",
+    )
+
     class Meta:
         model = PermissionPolicy
         fields = ["id", "name", "description"]
+
+
+class PolicyParameterFilterSet(BaseFilterSet):
+    q = SearchFilter(filter_predicates={"name": "icontains"})
+    policy = NaturalKeyOrPKMultipleChoiceFilter(
+        to_field_name="name",
+        queryset=PermissionPolicy.objects.all(),
+    )
+    target_content_type = ContentTypeFilter()
+
+    class Meta:
+        model = PolicyParameter
+        fields = ["id", "name", "kind", "multiple"]

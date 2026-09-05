@@ -25,6 +25,18 @@ menu_items = (
                             ),
                         ),
                     ),
+                    NavMenuItem(
+                        link="users:policyparameter_list",
+                        name="Policy Parameters",
+                        weight=300,
+                        permissions=["users.view_policyparameter"],
+                        buttons=(
+                            NavMenuAddButton(
+                                link="users:policyparameter_add",
+                                permissions=["users.add_policyparameter"],
+                            ),
+                        ),
+                    ),
                 ),
             ),
         ),

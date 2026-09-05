@@ -12,7 +12,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from nautobot.users.models import PermissionPolicy
+from nautobot.users.choices import PolicyParameterKindChoices
+from nautobot.users.models import PermissionPolicy, PolicyParameter
 
 DEMO_PASSWORD = "nautobot"  # noqa: S105  # deliberately well-known: demo data for development environments
 DEMO_PREFIX = "demo-"
@@ -88,15 +89,30 @@ class Command(BaseCommand):
             policy.save()
         return policy
 
+    def parameter(self, policy, name, target, multiple=True):
+        # A re-run after the definition changed must not leave an older parameter behind.
+        policy.parameters.exclude(name=name).delete()
+        parameter, _ = PolicyParameter.objects.update_or_create(
+            policy=policy,
+            name=name,
+            defaults={
+                "kind": PolicyParameterKindChoices.KIND_OBJECT,
+                "target_content_type": content_type(*target),
+                "multiple": multiple,
+            },
+        )
+        return parameter
+
     # ----- patterns -----------------------------------------------------------------------------------------
 
     def create_regional_it(self, groups):
         """Pattern 2: a custom policy with a single tree-node parameter (`in_tree`), assigned once per region."""
-        self.policy(
+        policy = self.policy(
             f"{DEMO_PREFIX}regional-it-operator",
             "Full access to devices, interfaces, racks, rack groups and power panels anywhere within a region; "
             "read access to the region and its child locations.",
         )
+        self.parameter(policy, "region", ("dcim", "location"), multiple=False)
         # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the region-scoped rules.
 
     def create_telco_owner(self, group):
@@ -109,10 +125,11 @@ class Command(BaseCommand):
 
     def create_job_runner(self, group):
         """Pattern 4: a multi-valued object parameter selecting which jobs may be run."""
-        self.policy(
+        policy = self.policy(
             f"{DEMO_PREFIX}job-runner",
             "Run a selected set of jobs and see one's own job results and logs.",
         )
+        self.parameter(policy, "jobs", ("extras", "job"))
         # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the job rules.
 
     # ----- flush and summary --------------------------------------------------------------------------------

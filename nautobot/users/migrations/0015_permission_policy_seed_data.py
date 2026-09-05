@@ -37,11 +37,19 @@ def _content_type(ContentType, app_label, model):
 
 def _create_tenant_policy(apps, name, description, actions):
     PermissionPolicy = apps.get_model("users", "PermissionPolicy")
+    PolicyParameter = apps.get_model("users", "PolicyParameter")
+    ContentType = apps.get_model("contenttypes", "ContentType")
 
-    _, created = PermissionPolicy.objects.get_or_create(name=name, defaults={"description": description})
+    policy, created = PermissionPolicy.objects.get_or_create(name=name, defaults={"description": description})
     if not created:
         return
-    # PLACEHOLDER: will be replaced in C04 (Policy parameter model and stack): the tenant parameter.
+    PolicyParameter.objects.create(
+        policy=policy,
+        name="tenant",
+        kind="object",
+        target_content_type=_content_type(ContentType, "tenancy", "tenant"),
+        multiple=True,
+    )
     # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): one rule per tenant-scoped object type.
 
 
@@ -92,7 +100,7 @@ def create_builtin_policies(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("users", "0012_permission_policy"),
+        ("users", "0013_policy_parameter"),
         ("contenttypes", "0002_remove_content_type_name"),
         ("dcim", "0097_virtualdevicecontext_controller_managed_device_group"),
         ("ipam", "0058_iprange_role_data"),

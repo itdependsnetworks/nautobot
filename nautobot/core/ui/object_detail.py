@@ -1351,6 +1351,9 @@ class ObjectsTablePanel(Panel):
             for column in body_content_table.columns:
                 if column.name in self.exclude_columns:
                     body_content_table.columns.hide(column.name)
+            # Also record the exclusion on the table so the table configuration form does not offer these columns;
+            # a saved preference to show them could never take effect in this panel.
+            body_content_table.exclude = tuple({*body_content_table.exclude, *self.exclude_columns})
 
         if self.include_columns:
             for column in self.include_columns:

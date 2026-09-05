@@ -11,16 +11,19 @@ from nautobot.dcim.factory import RackFactory, RackReservationFactory
 from nautobot.dcim.models import Location
 from nautobot.extras.choices import ObjectChangeActionChoices
 from nautobot.extras.models import ObjectChange
+from nautobot.tenancy.models import Tenant
 from nautobot.users.filters import (
     GroupFilterSet,
     ObjectPermissionFilterSet,
     PermissionPolicyFilterSet,
+    PolicyParameterFilterSet,
     TokenFilterSet,
     UserFilterSet,
 )
 from nautobot.users.models import (
     ObjectPermission,
     PermissionPolicy,
+    PolicyParameter,
     Token,
 )
 from nautobot.users.tests.test_policies import create_tenant_policy
@@ -218,6 +221,42 @@ class PermissionPolicyTestCase(FilterTestCases.FilterTestCase):
             policy.description = f"Description {i + 1}"
             policy.save()
         PermissionPolicy.objects.create(name="Empty policy", description="No rules")
+
+    def test_parameter_target_content_types(self):
+        tenant_ct = ContentType.objects.get_for_model(Tenant)
+        params = {"parameter_target_content_types": [tenant_ct.pk]}
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset(params, self.queryset).qs,
+            self.queryset.filter(parameters__target_content_type=tenant_ct).distinct(),
+        )
+
+
+class PolicyParameterTestCase(FilterTestCases.FilterTestCase):
+    queryset = PolicyParameter.objects.all()
+    filterset = PolicyParameterFilterSet
+
+    generic_filter_tests = (
+        ["name"],
+        ["policy", "policy__id"],
+        ["policy", "policy__name"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        for i, policy in enumerate(policies):
+            PolicyParameter.objects.create(policy=policy, name=f"prefix_{i}", kind="string")
+
+    def test_kind(self):
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset({"kind": ["string"]}, self.queryset).qs, self.queryset.filter(kind="string")
+        )
+
+    def test_target_content_type(self):
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset({"target_content_type": "tenancy.tenant"}, self.queryset).qs,
+            self.queryset.filter(target_content_type__app_label="tenancy", target_content_type__model="tenant"),
+        )
 
 
 class TokenTestCase(FilterTestCases.FilterTestCase):

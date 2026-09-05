@@ -9,6 +9,8 @@ from django.contrib.auth import (
     logout as auth_logout,
     update_session_auth_hash,
 )
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.http import HttpResponse, HttpResponseForbidden, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -23,6 +25,7 @@ from nautobot.core.choices import NautobotEditionChoices
 from nautobot.core.constants import NAUTOBOT_EDITION_URLS
 from nautobot.core.events import publish_event
 from nautobot.core.forms import ConfirmationForm
+from nautobot.core.models.querysets import count_related
 from nautobot.core.ui import object_detail
 from nautobot.core.ui.choices import SectionChoices
 from nautobot.core.ui.titles import Titles
@@ -51,14 +54,19 @@ from .forms import (
     NavbarFavoritesAddForm,
     NavbarFavoritesRemoveForm,
     NavbarFavoritesReorderForm,
+    parameter_formset_class,
     PasswordChangeForm,
     PermissionPolicyBulkEditForm,
     PermissionPolicyFilterForm,
     PermissionPolicyForm,
+    policy_parameter_rows,
+    PolicyParameterFilterForm,
+    PolicyParameterForm,
+    PolicyParameterFormSet,
     PreferenceProfileSettingsForm,
     TokenForm,
 )
-from .models import PermissionPolicy, Token
+from .models import PermissionPolicy, PolicyParameter, Token
 
 #
 # Login/logout
@@ -578,6 +586,22 @@ class PolicyUIViewSetBase(
     """`NautobotUIViewSet` minus the Notes and Data Compliance views, which these models do not support."""
 
 
+class PolicyChildUIViewSetBase(
+    ObjectDetailViewMixin,
+    ObjectListViewMixin,
+    ObjectEditViewMixin,
+    ObjectDestroyViewMixin,
+    ObjectBulkDestroyViewMixin,
+    ObjectBulkCreateViewMixin,
+    ObjectChangeLogViewMixin,
+    ObjectOverviewViewMixin,
+):
+    """
+    Views of a policy's parameters and rules: as `PolicyUIViewSetBase` without bulk edit and bulk rename, since
+    neither model has a field that is sensibly changed across many records at once.
+    """
+
+
 class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
     bulk_update_form_class = PermissionPolicyBulkEditForm
     filterset_class = users_filters.PermissionPolicyFilterSet
@@ -593,6 +617,83 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
                 section=SectionChoices.LEFT_HALF,
                 weight=100,
                 fields=("name", "description"),
+            ),
+            object_detail.ObjectsTablePanel(
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                table_class=users_tables.PolicyParameterTable,
+                table_filter="policy",
+                table_title="Parameters",
+                exclude_columns=("policy",),
+                select_related_fields=("target_content_type",),
+            ),
+        ),
+    )
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action in ("list", "bulk_update", "bulk_destroy"):
+            # The same table renders the list and the bulk confirmation pages; subquery counts avoid the join
+            # cross-product that three `Count(distinct=True)` annotations would produce.
+            queryset = queryset.annotate(
+                parameter_count=count_related(PolicyParameter, "policy"),
+            )
+        return queryset
+
+    def _clone_source(self, request, instance):
+        """The policy named by `?clone_from=` on the create form (the standard Clone flow), if any."""
+        if request.method != "GET" or instance.present_in_database:
+            return None
+        pk = request.GET.get("clone_from")
+        if not pk:
+            return None
+        return PermissionPolicy.objects.restrict(request.user, "view").filter(pk=pk).first()
+
+    def _parameter_formset(self, request, instance):
+        if request.method == "POST":
+            return PolicyParameterFormSet(data=request.POST, instance=instance, prefix="parameters")
+        source = self._clone_source(request, instance)
+        if source is not None:
+            initial = policy_parameter_rows(source)
+            return parameter_formset_class(extra=len(initial))(instance=instance, prefix="parameters", initial=initial)
+        return PolicyParameterFormSet(instance=instance, prefix="parameters")
+
+    def get_extra_context(self, request, instance):
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): the rules formset and path suggestions.
+            context["parameters"] = self._parameter_formset(request, instance)
+        return context
+
+    def form_save(self, form, **kwargs):
+        with transaction.atomic():
+            obj = super().form_save(form, **kwargs)
+            parameters = self._parameter_formset(self.request, obj)
+            if not parameters.is_valid():
+                # Row-level errors are rendered beside their fields; the message only points at the table.
+                raise ValidationError(
+                    list(parameters.non_form_errors()) or ["Correct the errors in the parameters table."]
+                )
+            parameters.save()
+            obj.refresh_from_db()
+            # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): validate and save the rules formset.
+        return obj
+
+
+class PolicyParameterUIViewSet(PolicyChildUIViewSetBase):
+    filterset_class = users_filters.PolicyParameterFilterSet
+    filterset_form_class = PolicyParameterFilterForm
+    form_class = PolicyParameterForm
+    queryset = PolicyParameter.objects.select_related("policy", "target_content_type")
+    serializer_class = users_serializers.PolicyParameterSerializer
+    table_class = users_tables.PolicyParameterTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            object_detail.ObjectFieldsPanel(
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("policy", "name", "kind", "target_content_type", "multiple"),
             ),
         ),
     )

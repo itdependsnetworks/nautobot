@@ -1,0 +1,115 @@
+{% extends 'generic/object_create.html' %}
+{% load form_helpers %}
+{% load helpers %}
+
+{% block form %}
+    <div class="card">
+        <div class="card-header"><strong>Permission Policy</strong></div>
+        <div class="card-body">
+            {% render_field form.name %}
+            {% render_field form.description %}
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <strong>Parameters</strong>
+            <span class="text-secondary small ms-8">Values that each assignment of this policy must supply. Use a parameter in a rule as <code>{% templatetag openvariable %} name {% templatetag closevariable %}</code>. A policy may have none.</span>
+        </div>
+        <div class="card-body overflow-auto">
+            {% if parameters.non_form_errors %}
+                <div class="alert alert-danger">{% for error in parameters.non_form_errors %}<div>{{ error }}</div>{% endfor %}</div>
+            {% endif %}
+            <table class="table" id="policy-parameters">
+                {{ parameters.management_form }}
+                <thead>
+                    <tr>
+                        {% for field in parameters.empty_form.visible_fields %}
+                            <th>{{ field.label|capfirst }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for parameter in parameters.forms %}
+                        <tr class="formset_row-{{ parameters.prefix }}">
+                            {% for field in parameter.visible_fields %}
+                                <td>
+                                    {% if forloop.first %}
+                                        {% for hidden in parameter.hidden_fields %}{{ hidden }}{% endfor %}
+                                    {% endif %}
+                                    {{ field }}
+                                    {% for error in field.errors %}
+                                        <div class="text-danger small">{{ error }}</div>
+                                    {% endfor %}
+                                </td>
+                            {% endfor %}
+                        </tr>
+                        {% if parameter.non_field_errors %}
+                            <tr><td colspan="5"><div class="alert alert-danger mb-0">{% for error in parameter.non_field_errors %}<div>{{ error }}</div>{% endfor %}</div></td></tr>
+                        {% endif %}
+                    {% endfor %}
+                    {# Invisible anchor so the formset plugin has a row to attach its "Add" button to when the table is empty. #}
+                    <tr class="formset_row-{{ parameters.prefix }} nb-formset-anchor" style="display: none"></tr>
+                </tbody>
+            </table>
+            <div class="form-text small mb-8">{{ parameters.empty_form.kind.help_text }}</div>
+            {# Cloned by "Add parameter". Kept out of the live DOM so select2 never initializes the template itself. #}
+            <template id="{{ parameters.prefix }}-template">
+                <tr class="formset_row-{{ parameters.prefix }}">
+                    {% for field in parameters.empty_form.visible_fields %}
+                        <td>
+                            {% if forloop.first %}
+                                {% for hidden in parameters.empty_form.hidden_fields %}{{ hidden }}{% endfor %}
+                            {% endif %}
+                            {{ field }}
+                        </td>
+                    {% endfor %}
+                </tr>
+            </template>
+        </div>
+    </div>
+
+    {# PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): the rules editor. #}
+{% endblock form %}
+
+{% block javascript %}
+    {{ block.super }}
+    <script type="text/javascript">
+        // "Target object type" applies only to object parameters: hide and clear it for string parameters.
+        function toggleTargetObjectType(kindSelect) {
+            const row = kindSelect.closest("tr");
+            const target = row ? row.querySelector('select[name$="-target_content_type"]') : null;
+            if (!target) { return; }
+            target.closest("td").classList.toggle("invisible", kindSelect.value !== "object");
+            if (kindSelect.value !== "object" && target.value) {
+                $(target).val(null).trigger("change");
+            }
+        }
+
+        function initializeParameterRow(row) {
+            $(row).find('select[name$="-kind"]').each(function () { toggleTargetObjectType(this); });
+        }
+
+        $('.formset_row-{{ parameters.prefix }}').formset({
+            addText: '<span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add parameter',
+            addCssClass: 'btn btn-primary add-row',
+            deleteText: '<span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>',
+            deleteCssClass: 'btn btn-danger delete-row',
+            prefix: '{{ parameters.prefix }}',
+            formCssClass: 'dynamic-formset-{{ parameters.prefix }}',
+            formTemplate: $($('#{{ parameters.prefix }}-template').html()),
+            added: function (row) {
+                jsify_form(row);
+                initializeParameterRow(row[0]);
+            }
+        });
+        document.querySelectorAll('.formset_row-{{ parameters.prefix }}:not(.nb-formset-anchor)').forEach(initializeParameterRow);
+        document.addEventListener("change", function (event) {
+            if ((event.target.name || "").endsWith("-kind")) { toggleTargetObjectType(event.target); }
+        });
+        // select2 fires only jQuery events; re-broadcast a native change so the HTMX triggers and handlers above see it.
+        $(document).on("select2:select select2:unselect select2:clear", "select", function () {
+            this.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+    </script>
+{% endblock javascript %}

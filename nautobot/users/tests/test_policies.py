@@ -3,10 +3,12 @@
 from io import StringIO
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 
 from nautobot.core.testing import TestCase
-from nautobot.users.models import PermissionPolicy
+from nautobot.tenancy.models import Tenant
+from nautobot.users.models import PermissionPolicy, PolicyParameter
 
 User = get_user_model()
 
@@ -14,7 +16,14 @@ User = get_user_model()
 def create_tenant_policy(name="Tenant device viewer", actions=("view",)):
     """Create a policy with a multi-valued `tenant` parameter over Device and Interface."""
     policy = PermissionPolicy.objects.create(name=name)
-    # PLACEHOLDER: will be replaced in C04 and C08 (parameter and rule models): the tenant parameter and rules.
+    PolicyParameter(
+        policy=policy,
+        name="tenant",
+        kind="object",
+        target_content_type=ContentType.objects.get_for_model(Tenant),
+        multiple=True,
+    ).validated_save()
+    # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the Device and Interface rules.
     return policy
 
 

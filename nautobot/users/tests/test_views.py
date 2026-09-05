@@ -3,6 +3,7 @@ from unittest import mock
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import override_settings, RequestFactory
 from django.urls import reverse
@@ -12,7 +13,9 @@ from social_django.utils import load_backend, load_strategy
 from nautobot.core.testing import TestCase, utils, ViewTestCases
 from nautobot.core.testing.context import load_event_broker_override_settings
 from nautobot.core.testing.utils import post_data
-from nautobot.users.models import PermissionPolicy
+from nautobot.dcim.models import Location
+from nautobot.tenancy.models import Tenant
+from nautobot.users.models import PermissionPolicy, PolicyParameter
 from nautobot.users.tests.test_policies import create_tenant_policy
 from nautobot.users.utils import serialize_user_without_config_and_views
 
@@ -261,6 +264,15 @@ class NavbarFavoritesReorderViewTest(TestCase):
 #
 
 
+def _formset_management(prefix, total, initial=0):
+    return {
+        f"{prefix}-TOTAL_FORMS": str(total),
+        f"{prefix}-INITIAL_FORMS": str(initial),
+        f"{prefix}-MIN_NUM_FORMS": "0",
+        f"{prefix}-MAX_NUM_FORMS": "1000",
+    }
+
+
 # The generic view tests assume the model honors `EXEMPT_VIEW_PERMISSIONS = ["*"]`. These models are deliberately
 # listed in EXEMPT_EXCLUDE_MODELS (like ObjectPermission), so the exclusion is narrowed for the generic tests only.
 POLICY_TEST_EXEMPT_EXCLUDE_MODELS = (("auth", "group"), ("users", "user"), ("users", "objectpermission"))
@@ -274,13 +286,68 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
     def setUpTestData(cls):
         for i in range(3):
             create_tenant_policy(name=f"Policy {i + 1}")
-        # PLACEHOLDER: will be replaced in C07 and C09 (parameter and rule models): the parameter and rule formsets.
+        tenant_ct = ContentType.objects.get_for_model(Tenant)
+
+        # PLACEHOLDER: will be replaced in C09 (Policy rule model and stack): the rules formset.
         cls.form_data = {
             "name": "Policy X",
             "description": "Created through the UI",
+            **_formset_management("parameters", 1),
+            "parameters-0-name": "tenant",
+            "parameters-0-kind": "object",
+            "parameters-0-target_content_type": tenant_ct.pk,
+            "parameters-0-multiple": True,
         }
+        # Editing posts no parameter rows (leaving them untouched).
         cls.update_data = {
             "name": "Policy Y",
             "description": "Edited through the UI",
+            **_formset_management("parameters", 0),
         }
         cls.bulk_edit_data = {"description": "Bulk edited"}
+
+
+class PolicyChildViewTestCases:
+    """Namespace, so the shared base is not collected as a test case of its own."""
+
+    class ViewTestCase(
+        ViewTestCases.GetObjectViewTestCase,
+        ViewTestCases.GetObjectChangelogViewTestCase,
+        ViewTestCases.GetObjectOverviewViewTestCase,
+        ViewTestCases.CreateObjectViewTestCase,
+        ViewTestCases.EditObjectViewTestCase,
+        ViewTestCases.DeleteObjectViewTestCase,
+        ViewTestCases.ListObjectsViewTestCase,
+        ViewTestCases.BulkDeleteObjectsViewTestCase,
+    ):
+        """The views a policy's parameters and rules have: everything but bulk edit and bulk import."""
+
+
+@override_settings(EXEMPT_EXCLUDE_MODELS=POLICY_TEST_EXEMPT_EXCLUDE_MODELS)
+class PolicyParameterTestCase(PolicyChildViewTestCases.ViewTestCase):
+    model = PolicyParameter
+
+    @classmethod
+    def setUpTestData(cls):
+        policies = [create_tenant_policy(name=f"Policy {i + 1}") for i in range(3)]
+        cls.form_data = {
+            "policy": policies[0].pk,
+            "name": "region",
+            "kind": "object",
+            "target_content_type": ContentType.objects.get_for_model(Location).pk,
+            "multiple": True,
+        }
+        cls.update_data = {
+            "policy": policies[0].pk,
+            "name": "tenant",
+            "kind": "object",
+            "target_content_type": ContentType.objects.get_for_model(Tenant).pk,
+            "multiple": False,
+        }
+
+    def test_create_form_prefills_policy_from_the_detail_page_link(self):
+        self.add_permissions("users.add_policyparameter", "users.view_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        response = self.client.get(f"{self._get_url('add')}?policy={policy.pk}")
+        self.assertHttpStatus(response, 200)
+        self.assertIn(f'value="{policy.pk}"', response.content.decode(response.charset))

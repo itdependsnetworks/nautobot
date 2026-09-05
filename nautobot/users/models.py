@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser, Group, UserManager as UserManager_
 from django.contrib.contenttypes.models import ContentType
 from django.core.serializers.json import DjangoJSONEncoder
-from django.core.validators import MinLengthValidator
+from django.core.validators import MinLengthValidator, RegexValidator
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -16,11 +16,13 @@ from nautobot.core.models.fields import JSONArrayField
 from nautobot.core.utils.data import flatten_dict
 from nautobot.core.utils.permissions import resolve_permission
 from nautobot.extras.models.change_logging import ChangeLoggedModel
+from nautobot.users.choices import PolicyParameterKindChoices
 
 __all__ = (
     "AdminGroup",
     "ObjectPermission",
     "PermissionPolicy",
+    "PolicyParameter",
     "Token",
     "User",
 )
@@ -390,3 +392,50 @@ class PermissionPolicy(BaseModel, ChangeLoggedModel):
     def get_clone_extra_params(self):
         """Point the standard Clone flow at this policy so the create form can prefill its parameters and rules."""
         return {"clone_from": str(self.pk)}
+
+
+class PolicyParameter(BaseModel, ChangeLoggedModel):
+    """
+    A named value that a `PermissionPolicy` declares and every `PolicyAssignment` of that policy must supply.
+
+    The name is the placeholder token used in rule templates, e.g. `{{ tenant }}`.
+    """
+
+    policy = models.ForeignKey(
+        to="users.PermissionPolicy",
+        on_delete=models.CASCADE,  # a parameter is owned by its policy and is meaningless without it
+        related_name="parameters",
+    )
+    name = models.CharField(
+        max_length=100,
+        validators=[
+            RegexValidator(
+                r"^[a-z][a-z0-9_]*$",
+                "Parameter names must start with a lowercase letter and contain only lowercase letters, digits and "
+                "underscores.",
+            )
+        ],
+        help_text="Placeholder name used in rule templates as {{ name }}",
+    )
+    kind = models.CharField(max_length=20, choices=PolicyParameterKindChoices)
+    target_content_type = models.ForeignKey(
+        to=ContentType,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="The model that an 'object' parameter references",
+    )
+    multiple = models.BooleanField(default=False, help_text="If set, an assignment may supply more than one value")
+
+    documentation_static_path = "docs/user-guide/platform-functionality/users/policyparameter.html"
+    is_metadata_associable_model = False
+    natural_key_field_names = ["policy", "name"]
+
+    class Meta:
+        ordering = ["policy", "name"]
+        unique_together = [["policy", "name"]]
+        verbose_name = "policy parameter"
+
+    def __str__(self):
+        return f"{self.policy}: {self.name}"

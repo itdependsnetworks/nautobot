@@ -363,9 +363,14 @@ class ObjectsTablePanelTest(TestCase):
             "object": redundancy_group,
         }
         result = panel.get_extra_context(context)
-        columns = result["body_content_table"].columns
+        table = result["body_content_table"]
+        columns = table.columns
         self.assertIn("device_redundancy_group_priority", [col.name for col in columns])
         self.assertNotIn("rack", [col.name for col in columns])
+        # An excluded column is not offered by the table configuration form either: a saved preference to show
+        # it could never take effect in this panel.
+        self.assertNotIn("rack", [name for name, _ in table.configurable_columns])
+        self.assertIn("rack", table.exclude)
 
     def test_invalid_include_columns(self):
         with self.assertRaises(ValueError) as context:
