@@ -5,6 +5,7 @@ from io import StringIO
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -23,14 +24,17 @@ from nautobot.core.utils.orm_paths import (
 )
 from nautobot.core.utils.permissions import qs_filter_from_constraints, validate_constraints_for_model
 from nautobot.dcim.models import Device, Interface, Location, Rack
-from nautobot.extras.models import Status
+from nautobot.extras.models import Job, Status
 from nautobot.tenancy.models import Tenant
-from nautobot.users.models import PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
+from nautobot.users.models import ObjectPermission, PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
 from nautobot.users.policies import (
+    derive_policy_permissions,
     extract_placeholders,
     find_malformed_placeholders,
+    get_user_assignments,
     PolicyRenderError,
     render_as_object_permissions,
+    render_assignment_constraints,
     substitute_placeholders,
     validate_parameter_values,
 )
@@ -463,6 +467,24 @@ class PolicyModelValidationTest(TestCase):
         with self.assertRaises(PolicyRenderError):
             render_as_object_permissions(rules, {}, name="Assignment")
 
+    def test_missing_parameter_names(self):
+        assignment = PolicyAssignment(
+            policy=self.policy, name="Complete", parameter_values={"tenant": [str(self.tenants[0].pk)]}
+        )
+        assignment.validated_save()
+        self.assertEqual(assignment.missing_parameter_names(), [])
+        # A parameter added afterwards has no value on the existing assignment.
+        PolicyParameter.objects.create(policy=self.policy, name="prefix", kind="string")
+        for rule in self.policy.rules.all():
+            rule.constraint_template = {**rule.constraint_template, "name__istartswith": "{{ prefix }}"}
+            rule.path_map = {**rule.path_map, "prefix": {"path": "name", "lookup": "istartswith"}}
+            rule.save()
+        self.assertEqual(assignment.missing_parameter_names(), ["prefix"])
+        # ...and the assignment then renders nothing (fail closed) rather than everything.
+        assignment.users.add(self.user)
+        with self.assertLogs("nautobot.users.policies", level="ERROR"):
+            self.assertEqual(derive_policy_permissions(self.user), {})
+
     def test_clone_params_reference_source_policy(self):
         self.assertEqual(self.policy.clone_fields, ["description"])
         self.assertEqual(self.policy.get_clone_extra_params(), {"clone_from": str(self.policy.pk)})
@@ -474,6 +496,128 @@ class PolicyModelValidationTest(TestCase):
             validate_constraints_for_model(Device, {"bogus": "x"})
         with self.assertRaises(ValidationError):
             validate_constraints_for_model(Device, ["not a dict"])
+
+
+class DerivationHookTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+        cls.tenants = list(Tenant.objects.all()[:2])
+        cls.devices = list(Device.objects.all()[:2])
+        for device, tenant in zip(cls.devices, cls.tenants):
+            device.tenant = tenant
+            device.save()
+        cls.policy = create_tenant_policy()
+
+    def _fresh(self, user):
+        """Permission resolution is cached on the user instance; fetch a new instance to see current state."""
+        return User.objects.get(pk=user.pk)
+
+    def _assign(self, *, users=(), groups=(), enabled=True, name="Assignment"):
+        assignment = PolicyAssignment(
+            policy=self.policy,
+            name=name,
+            enabled=enabled,
+            parameter_values={"tenant": [str(self.tenants[0].pk)]},
+        )
+        assignment.validated_save()
+        assignment.users.set(users)
+        assignment.groups.set(groups)
+        return assignment
+
+    def test_no_assignments_costs_one_query_and_grants_nothing(self):
+        with self.assertNumQueries(1):
+            self.assertEqual(derive_policy_permissions(self.user), {})
+
+    def test_assignment_costs_two_queries(self):
+        """Assignments, then rules; content types come from Django's ContentType cache."""
+        self._assign(users=[self.user])
+        ContentType.objects.get_for_model(Device)
+        ContentType.objects.get_for_model(Interface)
+        with self.assertNumQueries(2):
+            perms = derive_policy_permissions(self.user)
+        self.assertEqual(set(perms), {"dcim.view_device", "dcim.view_interface"})
+        self.assertEqual(perms["dcim.view_device"], [{"tenant__in": [str(self.tenants[0].pk)]}])
+
+    def test_assignment_reached_several_ways_is_rendered_once(self):
+        group_a = Group.objects.create(name="Policy group A")
+        group_b = Group.objects.create(name="Policy group B")
+        self.user.groups.add(group_a, group_b)
+        self._assign(users=[self.user], groups=[group_a, group_b])
+        self.assertEqual(len(get_user_assignments(self.user)), 1)
+        perms = derive_policy_permissions(self.user)
+        self.assertEqual(perms["dcim.view_device"], [{"tenant__in": [str(self.tenants[0].pk)]}])
+
+    def test_assignment_is_equivalent_to_object_permission(self):
+        self._assign(users=[self.user])
+        other = User.objects.create_user(username="other")
+        permission = ObjectPermission.objects.create(
+            name="Equivalent", actions=["view"], constraints={"tenant__in": [str(self.tenants[0].pk)]}
+        )
+        permission.object_types.add(self.device_ct)
+        permission.users.add(other)
+
+        via_policy = Device.objects.restrict(self._fresh(self.user), "view")
+        via_permission = Device.objects.restrict(self._fresh(other), "view")
+        self.assertEqual(set(via_policy.values_list("pk", flat=True)), set(via_permission.values_list("pk", flat=True)))
+        self.assertIn(self.devices[0], via_policy)
+        self.assertNotIn(self.devices[1], via_policy)
+
+        user = self._fresh(self.user)
+        self.assertTrue(user.has_perm("dcim.view_device"))
+        self.assertTrue(user.has_perm("dcim.view_device", self.devices[0]))
+        self.assertFalse(user.has_perm("dcim.view_device", self.devices[1]))
+        self.assertFalse(user.has_perm("dcim.change_device"))
+        self.assertTrue(user.has_perm("dcim.view_interface"))
+
+    def test_no_object_permission_records_are_created(self):
+        before = ObjectPermission.objects.count()
+        assignment = self._assign(users=[self.user])
+        self._fresh(self.user).get_all_permissions()
+        assignment.parameter_values = {"tenant": [str(self.tenants[1].pk)]}
+        assignment.validated_save()
+        assignment.delete()
+        self.assertEqual(ObjectPermission.objects.count(), before)
+
+    def test_disabled_and_deleted_assignments_end_access_immediately(self):
+        assignment = self._assign(users=[self.user])
+        self.assertTrue(self._fresh(self.user).has_perm("dcim.view_device"))
+        assignment.enabled = False
+        assignment.validated_save()
+        self.assertFalse(self._fresh(self.user).has_perm("dcim.view_device"))
+        assignment.enabled = True
+        assignment.validated_save()
+        self.assertTrue(self._fresh(self.user).has_perm("dcim.view_device"))
+        assignment.delete()
+        self.assertFalse(self._fresh(self.user).has_perm("dcim.view_device"))
+
+    def test_group_membership_grants_access_once(self):
+        group_a = Group.objects.create(name="A")
+        group_b = Group.objects.create(name="B")
+        self.user.groups.set([group_a, group_b])
+        self._assign(groups=[group_a, group_b], users=[self.user])
+        perms = derive_policy_permissions(self.user)
+        # Reached three ways (two groups and directly) but rendered once thanks to distinct().
+        self.assertEqual(len(perms["dcim.view_device"]), 1)
+
+    def test_broken_assignment_is_skipped_and_logged(self):
+        assignment = PolicyAssignment(policy=self.policy, name="Broken", parameter_values={})
+        assignment.save()  # bypass validation deliberately
+        assignment.users.add(self.user)
+        with self.assertLogs("nautobot.users.policies", level="ERROR"):
+            perms = derive_policy_permissions(self.user)
+        self.assertEqual(perms, {})
+
+    def test_render_assignment_constraints_shape(self):
+        assignment = self._assign(users=[self.user])
+        rendered = render_assignment_constraints(assignment)
+        self.assertEqual(
+            dict(rendered),
+            {
+                "dcim.view_device": [{"tenant__in": [str(self.tenants[0].pk)]}],
+                "dcim.view_interface": [{"device__tenant__in": [str(self.tenants[0].pk)]}],
+            },
+        )
 
 
 seed_migration = importlib.import_module("nautobot.users.migrations.0015_permission_policy_seed_data")
@@ -531,6 +675,59 @@ class ConstraintToFilterParamsTest(TestCase):
         )
         # A null value has no query-string representation.
         self.assertIsNone(constraint_to_filter_params(Device, {"asset_tag": None}))
+
+
+class InTreeLookupTest(TestCase):
+    """`location__in_tree` matches the node and every descendant, through a policy assignment as well as directly."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.parent = Location.objects.filter(children__isnull=False).first()
+        cls.child = cls.parent.children.first()
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+        location_ct = ContentType.objects.get_for_model(Location)
+        cls.parent.location_type.content_types.add(cls.device_ct)
+        cls.child.location_type.content_types.add(cls.device_ct)
+        devices = list(Device.objects.all()[:3])
+        cls.at_parent, cls.at_child, cls.elsewhere = devices
+        cls.at_parent.location = cls.parent
+        cls.at_child.location = cls.child
+        cls.elsewhere.location = Location.objects.exclude(pk__in=cls.parent.descendants(include_self=True)).first()
+        for device in devices:
+            device.save()
+        cls.policy = PermissionPolicy.objects.create(name="Regional viewer")
+        PolicyParameter(
+            policy=cls.policy, name="region", kind="object", target_content_type=location_ct, multiple=False
+        ).validated_save()
+        PolicyRule(
+            policy=cls.policy,
+            content_type=cls.device_ct,
+            actions=["view"],
+            constraint_template={"location__in_tree": "{{ region }}"},
+            path_map={"region": {"path": "location", "lookup": "in_tree"}},
+        ).validated_save()
+
+    def test_lookup_matches_node_and_descendants(self):
+        matched = set(Device.objects.filter(location__in_tree=str(self.parent.pk)))
+        self.assertIn(self.at_parent, matched)
+        self.assertIn(self.at_child, matched)
+        self.assertNotIn(self.elsewhere, matched)
+        self.assertEqual(set(Device.objects.filter(location__in_tree=[str(self.child.pk)])), {self.at_child})
+        self.assertIn(self.child, Location.objects.filter(pk__in_tree=str(self.parent.pk)))
+        with self.assertRaises(ValidationError):
+            list(Device.objects.filter(tenant__in_tree=str(self.parent.pk)))
+
+    def test_assignment_with_single_region_grants_subtree(self):
+        assignment = PolicyAssignment(
+            policy=self.policy, name="Region assignment", parameter_values={"region": str(self.parent.pk)}
+        )
+        assignment.validated_save()
+        assignment.users.add(self.user)
+        user = User.objects.get(pk=self.user.pk)
+        visible = set(Device.objects.restrict(user, "view"))
+        self.assertEqual(visible, {self.at_parent, self.at_child})
+        self.assertTrue(user.has_perm("dcim.view_device", self.at_child))
+        self.assertFalse(user.has_perm("dcim.view_device", self.elsewhere))
 
 
 class BuiltinPoliciesTest(TestCase):
@@ -594,6 +791,32 @@ class DemoDataCommandTest(TestCase):
         self._run()  # second run updates in place
         self.assertEqual(PermissionPolicy.objects.filter(name__startswith="demo-").count(), policies)
         self.assertEqual(PolicyAssignment.objects.filter(name__startswith="demo-").count(), assignments)
+
+    def test_personas_grant_the_intended_access(self):
+        self._run()
+        ntc_operator = User.objects.get(username="ntc-operator")
+        tenant = Tenant.objects.get(name="Network to Code")
+        device = Device.objects.first()
+        device.tenant = tenant
+        device.save()
+        self.assertEqual(set(Device.objects.restrict(ntc_operator, "change")), {device})
+
+        telco_owner = User.objects.get(username="telco-owner")
+        self.assertTrue(telco_owner.has_perm("circuits.add_circuit"))
+        self.assertFalse(telco_owner.has_perm("dcim.view_device"))
+        self.assertTrue(telco_owner.has_perm("dcim.view_location"))
+
+        job_runner = User.objects.get(username="job-runner")
+        export_job = Job.objects.get(module_name="nautobot.core.jobs", job_class_name="ExportObjectList")
+        other_job = Job.objects.exclude(module_name="nautobot.core.jobs").first()
+        self.assertTrue(job_runner.has_perm("extras.run_job", export_job))
+        self.assertFalse(job_runner.has_perm("extras.run_job", other_job))
+        self.assertFalse(job_runner.has_perm("dcim.view_device"))
+
+        it_amer = User.objects.get(username="it-amer")
+        region = Location.objects.get(name="AMER", location_type__name="Region")
+        self.assertIn(region, Location.objects.restrict(it_amer, "view"))
+        self.assertFalse(it_amer.has_perm("circuits.view_circuit"))
 
     def test_flush_removes_demo_objects_only(self):
         self._run()

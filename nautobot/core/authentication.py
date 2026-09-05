@@ -16,6 +16,7 @@ from nautobot.core.utils.permissions import (
     resolve_permission_ct,
 )
 from nautobot.users.models import ObjectPermission
+from nautobot.users.policies import derive_policy_permissions
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,20 @@ class ObjectPermissionBackend(ModelBackend):
                     perm_name = f"{object_type.app_label}.{action}_{object_type.model}"
                     perms[perm_name].extend(obj_perm.list_constraints())
 
+        # Merge in permissions derived from policy assignments, under the same keys and in the same shape.
+        for perm_name, constraints in self.get_policy_permissions(user_obj).items():
+            perms[perm_name].extend(constraints)
+
         return perms
+
+    def get_policy_permissions(self, user_obj):
+        """
+        Return all permissions granted to the user by enabled PolicyAssignments.
+
+        Same shape as `get_object_permissions()`: a dict mapping `app_label.action_model` to a list of constraint
+        dicts. Nothing downstream can distinguish a policy-derived constraint from a stored one.
+        """
+        return derive_policy_permissions(user_obj)
 
     def has_perm(self, user_obj, perm, obj=None):
         if perm == "is_staff":

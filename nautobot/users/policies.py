@@ -9,6 +9,7 @@ Model imports are deferred inside functions because `nautobot.users.models` impo
 defined here.
 """
 
+from collections import defaultdict
 import copy
 from dataclasses import dataclass
 import json
@@ -16,6 +17,7 @@ import logging
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 
 from nautobot.core.utils.permissions import (
     CONSTRAINT_PLACEHOLDER_PATTERN,
@@ -226,6 +228,82 @@ def permission_names_for_rule(rule):
 def render_rule_constraints(rule, parameter_values):
     """Render one `PolicyRule` into a list of constraint dicts using `parameter_values`."""
     return substitute_placeholders(rule.constraint_template, parameter_values)
+
+
+def render_assignment_constraints(assignment):
+    """
+    Render a `PolicyAssignment` into the same shape that `ObjectPermissionBackend.get_object_permissions()` builds.
+
+    Args:
+        assignment (PolicyAssignment): An assignment whose `policy.rules` are (ideally) prefetched.
+
+    Returns:
+        (dict[str, list[dict]]): Constraint lists keyed by `app_label.action_model`.
+
+    Raises:
+        PolicyRenderError: If the assignment does not supply a value for a placeholder.
+    """
+    perms = defaultdict(list)
+    for rule in assignment.policy.rules.all():
+        constraints = render_rule_constraints(rule, assignment.parameter_values or {})
+        for permission_name in permission_names_for_rule(rule):
+            perms[permission_name].extend(constraints)
+    return perms
+
+
+def get_user_assignments(user, *, prefetch=()):
+    """
+    Return the enabled `PolicyAssignment` records that apply to `user`, with policies and rules prefetched.
+
+    A user reached through several groups (or directly and through a group) matches an assignment several times;
+    duplicates are removed here by primary key instead of with `DISTINCT`, which would make the database compare
+    every column including the JSON `parameter_values`. Rule content types are resolved from the ContentType cache
+    (see `rule_content_type()`), not prefetched.
+
+    Args:
+        user (User): The user.
+        prefetch (tuple[str]): Additional `prefetch_related` lookups.
+
+    Returns:
+        (list[PolicyAssignment]): Each applicable assignment once, in name order.
+    """
+    from nautobot.users.models import PolicyAssignment  # avoid circular import
+
+    queryset = (
+        PolicyAssignment.objects.filter(Q(users=user) | Q(groups__user=user), enabled=True)
+        .select_related("policy")
+        .prefetch_related("policy__rules", *prefetch)
+    )
+    seen = set()
+    assignments = []
+    for assignment in queryset:
+        if assignment.pk not in seen:
+            seen.add(assignment.pk)
+            assignments.append(assignment)
+    return assignments
+
+
+def derive_policy_permissions(user):
+    """
+    Build the permissions granted to `user` by enabled policy assignments.
+
+    This is the derivation hook called from `ObjectPermissionBackend`. It costs one query for a user with
+    no assignments and two for a user with any (assignments, then their policies' rules). An assignment that
+    cannot be rendered is logged and skipped, so a broken assignment never widens access.
+
+    Returns:
+        (dict[str, list[dict]]): Same shape as `ObjectPermissionBackend.get_object_permissions()`.
+    """
+    perms = defaultdict(list)
+    for assignment in get_user_assignments(user):
+        try:
+            rendered = render_assignment_constraints(assignment)
+        except PolicyRenderError as exc:
+            logger.error("Skipping policy assignment %s (%s): %s", assignment.name, assignment.pk, exc)
+            continue
+        for permission_name, constraints in rendered.items():
+            perms[permission_name].extend(constraints)
+    return perms
 
 
 #
