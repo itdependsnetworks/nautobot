@@ -12,6 +12,7 @@ from nautobot.core.templatetags.helpers import HTML_NONE, render_json
 from nautobot.users.models import PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
 
 __all__ = (
+    "EffectiveAccessTable",
     "PermissionPolicyTable",
     "PolicyAssignmentTable",
     "PolicyParameterTable",
@@ -192,6 +193,20 @@ class ConstraintsColumn(tables.Column):
         return render_constraints(value)
 
 
+PERMISSION_TEMPLATE = """{{ record.object_type }}<br><small class="text-secondary">{{ record.permission }}</small>"""
+
+SOURCE_TEMPLATE = """
+{% if record.source_type == "objectpermission" %}
+    <span class="badge bg-info text-dark">Permission</span>
+{% else %}
+    <span class="badge bg-primary">Policy assignment</span>
+{% endif %}
+{% if record.source_url %}<a href="{{ record.source_url }}">{{ record.source }}</a>{% else %}{{ record.source }}{% endif %}
+"""
+
+POLICY_TEMPLATE = """{% if record.policy %}{% if record.policy_url %}<a href="{{ record.policy_url }}">{{ record.policy }}</a>{% else %}{{ record.policy }}{% endif %}{% else %}<span class="text-secondary">&mdash;</span>{% endif %}"""
+
+
 class NonModelTable(tables.Table):
     """
     django-tables2 base for tables over plain dicts (no QuerySet), styled like `BaseTable`.
@@ -325,6 +340,26 @@ class PreviewResultsTable(NonModelTable):
             }
             for rule in rules
         ]
+
+
+class EffectiveAccessTable(NonModelTable):
+    """A user's grants from both sources; each row is a `Grant` flattened to a dict with resolved links."""
+
+    object_type = tables.TemplateColumn(template_code=PERMISSION_TEMPLATE, verbose_name="Object type")
+    action = tables.TemplateColumn(template_code='<span class="badge bg-secondary">{{ value }}</span>')
+    source = tables.TemplateColumn(template_code=SOURCE_TEMPLATE)
+    policy = tables.TemplateColumn(template_code=POLICY_TEMPLATE)
+    constraints = ConstraintsColumn()
+    # `empty_values=()` so the link renders although the row carries no count value.
+    count = tables.Column(verbose_name="List", empty_values=())
+
+    class Meta(NonModelTable.Meta):
+        pass
+
+    def render_count(self, value, record):
+        if record.get("list_url"):
+            return format_html('<a href="{}">view list</a>', record["list_url"])
+        return self.default
 
 
 class RuleConstraintsTable(NonModelTable):

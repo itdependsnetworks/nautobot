@@ -138,12 +138,22 @@ class UserAdmin(UserAdmin_):
             },
         ),
         ("Important dates", {"fields": ("last_login", "date_joined")}),
+        ("Permissions", {"fields": ("effective_access",)}),
         ("User Preferences", {"fields": ("config_data",)}),
     )
     filter_horizontal = ("groups",)
     formfield_overrides = NautobotModelAdmin.formfield_overrides
-    readonly_fields = ("config_data",)
+    readonly_fields = ("config_data", "effective_access")
     change_password_form = AdminPasswordChangeForm
+
+    @admin.display(description="Effective access")
+    def effective_access(self, obj):
+        """Link to the page listing every grant the user holds, from stored permissions and policy assignments."""
+        if obj is None or obj.pk is None:
+            return "Save the user first."
+        return format_html(
+            '<a href="{}">View effective access</a>', reverse("users:user_effective_access", kwargs={"pk": obj.pk})
+        )
 
     def get_inlines(self, request, obj):
         if obj is not None:

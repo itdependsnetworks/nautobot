@@ -19,6 +19,9 @@
         <li class="nav-item">
             <a href="{% url 'user:advanced_settings_edit' %}" class="nav-link{% if active_tab == "advanced_settings" %} active{% endif %}"{% if active_tab == "advanced_settings" %} aria-current="page"{% endif %}>Advanced Settings</a>
         </li>
+        <li class="nav-item">
+            <a href="{% url 'user:effective_access' %}" class="nav-link{% if active_tab == "effective_access" %} active{% endif %}"{% if active_tab == "effective_access" %} aria-current="page"{% endif %}>Access</a>
+        </li>
     </ul>
 {% endblock %}
 

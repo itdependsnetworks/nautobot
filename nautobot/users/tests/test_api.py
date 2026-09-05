@@ -1,5 +1,6 @@
 import base64
 from unittest import skip
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
@@ -928,6 +929,59 @@ class PolicyAssignmentTest(APIViewTestCases.APIViewTestCase):
     @skip("DRF's built-in OrderingFilter triggering natural key attribute error in our base")
     def test_list_objects_descending_ordered(self):
         pass
+
+
+class EffectiveAccessAPITest(APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.policy = create_tenant_policy(name="Access policy")
+        self.tenant = Tenant.objects.first()
+        self.assignment = PolicyAssignment(
+            policy=self.policy, name="Access assignment", parameter_values={"tenant": [str(self.tenant.pk)]}
+        )
+        self.assignment.validated_save()
+        self.assignment.users.add(self.user)
+        self.add_permissions("dcim.view_location")
+
+    def test_own_access_lists_both_sources(self):
+        response = self.client.get(reverse("users-api:user-effective-access-self"), **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["username"], self.user.username)
+        sources = {(grant["permission"], grant["source"]["type"]) for grant in response.data["grants"]}
+        self.assertIn(("dcim.view_device", "policy_assignment"), sources)
+        self.assertIn(("dcim.view_location", "objectpermission"), sources)
+        policy_grant = next(
+            grant for grant in response.data["grants"] if grant["source"]["type"] == "policy_assignment"
+        )
+        self.assertEqual(policy_grant["source"]["policy"]["name"], "Access policy")
+        self.assertEqual(policy_grant["constraints"], [{"tenant__in": [str(self.tenant.pk)]}])
+
+    def test_other_user_access_requires_permissions(self):
+        other = User.objects.create_user(username="other")
+        url = reverse("users-api:user-effective-access", kwargs={"pk": other.pk})
+        response = self.client.get(url, **self.header)
+        self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
+
+        self.add_permissions("users.view_user")
+        response = self.client.get(url, **self.header)
+        self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
+
+        self.add_permissions("users.view_objectpermission", "users.view_policyassignment")
+        response = self.client.get(url, **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["username"], "other")
+        self.assertEqual(response.data["grants"], [])
+
+    def test_unknown_user_is_404(self):
+        self.add_permissions("users.view_user", "users.view_objectpermission", "users.view_policyassignment")
+        url = reverse("users-api:user-effective-access", kwargs={"pk": uuid.uuid4()})
+        self.assertHttpStatus(self.client.get(url, **self.header), status.HTTP_404_NOT_FOUND)
+
+    def test_own_access_by_pk_needs_no_extra_permission(self):
+        url = reverse("users-api:user-effective-access", kwargs={"pk": self.user.pk})
+        self.add_permissions("users.view_user")
+        response = self.client.get(url, **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
 
 
 class UserConfigTest(APITestCase):

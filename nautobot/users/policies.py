@@ -396,6 +396,114 @@ def validate_parameter_values(policy, values):
 
 
 #
+# Grants (source-aware view of a user's access)
+#
+
+
+@dataclass
+class Grant:
+    """One grant of a permission to a user, with the source that granted it."""
+
+    permission: str
+    object_type: ContentType
+    action: str
+    constraints: list
+    source_type: str  # "objectpermission" or "policy_assignment"
+    source: object
+    policy: object = None
+
+    @property
+    def source_name(self):
+        return str(self.source)
+
+    def as_dict(self):
+        return {
+            "permission": self.permission,
+            "content_type": f"{self.object_type.app_label}.{self.object_type.model}",
+            "action": self.action,
+            "constraints": self.constraints,
+            "source_type": self.source_type,
+        }
+
+
+def render_assignment_grants(assignment):
+    """Render a `PolicyAssignment` into one `Grant` per (object type, action)."""
+    grants = []
+    for rule in assignment.policy.rules.all():
+        constraints = render_rule_constraints(rule, assignment.parameter_values or {})
+        object_type = rule_content_type(rule)
+        for action in rule.actions:
+            grants.append(
+                Grant(
+                    permission=f"{object_type.app_label}.{action}_{object_type.model}",
+                    object_type=object_type,
+                    action=action,
+                    constraints=constraints,
+                    source_type="policy_assignment",
+                    source=assignment,
+                    policy=assignment.policy,
+                )
+            )
+    return grants
+
+
+def collect_user_grants(user, assignments=None):
+    """
+    Return every grant that applies to `user` from both stored permissions and policy assignments.
+
+    Built only on demand (the effective-access view and endpoint); the permission dict used for enforcement
+    never carries source information.
+
+    Args:
+        user (User): The user.
+        assignments (list[PolicyAssignment], optional): The user's assignments, if the caller already fetched them
+            (see `get_user_assignments()`); otherwise they are fetched here.
+
+    Returns:
+        (list[Grant]): Sorted by object type, action, source type and source name.
+    """
+    from nautobot.users.models import ObjectPermission  # avoid circular import
+
+    grants = []
+    object_permissions = (
+        ObjectPermission.objects.filter(Q(users=user) | Q(groups__user=user), enabled=True)
+        .distinct()
+        .prefetch_related("object_types")
+    )
+    for object_permission in object_permissions:
+        for object_type in object_permission.object_types.all():
+            for action in object_permission.actions:
+                grants.append(
+                    Grant(
+                        permission=f"{object_type.app_label}.{action}_{object_type.model}",
+                        object_type=object_type,
+                        action=action,
+                        constraints=object_permission.list_constraints(),
+                        source_type="objectpermission",
+                        source=object_permission,
+                    )
+                )
+    if assignments is None:
+        assignments = get_user_assignments(user)
+    for assignment in assignments:
+        try:
+            grants.extend(render_assignment_grants(assignment))
+        except PolicyRenderError as exc:
+            logger.error("Skipping policy assignment %s (%s): %s", assignment.name, assignment.pk, exc)
+
+    grants.sort(
+        key=lambda grant: (
+            grant.object_type.app_label,
+            grant.object_type.model,
+            grant.action,
+            grant.source_type,
+            grant.source_name,
+        )
+    )
+    return grants
+
+
+#
 # Preview
 #
 

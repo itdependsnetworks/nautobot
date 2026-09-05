@@ -29,6 +29,7 @@ from nautobot.extras.models import Job, Status
 from nautobot.tenancy.models import Tenant
 from nautobot.users.models import ObjectPermission, PermissionPolicy, PolicyAssignment, PolicyParameter, PolicyRule
 from nautobot.users.policies import (
+    collect_user_grants,
     derive_policy_permissions,
     extract_placeholders,
     find_malformed_placeholders,
@@ -620,6 +621,17 @@ class DerivationHookTest(TestCase):
             },
         )
 
+    def test_collect_user_grants_reports_both_sources(self):
+        assignment = self._assign(users=[self.user])
+        permission = ObjectPermission.objects.create(name="Stored", actions=["view"], constraints={"name": "x"})
+        permission.object_types.add(self.device_ct)
+        permission.users.add(self.user)
+        grants = collect_user_grants(self.user)
+        device_grants = [grant for grant in grants if grant.permission == "dcim.view_device"]
+        self.assertEqual({grant.source_type for grant in device_grants}, {"objectpermission", "policy_assignment"})
+        self.assertEqual({grant.source_name for grant in device_grants}, {"Stored", assignment.name})
+        self.assertTrue(all(grant.policy is None for grant in grants if grant.source_type == "objectpermission"))
+
 
 seed_migration = importlib.import_module("nautobot.users.migrations.0015_permission_policy_seed_data")
 
@@ -664,6 +676,13 @@ class RenderingHelpersTest(TestCase):
         self.assertNotIn("6 values", html)  # a string that starts with "[" is still a string
         self.assertIn("missing value: region", render_parameter_values({}, missing=["region"]))
         self.assertIn("&mdash;", render_parameter_values({}))
+
+    def test_effective_access_count_links_to_list(self):
+        from nautobot.users.tables import EffectiveAccessTable
+
+        table = EffectiveAccessTable([])
+        self.assertIn('href="/dcim/devices/"', table.render_count(None, {"list_url": "/dcim/devices/"}))
+        self.assertIn("&mdash;", str(table.render_count(None, {"list_url": None})))
 
 
 class ConstraintToFilterParamsTest(TestCase):

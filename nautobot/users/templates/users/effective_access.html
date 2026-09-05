@@ -1,0 +1,46 @@
+{% extends base_template %}
+{% load helpers %}
+{% load django_tables2 %}
+
+{% block title %}Effective Access{% if not is_self %}: {{ target_user }}{% endif %}{% endblock %}
+
+{% block content %}
+    {% if not is_self %}
+        <h1 class="h3">Effective access: {{ target_user }}</h1>
+    {% endif %}
+    <div class="card">
+        <div class="card-header">
+            <strong>{% if is_self %}Your effective access{% else %}Effective access{% endif %}</strong>
+        </div>
+        <div class="card-body">
+            {% if target_user.is_superuser %}
+                <div class="alert alert-info">
+                    <span class="mdi mdi-shield-crown" aria-hidden="true"></span>
+                    {% if is_self %}You are a superuser: all permissions are implicitly granted.{% else %}This user is a superuser: all permissions are implicitly granted.{% endif %}
+                    The table lists only explicit grants.
+                </div>
+            {% endif %}
+            <p class="text-secondary">
+                {% if is_self %}You have{% else %}This user has{% endif %} explicit access to
+                <strong>{{ object_type_count }}</strong> object type{{ object_type_count|pluralize }} through
+                <strong>{{ stored_count }}</strong> stored permission grant{{ stored_count|pluralize }} and
+                <strong>{{ policy_count }}</strong> policy assignment grant{{ policy_count|pluralize }}.
+                <span class="small">Models exempted from view permission enforcement by <code>EXEMPT_VIEW_PERMISSIONS</code> are not listed.</span>
+            </p>
+            {% if incomplete_assignments %}
+                <div class="alert alert-warning">
+                    <span class="mdi mdi-alert-outline" aria-hidden="true"></span>
+                    {% if is_self %}You are{% else %}This user is{% endif %} in policy assignment(s) that grant nothing because a parameter value is missing:
+                    {% for assignment, missing in incomplete_assignments %}
+                        {{ assignment }} (missing {{ missing|join:", " }}){% if not forloop.last %}; {% endif %}
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% if grants %}
+                {% render_table table 'inc/table.html' %}
+            {% else %}
+                <p class="mb-0">{% if is_self %}You have no explicit permissions. Ask an administrator if you need access.{% else %}This user has no explicit permissions.{% endif %}</p>
+            {% endif %}
+        </div>
+    </div>
+{% endblock content %}

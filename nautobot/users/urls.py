@@ -14,6 +14,8 @@ router.register("policy-rules", views.PolicyRuleUIViewSet)
 router.register("permission-policy-assignments", views.PolicyAssignmentUIViewSet)
 
 urlpatterns = [
+    path("access/", views.UserEffectiveAccessView.as_view(), name="effective_access"),
+    path("<uuid:pk>/access/", views.UserEffectiveAccessAdminView.as_view(), name="user_effective_access"),
     path("profile/", views.ProfileView.as_view(), name="profile"),
     path("preferences/", views.UserConfigView.as_view(), name="preferences"),
     path("navbar-favorites/", views.UserNavbarFavoritesAddView.as_view(), name="navbar_favorites_add"),

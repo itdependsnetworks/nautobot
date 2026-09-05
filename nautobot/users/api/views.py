@@ -10,6 +10,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiPara
 from rest_framework import status
 from rest_framework.authentication import BasicAuthentication
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -31,6 +32,7 @@ from nautobot.users.models import (
     Token,
 )
 from nautobot.users.policies import (
+    collect_user_grants,
     permission_names_for_rule,
     PolicyRenderError,
     preview_policy,
@@ -46,6 +48,32 @@ def _absolute_url(request, viewname, pk):
     return request.build_absolute_uri(reverse(viewname, kwargs={"pk": pk}))
 
 
+def _effective_access_payload(user, request):
+    """Build the effective-access response for `user`: every grant with the source that produced it."""
+    grants = []
+    for grant in collect_user_grants(user):
+        source = {"type": grant.source_type, "id": str(grant.source.pk), "name": str(grant.source)}
+        if grant.source_type == "objectpermission":
+            source["url"] = _absolute_url(request, "users-api:objectpermission-detail", grant.source.pk)
+        else:
+            source["url"] = _absolute_url(request, "users-api:policyassignment-detail", grant.source.pk)
+            source["policy"] = {
+                "id": str(grant.policy.pk),
+                "name": grant.policy.name,
+                "url": _absolute_url(request, "users-api:permissionpolicy-detail", grant.policy.pk),
+            }
+        grants.append({**grant.as_dict(), "source": source})
+    return {
+        "user": {
+            "id": str(user.pk),
+            "username": user.username,
+            "url": _absolute_url(request, "users-api:user-detail", user.pk),
+        },
+        "is_superuser": user.is_superuser,
+        "grants": grants,
+    }
+
+
 #
 # Users and groups
 #
@@ -55,6 +83,38 @@ class UserViewSet(ModelViewSet):
     queryset = RestrictedQuerySet(model=get_user_model()).order_by("username")
     serializer_class = serializers.UserSerializer
     filterset_class = filters.UserFilterSet
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["get"], url_path="effective-access")
+    def effective_access(self, request, pk=None):
+        """
+        The effective access of one user, from both stored permissions and policy assignments, with sources.
+
+        A user may always read their own access. Reading another user's access requires permission to view
+        users, object permissions and policy assignments.
+        """
+        user = self.get_object()
+        if user.pk != request.user.pk and not (
+            request.user.has_perm("users.view_objectpermission")
+            and request.user.has_perm("users.view_policyassignment")
+        ):
+            raise PermissionDenied(
+                "Viewing another user's effective access requires permission to view object permissions and "
+                "policy assignments."
+            )
+        return Response(_effective_access_payload(user, request))
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="effective-access",
+        url_name="effective-access-self",
+        permission_classes=[IsAuthenticated],
+    )
+    def own_effective_access(self, request):
+        """The effective access of the requesting user."""
+        return Response(_effective_access_payload(request.user, request))
 
 
 @extend_schema_view(

@@ -745,3 +745,57 @@ class PolicyAssignmentTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         self.assertIn("DCIM | interface", body)
         self.assertIn(assignment.parameter_values["tenant"][0], body)
         self.assertNotIn('value="definition"', body)  # the JSON definition lives on the detail page, not here
+
+
+class EffectiveAccessViewTestCase(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.policy = create_tenant_policy(name="Access policy")
+        self.tenant = Tenant.objects.first()
+        assignment = PolicyAssignment(
+            policy=self.policy, name="Access assignment", parameter_values={"tenant": [str(self.tenant.pk)]}
+        )
+        assignment.validated_save()
+        assignment.users.add(self.user)
+        self.add_permissions("dcim.view_location")
+
+    def test_own_access_page(self):
+        response = self.client.get(reverse("users:effective_access"))
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("Access policy", body)
+        self.assertIn("Access assignment", body)
+        self.assertIn("dcim.view_location", body)
+        self.assertIn("dcim.view_device", body)
+        self.assertIn('<span class="badge bg-primary">Policy assignment</span>', body)
+        self.assertIn('<span class="badge bg-info text-dark">Permission</span>', body)
+
+    def test_incomplete_assignment_is_called_out(self):
+        """An assignment lacking a value for a parameter grants nothing; the page says so instead of staying silent."""
+        PolicyParameter.objects.create(policy=self.policy, name="prefix", kind="string")
+        for rule in self.policy.rules.all():
+            rule.constraint_template = {**rule.constraint_template, "name__istartswith": "{{ prefix }}"}
+            rule.path_map = {**rule.path_map, "prefix": {"path": "name", "lookup": "istartswith"}}
+            rule.save()
+        response = self.client.get(reverse("users:effective_access"))
+        body = response.content.decode(response.charset)
+        self.assertIn("grant nothing because a parameter value is missing", body)
+        self.assertIn("Access assignment", body)
+        self.assertIn("(missing prefix)", body)
+        self.assertNotIn("dcim.view_device", body)  # the broken assignment contributes no grants
+
+    def test_profile_tab_links_to_access(self):
+        response = self.client.get(reverse("users:profile"))
+        self.assertIn(reverse("users:effective_access"), response.content.decode(response.charset))
+
+    def test_admin_page_requires_permissions(self):
+        other = User.objects.create_user(username="other")
+        url = reverse("users:user_effective_access", kwargs={"pk": other.pk})
+        self.assertHttpStatus(self.client.get(url), 403)
+        self.add_permissions("users.view_user")
+        self.assertHttpStatus(self.client.get(url), 403)
+        self.add_permissions("users.view_objectpermission", "users.view_policyassignment")
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        self.assertIn("no explicit permissions", response.content.decode(response.charset))
+        self.assertHttpStatus(self.client.get(reverse("users:user_effective_access", kwargs={"pk": uuid.uuid4()})), 404)

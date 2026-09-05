@@ -5,6 +5,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import (
     BACKEND_SESSION_KEY,
+    get_user_model,
     login as auth_login,
     logout as auth_logout,
     update_session_auth_hash,
@@ -28,13 +29,13 @@ from nautobot.core.choices import NautobotEditionChoices
 from nautobot.core.constants import NAUTOBOT_EDITION_URLS
 from nautobot.core.events import publish_event
 from nautobot.core.forms import ConfirmationForm
-from nautobot.core.models.querysets import count_related
+from nautobot.core.models.querysets import count_related, RestrictedQuerySet
 from nautobot.core.templatetags.helpers import table_config_form
 from nautobot.core.ui import object_detail
 from nautobot.core.ui.choices import SectionChoices
 from nautobot.core.ui.titles import Titles
 from nautobot.core.utils.config import get_nautobot_edition
-from nautobot.core.views.generic import GenericView
+from nautobot.core.views.generic import GenericView, ObjectView
 from nautobot.core.views.mixins import (
     ObjectBulkCreateViewMixin,
     ObjectBulkDestroyViewMixin,
@@ -50,6 +51,9 @@ from nautobot.core.views.mixins import (
 from nautobot.users import filters as users_filters, tables as users_tables
 from nautobot.users.api import serializers as users_serializers
 from nautobot.users.policies import (
+    collect_user_grants,
+    filtered_list_url,
+    get_user_assignments,
     PolicyRenderError,
     preview_policy,
     PREVIEW_SAMPLE_SIZE,
@@ -1208,3 +1212,90 @@ class PolicyAssignmentUIViewSet(PolicyUIViewSetBase):
         )
         table.request = request
         return table
+
+
+#
+# Effective access
+#
+
+
+def _effective_access_rows(request, grants):
+    """Flatten grants for `EffectiveAccessTable`, linking sources only where the requesting user may view them."""
+    can_view_permissions = request.user.has_perm("users.view_objectpermission") and request.user.is_staff
+    can_view_assignments = request.user.has_perm("users.view_policyassignment")
+    rows = []
+    for grant in grants:
+        if grant.source_type == "objectpermission":
+            source_url = (
+                reverse("admin:users_objectpermission_change", args=[grant.source.pk]) if can_view_permissions else None
+            )
+        else:
+            source_url = grant.source.get_absolute_url() if can_view_assignments else None
+        model = grant.object_type.model_class()
+        rows.append(
+            {
+                "object_type": grant.object_type,
+                "permission": grant.permission,
+                "action": grant.action,
+                "source_type": grant.source_type,
+                "source": grant.source,
+                "source_url": source_url,
+                "policy": grant.policy,
+                "policy_url": grant.policy.get_absolute_url() if grant.policy and can_view_assignments else None,
+                "constraints": grant.constraints,
+                "list_url": filtered_list_url(model, grant.constraints, request.user) if model else None,
+            }
+        )
+    return rows
+
+
+def _effective_access_context(request, target_user, *, is_self):
+    assignments = get_user_assignments(target_user, prefetch=("policy__parameters",))
+    grants = collect_user_grants(target_user, assignments=assignments)
+    incomplete_assignments = [(assignment, assignment.missing_parameter_names()) for assignment in assignments]
+    return {
+        "target_user": target_user,
+        "is_self": is_self,
+        "grants": grants,
+        "incomplete_assignments": [(assignment, missing) for assignment, missing in incomplete_assignments if missing],
+        "table": users_tables.EffectiveAccessTable(_effective_access_rows(request, grants)),
+        "stored_count": sum(1 for grant in grants if grant.source_type == "objectpermission"),
+        "policy_count": sum(1 for grant in grants if grant.source_type == "policy_assignment"),
+        "object_type_count": len({(grant.object_type.app_label, grant.object_type.model) for grant in grants}),
+    }
+
+
+class UserEffectiveAccessView(GenericView):
+    """A user's own effective access: every grant from stored permissions and policy assignments, with its source."""
+
+    view_titles = Titles(titles={"*": "Effective Access"})
+
+    def get(self, request):
+        return render(
+            request,
+            "users/effective_access.html",
+            {
+                **_effective_access_context(request, request.user, is_self=True),
+                "base_template": "users/base.html",
+                "active_tab": "effective_access",
+                "is_django_auth_user": is_django_auth_user(request),
+                "view_titles": self.get_view_titles(),
+                "breadcrumbs": self.get_breadcrumbs(),
+            },
+        )
+
+
+class UserEffectiveAccessAdminView(ObjectView):
+    """The effective access of another user, for administrators."""
+
+    queryset = RestrictedQuerySet(model=get_user_model())
+    template_name = "users/effective_access.html"
+    additional_permissions = ["users.view_objectpermission", "users.view_policyassignment"]
+    view_titles = Titles(titles={"*": "Effective Access: {{ object }}"})
+
+    def get_extra_context(self, request, instance):
+        return {
+            **super().get_extra_context(request, instance),
+            **_effective_access_context(request, instance, is_self=instance.pk == request.user.pk),
+            "base_template": "base.html",
+        }
