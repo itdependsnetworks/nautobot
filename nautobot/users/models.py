@@ -4,6 +4,7 @@ import os
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, Group, UserManager as UserManager_
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.core.validators import MinLengthValidator, RegexValidator
 from django.db import models
@@ -439,3 +440,16 @@ class PolicyParameter(BaseModel, ChangeLoggedModel):
 
     def __str__(self):
         return f"{self.policy}: {self.name}"
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.kind == PolicyParameterKindChoices.KIND_OBJECT:
+            if self.target_content_type_id is None:
+                errors["target_content_type"] = "An 'object' parameter must reference a target object type."
+            elif self.target_content_type.model_class() is None:
+                errors["target_content_type"] = "The target object type is not an installed model."
+        elif self.kind == PolicyParameterKindChoices.KIND_STRING and self.target_content_type_id is not None:
+            errors["target_content_type"] = "A 'string' parameter must not reference a target object type."
+        if errors:
+            raise ValidationError(errors)

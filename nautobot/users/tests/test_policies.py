@@ -4,9 +4,11 @@ from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 
 from nautobot.core.testing import TestCase
+from nautobot.dcim.models import Device, Interface
 from nautobot.tenancy.models import Tenant
 from nautobot.users.models import PermissionPolicy, PolicyParameter
 
@@ -25,6 +27,30 @@ def create_tenant_policy(name="Tenant device viewer", actions=("view",)):
     ).validated_save()
     # PLACEHOLDER: will be replaced in C08 (Policy rule model and stack): the Device and Interface rules.
     return policy
+
+
+class PolicyModelValidationTest(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.device_ct = ContentType.objects.get_for_model(Device)
+        cls.interface_ct = ContentType.objects.get_for_model(Interface)
+        cls.tenant_ct = ContentType.objects.get_for_model(Tenant)
+        cls.policy = create_tenant_policy()
+        cls.tenants = list(Tenant.objects.all()[:2])
+
+    def test_parameter_kind_validation(self):
+        with self.assertRaises(ValidationError):
+            PolicyParameter(policy=self.policy, name="other", kind="object").full_clean()
+        with self.assertRaises(ValidationError):
+            PolicyParameter(
+                policy=self.policy, name="other", kind="string", target_content_type=self.tenant_ct
+            ).full_clean()
+        with self.assertRaises(ValidationError):
+            PolicyParameter(policy=self.policy, name="Bad Name", kind="string").full_clean()
+
+    def test_clone_params_reference_source_policy(self):
+        self.assertEqual(self.policy.clone_fields, ["description"])
+        self.assertEqual(self.policy.get_clone_extra_params(), {"clone_from": str(self.policy.pk)})
 
 
 class DemoDataCommandTest(TestCase):

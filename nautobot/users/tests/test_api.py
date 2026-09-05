@@ -575,6 +575,14 @@ class PolicyParameterTest(PolicyReferenceMixin, APIViewTestCases.APIViewTestCase
         cls.update_data = {"multiple": False}
         cls.bulk_update_data = {"multiple": False}
 
+    def test_object_parameter_requires_target(self):
+        self._allow_policy_reference()
+        self.add_permissions("users.add_policyparameter")
+        data = {"policy": PermissionPolicy.objects.first().pk, "name": "region", "kind": "object"}
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("target object type", str(response.data["target_content_type"]))
+
 
 class UserConfigTest(APITestCase):
     def test_get(self):

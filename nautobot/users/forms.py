@@ -185,6 +185,14 @@ class PolicyParameterForm(BootstrapMixin, forms.ModelForm):
         for field in self.fields.values():
             field.widget.attrs.setdefault("aria-label", field.label)
 
+    def clean(self):
+        super().clean()
+        # The object-kind/target consistency check is the model's (`PolicyParameter.clean()`); a string parameter
+        # simply drops whatever target the (hidden) select still carried.
+        if self.cleaned_data.get("kind") == PolicyParameterKindChoices.KIND_STRING:
+            self.cleaned_data["target_content_type"] = None
+        return self.cleaned_data
+
 
 PolicyParameterFormSet = inlineformset_factory(
     parent_model=PermissionPolicy,
