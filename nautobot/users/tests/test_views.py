@@ -499,6 +499,14 @@ class PolicyRuleTestCase(PolicyChildViewTestCases.ViewTestCase):
         self.assertEqual(rule.actions, ["view", "run"])
         self.assertEqual(rule.path_map, {"tenant": {"path": "tenant", "lookup": "in"}})
 
+    def test_template_that_does_not_fit_the_object_type_is_rejected(self):
+        self.add_permissions("users.add_policyrule", "users.view_permissionpolicy")
+        data = {**self.form_data, "constraint_template": '{"device__tenant__in": "{{ tenant }}"}'}
+        response = self.client.post(self._get_url("add"), data=post_data(data))
+        self.assertHttpStatus(response, 200)
+        self.assertIn("dcim.location", response.content.decode(response.charset))
+        self.assertFalse(PolicyRule.objects.filter(content_type=ContentType.objects.get_for_model(Location)).exists())
+
     def test_detail_view_shows_the_template_and_path_map(self):
         self.add_permissions("users.view_policyrule")
         rule = PolicyRule.objects.filter(content_type=ContentType.objects.get_for_model(Interface)).first()

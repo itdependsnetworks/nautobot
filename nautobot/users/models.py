@@ -15,9 +15,16 @@ from nautobot.core.constants import CHARFIELD_MAX_LENGTH
 from nautobot.core.models import BaseManager, BaseModel, CompositeKeyQuerySetMixin
 from nautobot.core.models.fields import JSONArrayField
 from nautobot.core.utils.data import flatten_dict
-from nautobot.core.utils.permissions import resolve_permission
+from nautobot.core.utils.orm_paths import tree_model_for_field, validate_lookup_path
+from nautobot.core.utils.permissions import resolve_permission, validate_constraints_for_model
 from nautobot.extras.models.change_logging import ChangeLoggedModel
 from nautobot.users.choices import PolicyParameterKindChoices
+from nautobot.users.policies import (
+    extract_placeholders,
+    find_malformed_placeholders,
+    PolicyRenderError,
+    substitute_placeholders,
+)
 
 __all__ = (
     "AdminGroup",
@@ -506,3 +513,164 @@ class PolicyRule(BaseModel, ChangeLoggedModel):
 
     def __str__(self):
         return f"{self.policy}: {self.content_type}"
+
+    def _declared_parameters(self):
+        """
+        The policy's parameters keyed by name.
+
+        A form that edits a policy and its rules together sets `_pending_parameters` (objects with `name`, `kind`,
+        `target_content_type` and `multiple` attributes) so a rule can be validated before the policy is saved.
+        """
+        pending = getattr(self, "_pending_parameters", None)
+        if pending is not None:
+            return dict(pending)
+        if self.policy_id is None or self.policy._state.adding:
+            return {}
+        return {parameter.name: parameter for parameter in self.policy.parameters.all()}
+
+    @staticmethod
+    def default_constraint_template(path_map):
+        """
+        Build the constraint template implied by `path_map`: one `path__lookup: {{ name }}` entry per resolved path.
+
+        An `exact` lookup collapses to the bare path for readability.
+        """
+        template = {}
+        for name, entry in (path_map or {}).items():
+            if not isinstance(entry, dict) or "path" not in entry:
+                continue
+            lookup = entry.get("lookup", "exact")
+            key = entry["path"] if lookup == "exact" else f"{entry['path']}__{lookup}"
+            template[key] = f"{{{{ {name} }}}}"
+        return template
+
+    def clean(self):  # pylint: disable=too-many-branches
+        super().clean()
+        errors = {}
+
+        if not isinstance(self.actions, list) or not self.actions:
+            errors["actions"] = "At least one action must be specified."
+        elif not all(isinstance(action, str) and action for action in self.actions):
+            errors["actions"] = "Each action must be a non-empty string."
+
+        template = self.constraint_template
+        if template is None:
+            template = {}
+        if isinstance(template, dict):
+            template_groups = [template]
+        elif isinstance(template, list) and all(isinstance(group, dict) for group in template):
+            template_groups = template
+        else:
+            template_groups = None
+            errors["constraint_template"] = "The constraint template must be a JSON object or a list of JSON objects."
+
+        model = self.content_type.model_class() if self.content_type_id else None
+        if model is None:
+            errors["content_type"] = "The object type is not an installed model."
+
+        if not isinstance(self.path_map, dict):
+            errors["path_map"] = "The path map must be a JSON object keyed by parameter name."
+
+        if errors:
+            raise ValidationError(errors)
+
+        label = f"{self.content_type.app_label}.{self.content_type.model}"
+        parameters = self._declared_parameters()
+        path_errors = []
+        template_errors = []
+
+        for name in sorted(set(self.path_map) - set(parameters)):
+            path_errors.append(f"{label}: '{name}' is not a parameter of this policy.")
+
+        constrained = set()
+        sample_values = {}
+        for name, entry in self.path_map.items():
+            parameter = parameters.get(name)
+            if parameter is None:
+                continue
+            if not isinstance(entry, dict):
+                path_errors.append(f"{label}: the entry for parameter '{name}' must be a JSON object.")
+                continue
+            if set(entry) != {"path", "lookup"}:
+                path_errors.append(
+                    f'{label}: the entry for parameter \'{name}\' must have exactly the keys "path" and "lookup"; '
+                    "omit parameters the template does not use."
+                )
+                continue
+            path, lookup = entry["path"], entry["lookup"]
+            try:
+                terminal = validate_lookup_path(model, path)
+            except ValidationError as exc:
+                path_errors.append(f"{label}: parameter '{name}': {'; '.join(exc.messages)}")
+                continue
+            if lookup not in terminal.get_lookups():
+                path_errors.append(f"{label}: parameter '{name}': lookup '{lookup}' is not valid for '{path}'.")
+                continue
+            if parameter.kind == PolicyParameterKindChoices.KIND_OBJECT:
+                expected_lookup = "in" if parameter.multiple else "exact"
+                # `in_tree` (the node or any descendant) works for one value or many, on tree models only.
+                # It is provisional (see `InTreeLookup`); remove this acceptance if the lookup is withdrawn.
+                if lookup == "in_tree" and tree_model_for_field(terminal) is not None:
+                    expected_lookup = "in_tree"
+                if lookup != expected_lookup:
+                    path_errors.append(
+                        f"{label}: parameter '{name}' accepts {'multiple values' if parameter.multiple else 'one value'} "
+                        f"and requires the '{expected_lookup}' lookup, not '{lookup}'."
+                    )
+                target_model = (
+                    parameter.target_content_type.model_class() if parameter.target_content_type is not None else None
+                )
+                if terminal.is_relation:
+                    terminal_model = terminal.related_model
+                elif terminal.primary_key:
+                    terminal_model = terminal.model
+                else:
+                    terminal_model = None
+                if target_model is None or terminal_model is not target_model:
+                    path_errors.append(
+                        f"{label}: parameter '{name}': path '{path}' does not reach "
+                        f"{target_model._meta.label if target_model else 'the target object type'}."
+                    )
+                sample_values[name] = [] if parameter.multiple else None
+            else:
+                if terminal.is_relation:
+                    path_errors.append(
+                        f"{label}: parameter '{name}' is a string parameter but path '{path}' ends at a relation."
+                    )
+                sample_values[name] = [""] if parameter.multiple else ""
+            constrained.add(name)
+
+        malformed = find_malformed_placeholders(template_groups)
+        if malformed:
+            template_errors.append(
+                f'{label}: a placeholder must be a complete value such as "{{{{ name }}}}"; found: '
+                f"{', '.join(repr(text) for text in malformed)}."
+            )
+        placeholders = extract_placeholders(template_groups)
+        for name in sorted(placeholders - set(parameters)):
+            template_errors.append(f"{label}: the template references undeclared parameter '{name}'.")
+        for name in sorted(constrained - placeholders):
+            template_errors.append(
+                f"{label}: parameter '{name}' has a resolved path but the template does not use '{{{{ {name} }}}}'."
+            )
+        for name in sorted((placeholders & set(parameters)) - constrained):
+            template_errors.append(
+                f"{label}: the template uses '{{{{ {name} }}}}' but the path map has no entry for '{name}'."
+            )
+
+        if not template_errors and not path_errors:
+            for name, parameter in parameters.items():
+                sample_values.setdefault(name, [] if parameter.multiple else None)
+            try:
+                rendered = substitute_placeholders(template_groups, sample_values)
+                validate_constraints_for_model(model, rendered)
+            except (PolicyRenderError, ValidationError) as exc:
+                message = "; ".join(exc.messages) if isinstance(exc, ValidationError) else str(exc)
+                template_errors.append(f"{label}: {message}")
+
+        if path_errors:
+            errors["path_map"] = path_errors
+        if template_errors:
+            errors["constraint_template"] = template_errors
+        if errors:
+            raise ValidationError(errors)

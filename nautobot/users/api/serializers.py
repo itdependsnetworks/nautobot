@@ -144,6 +144,13 @@ class PolicyParameterChildSerializer(BaseModelSerializer):
         validators = []  # the (policy, name) unique_together is enforced by the parent serializer
 
 
+def _fill_constraint_template(attrs):
+    """If `constraint_template` is omitted, generate it from `path_map` via `PolicyRule.default_constraint_template()`."""
+    if "constraint_template" not in attrs and "path_map" in attrs:
+        attrs["constraint_template"] = PolicyRule.default_constraint_template(attrs["path_map"])
+    return attrs
+
+
 class PolicyRuleSerializer(ValidatedModelSerializer):
     """A `PolicyRule` on its own endpoint; `policy` is writable and the model's `clean()` runs on save."""
 
@@ -160,9 +167,7 @@ class PolicyRuleSerializer(ValidatedModelSerializer):
         fields = "__all__"
 
     def validate(self, attrs):
-        # PLACEHOLDER: will be replaced in C10 (Policy rule validation and rendering): generate an omitted
-        # `constraint_template` from `path_map`.
-        return super().validate(attrs)
+        return super().validate(_fill_constraint_template(attrs))
 
 
 class PolicyRuleChildSerializer(BaseModelSerializer):
@@ -184,9 +189,7 @@ class PolicyRuleChildSerializer(BaseModelSerializer):
         validators = []  # the (policy, content_type) unique_together is enforced by the parent serializer
 
     def validate(self, attrs):
-        # PLACEHOLDER: will be replaced in C10 (Policy rule validation and rendering): generate an omitted
-        # `constraint_template` from `path_map`.
-        return super().validate(attrs)
+        return _fill_constraint_template(super().validate(attrs))
 
 
 class PermissionPolicySerializer(ValidatedModelSerializer):

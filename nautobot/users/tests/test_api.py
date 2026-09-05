@@ -588,6 +588,26 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
         self.assertIn("Duplicate entry", str(response.data["parameters"][1]["name"]))
         self.assertEqual(policy.parameters.get(name="tenant").kind, "object")  # unchanged
 
+    def test_nested_update_rolls_back_on_child_error(self):
+        self.add_permissions("users.change_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        data = {
+            "name": "Renamed policy",
+            "rules": [
+                {
+                    "content_type": "dcim.device",
+                    "actions": [],  # invalid child
+                    "constraint_template": {"tenant__in": "{{ tenant }}"},
+                    "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+                }
+            ],
+        }
+        response = self.client.patch(self._get_detail_url(policy), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        policy.refresh_from_db()
+        self.assertEqual(policy.name, "Policy 1")  # the parent update was rolled back with the children
+        self.assertEqual(policy.rules.count(), 2)
+
     def test_resolve_path(self):
         self.add_permissions("users.view_permissionpolicy")
         url = reverse("users-api:permissionpolicy-resolve-path")
@@ -715,6 +735,20 @@ class PolicyRuleTest(PolicyReferenceMixin, APIViewTestCases.APIViewTestCase):
         ]
         cls.update_data = {"actions": ["view", "change"]}
         cls.bulk_update_data = {"actions": ["view", "delete"]}
+
+    def test_template_must_fit_the_object_type(self):
+        self._allow_policy_reference()
+        self.add_permissions("users.add_policyrule")
+        data = {
+            "policy": PermissionPolicy.objects.first().pk,
+            "content_type": "dcim.location",
+            "actions": ["view"],
+            "constraint_template": {"device__tenant__in": "{{ tenant }}"},
+            "path_map": {"tenant": {"path": "device__tenant", "lookup": "in"}},
+        }
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("dcim.location", str(response.data))
 
 
 class UserConfigTest(APITestCase):

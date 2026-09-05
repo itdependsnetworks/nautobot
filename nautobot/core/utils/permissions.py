@@ -2,6 +2,7 @@ import re
 
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldError, ValidationError
 from django.db.models import Q
 
 #: Token that the permission evaluator replaces with the requesting user at query time.
@@ -131,3 +132,29 @@ def normalize_constraints(constraints):
     if isinstance(constraints, dict):
         return [constraints]
     return list(constraints)
+
+
+def validate_constraints_for_model(model, constraints, *, tokens=None):
+    """
+    Raise a `ValidationError` if `constraints` is not a filter that `model` can evaluate.
+
+    The filter is constructed (which resolves every lookup path and coerces every value) but not
+    executed, so this is cheap enough to call from a model's `clean()`.
+
+    Args:
+        model (type): The Django model class the constraints apply to.
+        constraints (dict, list, None): A constraint dict or list of constraint dicts.
+        tokens (dict, optional): Token substitutions; defaults to `{"$user": None}`.
+    """
+    if tokens is None:
+        tokens = {USER_TOKEN: None}
+    if not isinstance(constraints, (dict, list)) and constraints is not None:
+        raise ValidationError("Constraints must be a JSON object or a list of JSON objects.")
+    constraint_list = normalize_constraints(constraints)
+    if not all(isinstance(constraint, dict) for constraint in constraint_list):
+        raise ValidationError("Each constraint must be a JSON object.")
+    try:
+        model.objects.filter(qs_filter_from_constraints(constraint_list, tokens))
+    except (FieldError, ValueError, TypeError, ValidationError) as exc:
+        message = "; ".join(exc.messages) if isinstance(exc, ValidationError) else str(exc)
+        raise ValidationError(f"Invalid filter for {model._meta.label}: {message}") from exc

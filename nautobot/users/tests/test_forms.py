@@ -74,6 +74,19 @@ class PolicyRuleFormTest(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("actions", form.errors)
 
+    def test_model_errors_name_the_object_type(self):
+        """A template that does not fit the object type is rejected with the model's message, on the form."""
+        form = PolicyRuleForm(
+            data={
+                "policy": self.policy.pk,
+                "content_type": self.interface_ct.pk,
+                "actions": ["view"],
+                "constraint_template": '{"tenant__in": "{{ tenant }}"}',  # Interface reaches Tenant via device
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("dcim.interface", str(form.errors))
+
     def test_editing_a_rule_splits_custom_actions(self):
         rule = self.policy.rules.get(content_type=self.device_ct)
         rule.actions = ["view", "run"]

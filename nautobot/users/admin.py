@@ -5,12 +5,12 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as UserAdmin_
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldError, ValidationError
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils.html import escape, format_html
 
 from nautobot.core.admin import NautobotModelAdmin
-from nautobot.core.utils.permissions import qs_filter_from_constraints
+from nautobot.core.utils.permissions import validate_constraints_for_model
 from nautobot.extras.admin import order_content_types
 from nautobot.users.forms import AdminPasswordChangeForm
 from nautobot.users.models import AdminGroup, ObjectPermission, Token, User
@@ -234,19 +234,16 @@ class ObjectPermissionForm(forms.ModelForm):
         if not self.cleaned_data["actions"]:
             raise ValidationError("At least one action must be selected.")
 
-        # Validate the specified model constraints by attempting to execute a query. We don't care whether the query
-        # returns anything; we just want to make sure the specified constraints are valid.
+        # Validate the specified model constraints by constructing (not executing) a query against each object type.
         if object_types and constraints:
-            # Normalize the constraints to a list of dicts
-            if not isinstance(constraints, list):
-                constraints = [constraints]
             for ct in object_types:
                 model = ct.model_class()
+                if model is None:
+                    continue
                 try:
-                    tokens = {"$user": None}  # setting token to null user ID
-                    model.objects.filter(qs_filter_from_constraints(constraints, tokens)).exists()
-                except FieldError as e:
-                    raise ValidationError({"constraints": f"Invalid filter for {model}: {e}"})
+                    validate_constraints_for_model(model, constraints)
+                except ValidationError as e:
+                    raise ValidationError({"constraints": e.messages})
 
 
 class ActionListFilter(admin.SimpleListFilter):

@@ -20,12 +20,66 @@ from nautobot.core.utils.orm_paths import (
     split_path_and_lookup,
     validate_lookup_path,
 )
-from nautobot.dcim.models import Device, Interface, Location
+from nautobot.core.utils.permissions import qs_filter_from_constraints, validate_constraints_for_model
+from nautobot.dcim.models import Device, Interface, Location, Rack
 from nautobot.extras.models import Status
 from nautobot.tenancy.models import Tenant
 from nautobot.users.models import PermissionPolicy, PolicyParameter, PolicyRule
+from nautobot.users.policies import (
+    extract_placeholders,
+    find_malformed_placeholders,
+    PolicyRenderError,
+    render_as_object_permissions,
+    substitute_placeholders,
+)
 
 User = get_user_model()
+
+
+class SubstitutePlaceholdersTest(SimpleTestCase):
+    def test_whole_value_replacement(self):
+        rendered = substitute_placeholders({"tenant__in": "{{ tenant }}"}, {"tenant": ["a", "b"]})
+        self.assertEqual(rendered, [{"tenant__in": ["a", "b"]}])
+
+    def test_scalar_replacement_and_whitespace_variants(self):
+        rendered = substitute_placeholders({"tenant": "{{tenant}}", "site": "{{  site  }}"}, {"tenant": "x", "site": 1})
+        self.assertEqual(rendered, [{"tenant": "x", "site": 1}])
+
+    def test_list_value_is_spliced_into_list(self):
+        rendered = substitute_placeholders({"tenant__in": ["{{ tenants }}", "z"]}, {"tenants": ["a", "b"]})
+        self.assertEqual(rendered, [{"tenant__in": ["a", "b", "z"]}])
+
+    def test_user_token_passes_through_unchanged(self):
+        rendered = substitute_placeholders({"user": "$user", "tenant": "{{ tenant }}"}, {"tenant": "x"})
+        self.assertEqual(rendered, [{"user": "$user", "tenant": "x"}])
+
+    def test_partial_string_is_not_a_placeholder(self):
+        template = {"name__startswith": "prefix-{{ tenant }}"}
+        self.assertEqual(substitute_placeholders(template, {"tenant": "x"}), [template])
+        self.assertEqual(find_malformed_placeholders(template), ["prefix-{{ tenant }}"])
+        self.assertEqual(find_malformed_placeholders({"{{ tenant }}": "x"}), ["{{ tenant }}"])
+
+    def test_missing_value_raises(self):
+        with self.assertRaises(PolicyRenderError):
+            substitute_placeholders({"tenant": "{{ tenant }}"}, {})
+
+    def test_string_value_cannot_change_structure(self):
+        hostile = '{"name": "x"}, "tenant__name__in": ["y"], "a__b'
+        rendered = substitute_placeholders({"name": "{{ name }}"}, {"name": hostile})
+        self.assertEqual(rendered, [{"name": hostile}])
+
+    def test_empty_template_grants_everything(self):
+        self.assertEqual(substitute_placeholders({}, {}), [{}])
+        self.assertEqual(substitute_placeholders(None, {}), [{}])
+        self.assertEqual(qs_filter_from_constraints(substitute_placeholders({}, {})).children, [])
+
+    def test_list_template_keeps_groups(self):
+        rendered = substitute_placeholders([{"a": "{{ x }}"}, {"b": 1}], {"x": 2})
+        self.assertEqual(rendered, [{"a": 2}, {"b": 1}])
+
+    def test_extract_placeholders(self):
+        template = [{"tenant__in": "{{ tenant }}", "nested": ["{{ other }}", "literal"]}, {"user": "$user"}]
+        self.assertEqual(extract_placeholders(template), {"tenant", "other"})
 
 
 class PathResolverTest(SimpleTestCase):
@@ -146,6 +200,177 @@ class PolicyModelValidationTest(TestCase):
         cls.policy = create_tenant_policy()
         cls.tenants = list(Tenant.objects.all()[:2])
 
+    def _rule(self, **overrides):
+        kwargs = {
+            "policy": self.policy,
+            "content_type": ContentType.objects.get_for_model(Location),
+            "actions": ["view"],
+            "constraint_template": {"tenant__in": "{{ tenant }}"},
+            "path_map": {"tenant": {"path": "tenant", "lookup": "in"}},
+        }
+        kwargs.update(overrides)
+        return PolicyRule(**kwargs)
+
+    def test_valid_rule_passes(self):
+        self._rule().full_clean()
+
+    def test_rule_placeholder_without_path_map_entry_names_content_type(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(path_map={}).full_clean()
+        message = str(cm.exception.message_dict["constraint_template"])
+        self.assertIn("dcim.location", message)
+        self.assertIn("no entry for 'tenant'", message)
+
+    def test_rule_need_not_use_every_parameter(self):
+        """A rule whose template does not mention a parameter is valid; it is simply not scoped by it."""
+        self._rule(constraint_template={}, path_map={}).full_clean()
+        self._rule(constraint_template={"name__istartswith": "core-"}, path_map={}).full_clean()
+
+    def test_rule_rejects_legacy_unconstrained_entry(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(constraint_template={}, path_map={"tenant": {"unconstrained": True}}).full_clean()
+        self.assertIn('exactly the keys "path" and "lookup"', str(cm.exception.message_dict["path_map"]))
+
+    def test_rule_malformed_definitions_are_reported(self):
+        cases = {
+            "actions": {"actions": ["view", ""]},
+            "constraint_template": {"constraint_template": "nope"},
+            "path_map": {"path_map": []},
+        }
+        for field, overrides in cases.items():
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError) as cm:
+                    self._rule(**overrides).full_clean()
+                self.assertIn(field, cm.exception.message_dict)
+
+    def test_rule_path_map_entries_are_checked(self):
+        cases = [
+            (
+                {"tenant": {"path": "tenant", "lookup": "in"}, "nope": {"path": "name", "lookup": "exact"}},
+                "not a parameter",
+            ),
+            ({"tenant": "tenant"}, "must be a JSON object"),
+            ({"tenant": {"path": "tenant", "lookup": "bogus"}}, "lookup 'bogus' is not valid"),
+        ]
+        for path_map, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaises(ValidationError) as cm:
+                    self._rule(path_map=path_map).full_clean()
+                self.assertIn(message, str(cm.exception.message_dict["path_map"]))
+
+    def test_rule_path_without_placeholder(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(constraint_template={}).full_clean()
+        self.assertIn("does not use", str(cm.exception.message_dict["constraint_template"]))
+
+    def test_rule_path_to_wrong_model(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(
+                constraint_template={"location_type__in": "{{ tenant }}"},
+                path_map={"tenant": {"path": "location_type", "lookup": "in"}},
+            ).full_clean()
+        self.assertIn("does not reach tenancy.Tenant", str(cm.exception.message_dict["path_map"]))
+
+    def test_rule_wrong_lookup_for_multiple_parameter(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(
+                constraint_template={"tenant": "{{ tenant }}"},
+                path_map={"tenant": {"path": "tenant", "lookup": "exact"}},
+            ).full_clean()
+        self.assertIn("requires the 'in' lookup", str(cm.exception.message_dict["path_map"]))
+
+    def test_rule_multi_valued_path_rejected(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(
+                content_type=self.device_ct,
+                constraint_template={"tags__tenant__in": "{{ tenant }}"},
+                path_map={"tenant": {"path": "tags__tenant", "lookup": "in"}},
+            ).full_clean()
+        self.assertIn("multi-valued relation", str(cm.exception.message_dict["path_map"]))
+
+    def test_rule_undeclared_placeholder(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(constraint_template={"tenant__in": "{{ tenant }}", "name": "{{ nope }}"}).full_clean()
+        self.assertIn("undeclared parameter 'nope'", str(cm.exception.message_dict["constraint_template"]))
+
+    def test_rule_malformed_placeholder(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(constraint_template={"tenant__in": "{{ tenant }}", "name": "x-{{ tenant }}"}).full_clean()
+        self.assertIn("complete value", str(cm.exception.message_dict["constraint_template"]))
+
+    def test_rule_template_invalid_for_model(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(constraint_template={"tenant__in": "{{ tenant }}", "bogus_field": 1}).full_clean()
+        self.assertIn("Invalid filter for dcim.Location", str(cm.exception.message_dict["constraint_template"]))
+
+    def test_rule_requires_actions(self):
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(actions=[]).full_clean()
+        self.assertIn("actions", cm.exception.message_dict)
+
+    def test_default_constraint_template(self):
+        self.assertEqual(
+            PolicyRule.default_constraint_template(
+                {
+                    "tenant": {"path": "device__tenant", "lookup": "in"},
+                    "x": {"path": "name", "lookup": "exact"},
+                }
+            ),
+            {"device__tenant__in": "{{ tenant }}", "name": "{{ x }}"},
+        )
+
+    def test_in_tree_lookup_accepted_for_tree_targets_only(self):
+        policy = PermissionPolicy.objects.create(name="Region policy")
+        PolicyParameter(
+            policy=policy,
+            name="region",
+            kind="object",
+            target_content_type=ContentType.objects.get_for_model(Location),
+            multiple=False,
+        ).validated_save()
+        PolicyRule(
+            policy=policy,
+            content_type=self.device_ct,
+            actions=["view"],
+            constraint_template={"location__in_tree": "{{ region }}"},
+            path_map={"region": {"path": "location", "lookup": "in_tree"}},
+        ).full_clean()
+        PolicyRule(
+            policy=policy,
+            content_type=ContentType.objects.get_for_model(Location),
+            actions=["view"],
+            constraint_template={"pk__in_tree": "{{ region }}"},
+            path_map={"region": {"path": "pk", "lookup": "in_tree"}},
+        ).full_clean()
+        # Tenant is not a tree model, so `in_tree` is rejected for the tenant parameter.
+        with self.assertRaises(ValidationError) as cm:
+            self._rule(
+                content_type=self.device_ct,
+                constraint_template={"tenant__in_tree": "{{ tenant }}"},
+                path_map={"tenant": {"path": "tenant", "lookup": "in_tree"}},
+            ).full_clean()
+        self.assertIn("requires the 'in' lookup", str(cm.exception.message_dict["path_map"]))
+
+    def test_string_parameter_path_must_not_end_at_relation(self):
+        policy = PermissionPolicy.objects.create(name="String policy")
+        PolicyParameter(policy=policy, name="prefix", kind="string").validated_save()
+        with self.assertRaises(ValidationError) as cm:
+            PolicyRule(
+                policy=policy,
+                content_type=self.device_ct,
+                actions=["view"],
+                constraint_template={"tenant": "{{ prefix }}"},
+                path_map={"prefix": {"path": "tenant", "lookup": "exact"}},
+            ).full_clean()
+        self.assertIn("ends at a relation", str(cm.exception.message_dict["path_map"]))
+        PolicyRule(
+            policy=policy,
+            content_type=self.device_ct,
+            actions=["view"],
+            constraint_template={"name__istartswith": "{{ prefix }}"},
+            path_map={"prefix": {"path": "name", "lookup": "istartswith"}},
+        ).full_clean()
+
     def test_parameter_kind_validation(self):
         with self.assertRaises(ValidationError):
             PolicyParameter(policy=self.policy, name="other", kind="object").full_clean()
@@ -156,9 +381,46 @@ class PolicyModelValidationTest(TestCase):
         with self.assertRaises(ValidationError):
             PolicyParameter(policy=self.policy, name="Bad Name", kind="string").full_clean()
 
+    def test_render_as_object_permissions(self):
+        rules = list(self.policy.rules.select_related("content_type"))
+        # Without values the placeholders stay as written, one record per distinct constraint.
+        records = render_as_object_permissions(rules, None, name="Tenant device viewer")
+        self.assertEqual(
+            [(r.name, [ct.model for ct in r.object_types], r.constraints) for r in records],
+            [
+                ("Tenant device viewer (1)", ["device"], [{"tenant__in": "{{ tenant }}"}]),
+                ("Tenant device viewer (2)", ["interface"], [{"device__tenant__in": "{{ tenant }}"}]),
+            ],
+        )
+        # Rules with identical actions and rendered constraints collapse into one record with several object types.
+        pks = [str(tenant.pk) for tenant in self.tenants]
+        rack_rule = PolicyRule(
+            policy=self.policy,
+            content_type=ContentType.objects.get_for_model(Rack),
+            actions=["view"],
+            constraint_template={"tenant__in": "{{ tenant }}"},
+            path_map={"tenant": {"path": "tenant", "lookup": "in"}},
+        )
+        records = render_as_object_permissions([*rules, rack_rule], {"tenant": pks}, name="Assignment", enabled=False)
+        self.assertEqual(len(records), 2)
+        self.assertEqual([ct.model for ct in records[0].object_types], ["device", "rack"])
+        self.assertEqual(records[0].constraints, [{"tenant__in": pks}])
+        self.assertFalse(records[0].enabled)
+        self.assertEqual(records[0].as_dict()["object_types"], ["dcim.device", "dcim.rack"])
+        with self.assertRaises(PolicyRenderError):
+            render_as_object_permissions(rules, {}, name="Assignment")
+
     def test_clone_params_reference_source_policy(self):
         self.assertEqual(self.policy.clone_fields, ["description"])
         self.assertEqual(self.policy.get_clone_extra_params(), {"clone_from": str(self.policy.pk)})
+
+    def test_validate_constraints_for_model(self):
+        validate_constraints_for_model(Device, {"tenant__name": "x"})
+        validate_constraints_for_model(Device, [{"tenant__name": "x"}, {}])
+        with self.assertRaisesRegex(ValidationError, "Invalid filter for dcim.Device"):
+            validate_constraints_for_model(Device, {"bogus": "x"})
+        with self.assertRaises(ValidationError):
+            validate_constraints_for_model(Device, ["not a dict"])
 
 
 seed_migration = importlib.import_module("nautobot.users.migrations.0015_permission_policy_seed_data")
