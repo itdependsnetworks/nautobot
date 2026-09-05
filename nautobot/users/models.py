@@ -25,6 +25,7 @@ from nautobot.users.policies import (
     PolicyRenderError,
     rule_content_type,
     substitute_placeholders,
+    validate_parameter_values,
 )
 
 __all__ = (
@@ -758,6 +759,45 @@ class PolicyAssignment(BaseModel, ChangeLoggedModel):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.policy_id:
+            try:
+                self.policy.validate_definition()
+            except ValidationError as exc:
+                errors["policy"] = exc.messages
+            else:
+                try:
+                    validate_parameter_values(self.policy, self.parameter_values)
+                except ValidationError as exc:
+                    errors["parameter_values"] = exc.messages
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        # Store the canonical shape of the values (pks as strings, lists for multi-valued parameters) whenever they
+        # validate; `clean()` only validates, so it has no side effects on the instance.
+        if self.policy_id:
+            try:
+                self.parameter_values = validate_parameter_values(self.policy, self.parameter_values)
+            except ValidationError:
+                pass
+        super().save(*args, **kwargs)
+
+    def missing_parameter_names(self):
+        """
+        Names of the policy's parameters that this assignment supplies no value for.
+
+        This happens when a parameter is added to a policy that already has assignments. Until every value is
+        supplied the assignment renders nothing: permission resolution skips it (and logs an error), so its users
+        lose the access it granted rather than gaining unconstrained access.
+        """
+        values = self.parameter_values or {}
+        return [
+            parameter.name for parameter in self.policy.parameters.all() if values.get(parameter.name) in (None, "", [])
+        ]
 
     def get_parameter_objects(self):
         """

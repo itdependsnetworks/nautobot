@@ -869,6 +869,13 @@ class PolicyAssignmentTest(APIViewTestCases.APIViewTestCase):
         assignment.refresh_from_db()
         self.assertEqual(assignment.parameter_values, {"tenant": [str(tenant.pk)]})
 
+    def test_invalid_parameter_values_rejected(self):
+        self.add_permissions("users.add_policyassignment", "users.view_permissionpolicy")
+        data = {**self.create_data[0], "name": "Bad values", "parameter_values": {"tenant": "not-a-list"}}
+        response = self.client.post(self._get_list_url(), data, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("parameter_values", response.data)
+
     def test_constraints_action(self):
         self.add_permissions("users.view_policyassignment")
         assignment = PolicyAssignment.objects.get(name="Assignment 1")

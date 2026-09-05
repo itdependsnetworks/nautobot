@@ -661,8 +661,19 @@ def warn_about_policy_state(request, policy):
     """
     for _, text in policy_state_alerts(policy):
         messages.warning(request, text)
-    # PLACEHOLDER: will be replaced in C13 (Policy assignment validation and warnings): warn about assignments
-    # that lack a value for a parameter added after them.
+    incomplete = [
+        (assignment, assignment.missing_parameter_names())
+        for assignment in policy.assignments.prefetch_related("policy__parameters")
+    ]
+    incomplete = [(assignment, missing) for assignment, missing in incomplete if missing]
+    if not incomplete:
+        return
+    details = "; ".join(f"{assignment} (missing {', '.join(missing)})" for assignment, missing in incomplete)
+    messages.warning(
+        request,
+        f"{len(incomplete)} assignment(s) of this policy now lack a value for a parameter and grant nothing until "
+        f"they are updated: {details}.",
+    )
 
 
 class PolicyUIViewSetBase(
@@ -1001,6 +1012,16 @@ class PolicyAssignmentUIViewSet(PolicyUIViewSetBase):
                 "users": instance.users.all().order_by("username"),
                 "groups": instance.groups.all().order_by("name"),
             }
+            context["alerts"] = []
+            missing = instance.missing_parameter_names()
+            if missing:
+                context["alerts"].append(
+                    (
+                        "warning",
+                        f"This assignment supplies no value for parameter(s) {', '.join(missing)} and therefore "
+                        "grants nothing. Edit it to supply the missing value(s).",
+                    )
+                )
             context["generated_constraints_table"] = self._generated_constraints_table(request, context, instance)
         elif self.action == "create":
             context["parameter_fields_url"] = reverse("users:permissionpolicy_parameter_fields")

@@ -330,6 +330,54 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         self.assertEqual(rules["interface"].path_map, {"tenant": {"path": "device__tenant", "lookup": "in"}})
         self.assertEqual(rules["interface"].actions, ["view", "change"])
 
+    def test_adding_a_parameter_warns_about_incomplete_assignments(self):
+        self.add_permissions("users.change_permissionpolicy", "users.view_permissionpolicy")
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        assignment = PolicyAssignment(
+            policy=policy, name="Existing assignment", parameter_values={"tenant": [str(Tenant.objects.first().pk)]}
+        )
+        assignment.validated_save()
+        tenant_ct = ContentType.objects.get_for_model(Tenant)
+        device_ct = ContentType.objects.get_for_model(Device)
+        interface_ct = ContentType.objects.get_for_model(Interface)
+        parameter = policy.parameters.get(name="tenant")
+        data = {
+            "name": policy.name,
+            "description": "",
+            **_formset_management("parameters", 2, initial=1),
+            "parameters-0-id": parameter.pk,
+            "parameters-0-policy": policy.pk,
+            "parameters-0-name": "tenant",
+            "parameters-0-kind": "object",
+            "parameters-0-target_content_type": tenant_ct.pk,
+            "parameters-0-multiple": True,
+            "parameters-1-name": "prefix",
+            "parameters-1-kind": "string",
+            **_formset_management("rules", 2, initial=2),
+            "rules-0-id": policy.rules.get(content_type=device_ct).pk,
+            "rules-0-policy": policy.pk,
+            "rules-0-content_type": device_ct.pk,
+            "rules-0-actions": ["view"],
+            "rules-0-constraint_template": '{"tenant__in": "{{ tenant }}", "name__istartswith": "{{ prefix }}"}',
+            "rules-1-id": policy.rules.get(content_type=interface_ct).pk,
+            "rules-1-policy": policy.pk,
+            "rules-1-content_type": interface_ct.pk,
+            "rules-1-actions": ["view"],
+            "rules-1-constraint_template": '{"device__tenant__in": "{{ tenant }}", "name__istartswith": "{{ prefix }}"}',
+        }
+        response = self.client.post(self._get_url("edit", policy), data=post_data(data), follow=True)
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("grant nothing until they are updated", body)
+        self.assertIn("Existing assignment", body)
+        self.assertEqual(assignment.missing_parameter_names(), ["prefix"])
+        # The assignment's own page and the assignments list flag it too.
+        self.add_permissions("users.view_policyassignment")
+        response = self.client.get(assignment.get_absolute_url())
+        self.assertIn("supplies no value for parameter(s) prefix", response.content.decode(response.charset))
+        response = self.client.get(reverse("users:policyassignment_list"), headers={"HX-Request": "true"})
+        self.assertIn("missing value: prefix", response.content.decode(response.charset))
+
     def test_duplicate_object_type_across_rows_is_rejected(self):
         self.add_permissions("users.add_permissionpolicy")
         device_ct = ContentType.objects.get_for_model(Device)
@@ -595,6 +643,13 @@ class PolicyAssignmentTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         self.assertEqual(
             set(assignment.parameter_values["tenant"]), {str(pk) for pk in self.form_data["param__tenant"]}
         )
+
+    def test_create_without_parameter_value_fails(self):
+        self.add_permissions("users.add_policyassignment")
+        data = {**self.form_data, "param__tenant": []}
+        response = self.client.post(self._get_url("add"), data=post_data(data))
+        self.assertHttpStatus(response, 200)
+        self.assertFalse(PolicyAssignment.objects.filter(name="Assignment X").exists())
 
     def test_detail_view_shows_generated_constraints(self):
         self.add_permissions("users.view_policyassignment")

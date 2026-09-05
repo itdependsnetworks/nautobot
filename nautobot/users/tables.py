@@ -161,9 +161,7 @@ class PolicyAssignmentTable(BaseTable):
         default_columns = ("pk", "name", "policy", "enabled", "parameter_values", "users", "groups", "actions")
 
     def render_parameter_values(self, value, record):
-        # PLACEHOLDER: will be replaced in C13 (Policy assignment validation and warnings): flag the parameters
-        # this assignment supplies no value for.
-        return render_parameter_values(value)
+        return render_parameter_values(value, record.missing_parameter_names())
 
 
 COMPACT_CONSTRAINT_MAX_LENGTH = 90

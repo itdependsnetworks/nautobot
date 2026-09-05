@@ -417,6 +417,16 @@ class PolicyModelValidationTest(TestCase):
         with self.assertRaisesRegex(ValidationError, "not a parameter"):
             validate_parameter_values(self.policy, {"tenant": [str(tenant.pk)], "bogus": 1})
 
+    def test_assignment_clean(self):
+        assignment = PolicyAssignment(policy=self.policy, name="A", parameter_values={})
+        with self.assertRaises(ValidationError) as cm:
+            assignment.full_clean()
+        self.assertIn("parameter_values", cm.exception.message_dict)
+        empty = PermissionPolicy.objects.create(name="Empty")
+        with self.assertRaises(ValidationError) as cm:
+            PolicyAssignment(policy=empty, name="B").full_clean()
+        self.assertIn("policy", cm.exception.message_dict)
+
     def test_policy_with_assignments_is_protected(self):
         PolicyAssignment(
             policy=self.policy, name="A", parameter_values={"tenant": [str(self.tenants[0].pk)]}
