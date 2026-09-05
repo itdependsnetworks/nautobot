@@ -22,6 +22,7 @@ from django.utils.timezone import get_default_timezone_name
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.generic import View
 from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from nautobot.core.choices import NautobotEditionChoices
 from nautobot.core.constants import NAUTOBOT_EDITION_URLS
@@ -50,7 +51,10 @@ from nautobot.users import filters as users_filters, tables as users_tables
 from nautobot.users.api import serializers as users_serializers
 from nautobot.users.policies import (
     PolicyRenderError,
+    preview_policy,
+    PREVIEW_SAMPLE_SIZE,
     render_as_object_permissions,
+    validate_parameter_values,
 )
 from nautobot.users.utils import serialize_user_without_config_and_views
 
@@ -645,6 +649,80 @@ class AlertPanel(object_detail.Panel):
         return super().should_render(context) and bool(context.get("alerts"))
 
 
+class ParameterFormPanel(object_detail.Panel):
+    """
+    The parameter-value form of the policy Preview tab; omitted when the context has no form.
+
+    Args:
+        form_context_key (str): Context key holding the bound or unbound `PolicyPreviewForm`.
+        intro (str): Explanatory text shown above the fields.
+        no_parameters_text (str): Text shown instead of fields when the policy declares no parameters.
+        submit_label (str): Label of the submit button.
+        submit_icon (str): Material Design Icon name for the submit button.
+    """
+
+    body_content_template_path = "users/inc/panel_parameter_form.html"
+
+    def __init__(
+        self,
+        *,
+        form_context_key,
+        intro,
+        no_parameters_text,
+        submit_label,
+        submit_icon="mdi-eye-outline",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.form_context_key = form_context_key
+        self.intro = intro
+        self.no_parameters_text = no_parameters_text
+        self.submit_label = submit_label
+        self.submit_icon = submit_icon
+
+    def should_render(self, context):
+        return super().should_render(context) and context.get(self.form_context_key) is not None
+
+    def get_extra_context(self, context):
+        return {
+            **super().get_extra_context(context),
+            "parameter_form": context.get(self.form_context_key),
+            "intro": self.intro,
+            "no_parameters_text": self.no_parameters_text,
+            "submit_label": self.submit_label,
+            "submit_icon": self.submit_icon,
+        }
+
+
+PREVIEW_INTRO = (
+    "One row per object type. The count covers every matching object; the sample lists only the first few that you "
+    'can already view, and the count and the "more" link open the full object list filtered the same way. A count '
+    "of zero usually means a lookup path is wrong. Nothing is stored: Nautobot renders the same constraints when it "
+    "resolves a user's permissions."
+)
+
+
+def _preview_table(request, policy, values):
+    """
+    The Preview table: one row per rule (object type).
+
+    With `values` the preview runs and each row gets a match count and sample; with `values=None` (a policy whose
+    parameter values have not been supplied yet) the constraints keep their `{{ name }}` placeholders.
+    """
+    rules = list(policy.rules.select_related("content_type"))
+    if values is None:
+        rows = users_tables.PreviewResultsTable.rows_from_rules(rules)
+    else:
+        rows = users_tables.PreviewResultsTable.rows_from_preview(
+            preview_policy(policy, values, request.user, rules=rules)
+        )
+    table = users_tables.PreviewResultsTable(
+        rows, sample_size=PREVIEW_SAMPLE_SIZE, user=request.user, configurable=True
+    )
+    table.request = request  # lets the table configuration form apply the user's saved column order
+    return table
+
+
 def policy_state_alerts(policy):
     """Alerts for a policy's pages: why the policy cannot be assigned, if it cannot."""
     try:
@@ -759,6 +837,32 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
                 prefetch_related_fields=("policy__parameters", "users", "groups"),
             ),
         ),
+        extra_tabs=(
+            object_detail.DistinctViewTab(
+                weight=250,
+                tab_id="preview",
+                label="Preview",
+                url_name="users:permissionpolicy_preview",
+                panels=(
+                    ParameterFormPanel(
+                        section=SectionChoices.FULL_WIDTH,
+                        weight=100,
+                        label="Parameter values",
+                        form_context_key="preview_form",
+                        intro=PREVIEW_INTRO,
+                        no_parameters_text="This policy declares no parameters; the preview runs as-is.",
+                        submit_label="Run preview",
+                    ),
+                    TablePanel(
+                        section=SectionChoices.FULL_WIDTH,
+                        weight=200,
+                        label="Preview",
+                        context_table_key="preview_table",
+                        show_table_config_button=True,
+                    ),
+                ),
+            ),
+        ),
     )
 
     def get_queryset(self):
@@ -817,6 +921,30 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
             context["rule_paths_url"] = reverse("users:permissionpolicy_rule_paths")
         elif self.action == "retrieve":
             context["alerts"] = policy_state_alerts(instance)
+        elif self.action == "preview":
+            context.update(self._preview_context(request, instance))
+        return context
+
+    def _preview_context(self, request, policy):
+        """The parameter form plus the preview table; counts appear once values are supplied (or with no parameters)."""
+        values = None
+        if request.method == "POST":
+            form = PolicyPreviewForm(policy, request.POST)
+            if form.is_valid():
+                try:
+                    values = validate_parameter_values(policy, form.cleaned_parameter_values())
+                except ValidationError as exc:
+                    form.add_error(None, "; ".join(exc.messages))
+        else:
+            form = PolicyPreviewForm(policy)
+            # With no parameters there is nothing to ask for: run the preview as soon as the tab opens.
+            if not policy.parameters.exists():
+                values = {}
+        context = {"preview_form": form}
+        try:
+            context["preview_table"] = _preview_table(request, policy, values)
+        except PolicyRenderError as exc:
+            form.add_error(None, str(exc))
         return context
 
     def form_save(self, form, **kwargs):
@@ -839,6 +967,13 @@ class PermissionPolicyUIViewSet(PolicyUIViewSetBase):
         # unassignable state is a warning here and a hard error only when an assignment is attempted.
         warn_about_policy_state(self.request, obj)
         return obj
+
+    @action(
+        detail=True, methods=["get", "post"], url_path="preview", url_name="preview", custom_view_base_action="view"
+    )
+    def preview(self, request, *args, **kwargs):
+        """Preview tab: the objects this policy would grant access to for a set of parameter values."""
+        return Response({})
 
     @action(detail=False, methods=["get"], url_path="rule-paths", url_name="rule_paths", custom_view_base_action="view")
     def rule_paths(self, request, *args, **kwargs):
@@ -990,6 +1125,25 @@ class PolicyAssignmentUIViewSet(PolicyUIViewSetBase):
                 ),
             ),
         ),
+        extra_tabs=(
+            object_detail.DistinctViewTab(
+                weight=250,
+                tab_id="preview",
+                label="Preview",
+                url_name="users:policyassignment_preview",
+                panels=(
+                    AlertPanel(section=SectionChoices.FULL_WIDTH, weight=50),
+                    TablePanel(
+                        section=SectionChoices.FULL_WIDTH,
+                        weight=100,
+                        label="Preview",
+                        context_table_key="preview_table",
+                        show_table_config_button=True,
+                        footer_text=PREVIEW_INTRO,
+                    ),
+                ),
+            ),
+        ),
     )
 
     def get_extra_context(self, request, instance):
@@ -1023,9 +1177,19 @@ class PolicyAssignmentUIViewSet(PolicyUIViewSetBase):
                     )
                 )
             context["generated_constraints_table"] = self._generated_constraints_table(request, context, instance)
+        elif self.action == "preview":
+            try:
+                context["preview_table"] = _preview_table(request, instance.policy, instance.parameter_values or {})
+            except PolicyRenderError as exc:
+                context["alerts"] = [("danger", f"This assignment cannot be rendered: {exc}")]
         elif self.action == "create":
             context["parameter_fields_url"] = reverse("users:permissionpolicy_parameter_fields")
         return context
+
+    @action(detail=True, methods=["get"], url_path="preview", url_name="preview", custom_view_base_action="view")
+    def preview(self, request, *args, **kwargs):
+        """Preview tab: the objects this assignment grants access to, using its stored parameter values."""
+        return Response({})
 
     @staticmethod
     def _generated_constraints_table(request, context, assignment):

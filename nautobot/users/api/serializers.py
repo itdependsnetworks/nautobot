@@ -316,6 +316,13 @@ class PolicyAssignmentSerializer(ValidatedModelSerializer):
         return attrs
 
 
+class PolicyPreviewRequestSerializer(serializers.Serializer):  # pylint: disable=abstract-method
+    """Request body for the permission-policy preview action."""
+
+    parameter_values = serializers.JSONField(default=dict)
+    limit = serializers.IntegerField(default=10, min_value=0, max_value=25)
+
+
 class UserLoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()

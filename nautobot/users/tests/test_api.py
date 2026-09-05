@@ -11,6 +11,7 @@ from rest_framework import HTTP_HEADER_ENCODING, status
 
 from nautobot.core.testing import APITestCase, APIViewTestCases, get_deletable_objects
 from nautobot.core.utils.data import deepmerge
+from nautobot.dcim.models import Device
 from nautobot.tenancy.models import Tenant
 from nautobot.users.filters import GroupFilterSet
 from nautobot.users.models import (
@@ -677,6 +678,38 @@ class PermissionPolicyTest(APIViewTestCases.APIViewTestCase):
 
         response = self.client.get(f"{url}?content_type=dcim.interface", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+
+    def test_preview_requires_only_view_permission(self):
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        tenant = Tenant.objects.first()
+        device = Device.objects.order_by("pk").first()  # the sample is the first objects by pk
+        device.tenant = tenant
+        device.save()
+        url = reverse("users-api:permissionpolicy-preview", kwargs={"pk": policy.pk})
+        body = {"parameter_values": {"tenant": [str(tenant.pk)]}}
+
+        response = self.client.post(url, body, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
+
+        self.add_permissions("users.view_permissionpolicy")
+        response = self.client.post(url, body, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        by_type = {row["content_type"]: row for row in response.data["results"]}
+        # The requesting user cannot view devices, so the sample is empty although the count reflects the match.
+        self.assertGreaterEqual(by_type["dcim.device"]["count"], 1)
+        self.assertEqual(by_type["dcim.device"]["sample"], [])
+
+        self.add_permissions("dcim.view_device")
+        response = self.client.post(url, body, format="json", **self.header)
+        by_type = {row["content_type"]: row for row in response.data["results"]}
+        self.assertGreaterEqual(by_type["dcim.device"]["count"], 1)
+        self.assertTrue(
+            any(entry["id"] == str(device.pk) for row in response.data["results"] for entry in row["sample"])
+        )
+
+        response = self.client.post(url, {"parameter_values": {}}, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("parameter_values", response.data)
 
     @skip("Nested parameters and rules are not part of the CSV representation; use the JSON API to recreate them")
     def test_recreate_object_csv(self):

@@ -432,6 +432,70 @@ class PermissionPolicyTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         # Nothing is created until the form is submitted.
         self.assertEqual(PermissionPolicy.objects.filter(description="Copy").count(), 0)
 
+    def test_preview_tab(self):
+        policy = PermissionPolicy.objects.get(name="Policy 1")
+        tenant = Tenant.objects.first()
+        device = Device.objects.order_by("pk").first()  # first in sample order, so it appears in the inline sample
+        device.tenant = tenant
+        device.save()
+        url = reverse("users:permissionpolicy_preview", kwargs={"pk": policy.pk})
+        self.assertHttpStatus(self.client.get(url), 403)
+
+        self.add_permissions("users.view_permissionpolicy", "dcim.view_device")
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn('name="param__tenant"', body)
+        # Before values are supplied the rows show the placeholders as written and no counts.
+        self.assertIn("{{ tenant }}", body)
+        self.assertIn("DCIM | interface", body)
+        self.assertNotIn('class="badge bg-success"', body)
+        # The Preview tab is offered on the detail page too.
+        self.assertIn(url, self.client.get(policy.get_absolute_url()).content.decode(response.charset))
+
+        response = self.client.post(url, data=post_data({"param__tenant": [tenant.pk]}))
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertNotIn("{{ tenant }}", body)
+        self.assertIn(str(device), body)
+        # The device count links to the device list filtered the same way (`tenant__in` -> `?tenant=`).
+        self.assertIn(f'href="{reverse("dcim:device_list")}?tenant={tenant.pk}"', body)
+        # One row per object type; the table's columns can be configured like any other.
+        self.assertIn('value="sample"', body)
+        self.user.set_config("tables.PreviewResultsTable.columns", ["object_type", "count"], commit=True)
+        body = self.client.post(url, data=post_data({"param__tenant": [tenant.pk]})).content.decode(response.charset)
+        self.assertIn('class="badge bg-success"', body)
+        self.assertNotIn(str(device), body)  # the Sample column is now hidden
+        self.user.set_config("tables.PreviewResultsTable.columns", None, commit=True)
+
+        response = self.client.post(url, data=post_data({}))
+        self.assertHttpStatus(response, 200)
+        self.assertIn("{{ tenant }}", response.content.decode(response.charset))
+
+    def test_preview_tab_runs_immediately_without_parameters(self):
+        """Every rule appears as a row, constrained or not, so the reader sees the object types the policy covers."""
+        self.add_permissions("users.view_permissionpolicy")
+        policy = PermissionPolicy.objects.create(name="Everything viewer")
+        for model in (Device, Location):
+            PolicyRule(
+                policy=policy,
+                content_type=ContentType.objects.get_for_model(model),
+                actions=["view"],
+                constraint_template={},
+                path_map={},
+            ).validated_save()
+        response = self.client.get(reverse("users:permissionpolicy_preview", kwargs={"pk": policy.pk}))
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("no constraint (all objects)", body)
+        # One row per object type, even when the rules render identically.
+        self.assertIn("DCIM | device", body)
+        self.assertIn("DCIM | location", body)
+        self.assertNotIn("DCIM | device, DCIM | location", body)
+        self.assertIn(f'href="{reverse("dcim:device_list")}"', body)
+        self.assertIn(f'href="{reverse("dcim:location_list")}"', body)
+        self.assertIn(f'<span class="badge bg-success">{Device.objects.count()}</span>', body)
+
     def test_rule_paths_fragment(self):
         self.add_permissions("users.view_permissionpolicy")
         tenant_ct = ContentType.objects.get_for_model(Tenant)
@@ -669,3 +733,15 @@ class PolicyAssignmentTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         self.user.set_config("tables.RuleConstraintsTable.columns", ["object_types", "definition"], commit=True)
         body = self.client.get(assignment.get_absolute_url()).content.decode(response.charset)
         self.assertIn("dcim.device", body)
+
+    def test_preview_tab(self):
+        self.add_permissions("users.view_policyassignment")
+        assignment = PolicyAssignment.objects.get(name="Assignment 1")
+        response = self.client.get(reverse("users:policyassignment_preview", kwargs={"pk": assignment.pk}))
+        self.assertHttpStatus(response, 200)
+        body = response.content.decode(response.charset)
+        self.assertIn("tenant__in", body)
+        self.assertIn("DCIM | device", body)
+        self.assertIn("DCIM | interface", body)
+        self.assertIn(assignment.parameter_values["tenant"][0], body)
+        self.assertNotIn('value="definition"', body)  # the JSON definition lives on the detail page, not here

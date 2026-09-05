@@ -1,0 +1,18 @@
+{% load form_helpers %}
+<form method="post" class="form form-horizontal">
+    {% csrf_token %}
+    <p class="text-secondary small">{{ intro }}</p>
+    {% if parameter_form.non_field_errors %}
+        <div class="alert alert-danger">{% for error in parameter_form.non_field_errors %}<div>{{ error }}</div>{% endfor %}</div>
+    {% endif %}
+    {% for field in parameter_form %}
+        {% render_field field %}
+    {% empty %}
+        <p class="text-secondary">{{ no_parameters_text }}</p>
+    {% endfor %}
+    {% if parameter_form.fields %}
+        <div class="text-end">
+            <button type="submit" class="btn btn-primary"><span class="mdi {{ submit_icon }}" aria-hidden="true"></span> {{ submit_label }}</button>
+        </div>
+    {% endif %}
+</form>

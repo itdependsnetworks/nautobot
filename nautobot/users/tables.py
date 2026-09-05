@@ -16,6 +16,7 @@ __all__ = (
     "PolicyAssignmentTable",
     "PolicyParameterTable",
     "PolicyRuleTable",
+    "PreviewResultsTable",
     "RuleConstraintsTable",
 )
 
@@ -237,7 +238,93 @@ class NonModelTable(tables.Table):
         return [name for name, column in self.columns.items() if column.visible and name not in self.exclude]
 
 
+MATCHES_TEMPLATE = """
+{% if record.has_result %}
+    {% if record.timed_out %}
+        <span class="badge bg-danger">timed out</span>
+    {% else %}
+        {% if record.list_url %}<a href="{{ record.list_url }}" title="Open the full {{ record.object_type }} list filtered like this constraint">{% endif %}
+        {% if value == 0 %}
+            <span class="badge bg-danger" title="No objects match. Check the lookup path.">0</span>
+        {% else %}
+            <span class="badge bg-success">{{ value }}</span>
+        {% endif %}
+        {% if record.list_url %}</a>{% endif %}
+    {% endif %}
+{% else %}
+    <span class="text-secondary" title="Supply parameter values to count matching objects">&mdash;</span>
+{% endif %}
+"""
+
+SAMPLE_TEMPLATE = """{% load helpers %}
+{% if record.has_result and value %}
+    {% hyperlinked_object_list value total=record.count list_url=record.list_url separator=", " %}
+{% else %}
+    <span class="text-secondary">&mdash;</span>
+{% endif %}
+"""
+
 DEFINITION_TEMPLATE = """{% load helpers %}<details><summary class="small text-secondary">{{ value.name }}</summary><pre class="mb-0 small">{{ value|render_json }}</pre></details>"""
+
+
+class PreviewResultsTable(NonModelTable):
+    """
+    Policy preview: one row per rule (object type) with the rendered constraint, the match count and a sample.
+
+    Before parameter values are supplied the constraints keep their `{{ name }}` placeholders and the count and
+    sample columns show a dash.
+    """
+
+    object_type = tables.Column(verbose_name="Object type")
+    actions = tables.TemplateColumn(template_code=ACTIONS_TEMPLATE)
+    constraints = ConstraintsColumn()
+    count = tables.TemplateColumn(template_code=MATCHES_TEMPLATE, verbose_name="Matches")
+    sample = tables.TemplateColumn(template_code=SAMPLE_TEMPLATE, verbose_name="Sample")
+
+    class Meta(NonModelTable.Meta):
+        pass
+
+    def __init__(self, data, *args, sample_size=None, **kwargs):
+        super().__init__(data, *args, **kwargs)
+        if sample_size:
+            self.columns["sample"].column.verbose_name = f"Sample (first {sample_size})"
+
+    @staticmethod
+    def rows_from_preview(preview_rows):
+        """Rows from `PreviewRow` results: the preview ran, so every row has a count and a sample."""
+        return [
+            {
+                "object_type": row.object_type,
+                "actions": row.actions,
+                "constraints": row.constraints,
+                "count": row.count,
+                "timed_out": row.timed_out,
+                "sample": row.sample,
+                "list_url": row.list_url,
+                "has_result": True,
+            }
+            for row in preview_rows
+        ]
+
+    @staticmethod
+    def rows_from_rules(rules):
+        """Rows from unrendered rules (no parameter values yet): templates as written, no counts."""
+        from nautobot.core.utils.permissions import normalize_constraints
+        from nautobot.users.policies import rule_content_type
+
+        return [
+            {
+                "object_type": rule_content_type(rule),
+                "actions": rule.actions,
+                "constraints": normalize_constraints(rule.constraint_template),
+                "count": None,
+                "timed_out": False,
+                "sample": [],
+                "list_url": None,
+                "has_result": False,
+            }
+            for rule in rules
+        ]
 
 
 class RuleConstraintsTable(NonModelTable):

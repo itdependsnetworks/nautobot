@@ -52,6 +52,38 @@ logger = logging.getLogger(__name__)
 #
 
 
+@register.simple_tag()
+def hyperlinked_object_list(objects, total=None, list_url=None, separator="<br>"):
+    """
+    Render hyperlinks to a sample of objects and, when more exist than are shown, an "… and N more" tail.
+
+    Args:
+        objects (Iterable): The objects to render (each via `hyperlinked_object`), typically a bounded sample.
+        total (int, optional): The number of objects the sample was drawn from. When larger than the sample, the
+            tail "… and N more <verbose_name_plural>" is appended, linking to `list_url` when given.
+        list_url (str, optional): URL of a list view showing every object, used for the tail's link.
+        separator (str): Trusted HTML placed between rendered objects (a template literal, never user input).
+
+    Examples:
+        >>> hyperlinked_object_list(devices[:3], total=12, list_url="/dcim/devices/?tenant=...")
+        '<a href="...">dev1</a><br><a href="...">dev2</a><br><a href="...">dev3</a><br>… and <a href="...">9 more devices</a>'
+    """
+    objects = list(objects)
+    if not objects:
+        return placeholder(None)
+    rendered = format_html_join(mark_safe(separator), "{}", ([hyperlinked_object(obj)] for obj in objects))  # noqa: S308
+    remaining = (total or 0) - len(objects)
+    if remaining <= 0:
+        return rendered
+    opts = objects[0]._meta
+    noun = opts.verbose_name if remaining == 1 else opts.verbose_name_plural
+    if list_url:
+        tail = format_html('… and <a href="{}">{} more {}</a>', list_url, remaining, noun)
+    else:
+        tail = format_html("… and {} more {}", remaining, noun)
+    return format_html("{}{}{}", rendered, mark_safe(separator), tail)  # noqa: S308
+
+
 @library.filter()
 @register.filter()
 def hyperlinked_object(value, field="display"):

@@ -2,6 +2,7 @@
 
 import importlib
 from io import StringIO
+from unittest import mock
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -623,6 +624,23 @@ class DerivationHookTest(TestCase):
 seed_migration = importlib.import_module("nautobot.users.migrations.0015_permission_policy_seed_data")
 
 
+class PreviewPolicyTest(TestCase):
+    def test_timed_out_query_is_reported_not_raised(self):
+        from django.db.utils import OperationalError
+
+        from nautobot.users.policies import preview_policy
+
+        policy = create_tenant_policy()
+        user = User.objects.create(username="previewer", is_superuser=True)
+        values = {"tenant": [str(Tenant.objects.first().pk)]}
+        with mock.patch("django.db.models.query.QuerySet.count", side_effect=OperationalError("canceled")):
+            rows = preview_policy(policy, values, user)
+        self.assertEqual([row.timed_out for row in rows], [True, True])
+        self.assertEqual([row.count for row in rows], [0, 0])
+        # The connection is still usable afterwards.
+        self.assertTrue(Tenant.objects.exists())
+
+
 class RenderingHelpersTest(TestCase):
     """The small rendering helpers behind the policy tables."""
 
@@ -675,6 +693,14 @@ class ConstraintToFilterParamsTest(TestCase):
         )
         # A null value has no query-string representation.
         self.assertIsNone(constraint_to_filter_params(Device, {"asset_tag": None}))
+
+    def test_filtered_list_url(self):
+        from nautobot.users.policies import filtered_list_url
+
+        tenant = str(Tenant.objects.first().pk)
+        self.assertEqual(filtered_list_url(Device, [{"tenant__in": [tenant]}]), f"/dcim/devices/?tenant={tenant}")
+        self.assertEqual(filtered_list_url(Device, [{}]), "/dcim/devices/")
+        self.assertIsNone(filtered_list_url(Device, [{"tags__name": "x"}]))
 
 
 class InTreeLookupTest(TestCase):

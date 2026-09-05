@@ -344,6 +344,30 @@ class NautobotTemplatetagsHelperTest(TestCase):
             )
         self.assertEqual(helpers.render_boolean(None), helpers.HTML_NONE)
 
+    def test_hyperlinked_object_list(self):
+        locations = list(models.Location.objects.all()[:3])
+        links = [helpers.hyperlinked_object(location) for location in locations]
+
+        # No objects gives a placeholder
+        self.assertEqual(helpers.hyperlinked_object_list([]), helpers.placeholder(None))
+        # A complete list gives the links and no tail
+        self.assertEqual(helpers.hyperlinked_object_list(locations, total=3), "<br>".join(links))
+        self.assertEqual(helpers.hyperlinked_object_list(locations), "<br>".join(links))
+        # A sample of a larger set gets an "… and N more" tail, linked when a list URL is given
+        self.assertEqual(
+            helpers.hyperlinked_object_list(locations, total=10, list_url="/dcim/locations/?x=1"),
+            "<br>".join(links) + '<br>… and <a href="/dcim/locations/?x=1">7 more locations</a>',
+        )
+        self.assertEqual(
+            helpers.hyperlinked_object_list(locations, total=4, separator=", "),
+            ", ".join(links) + ", … and 1 more location",
+        )
+        # Usable from a template
+        rendered = Template("{% load helpers %}{% hyperlinked_object_list objects total=total list_url=url %}").render(
+            Context({"objects": locations[:1], "total": 2, "url": "/dcim/locations/"})
+        )
+        self.assertEqual(rendered, links[0] + '<br>… and <a href="/dcim/locations/">1 more location</a>')
+
     def test_hyperlinked_object_with_color(self):
         vlan_with_role = VLAN.objects.filter(role__isnull=False).first()
         role = vlan_with_role.role

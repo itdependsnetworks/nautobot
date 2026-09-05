@@ -11,21 +11,28 @@ defined here.
 
 from collections import defaultdict
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import logging
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import connection, transaction
 from django.db.models import Q
+from django.db.utils import OperationalError
 
 from nautobot.core.utils.permissions import (
     CONSTRAINT_PLACEHOLDER_PATTERN,
     normalize_constraints,
+    qs_filter_from_constraints,
+    USER_TOKEN,
 )
 from nautobot.users.choices import PolicyParameterKindChoices
 
 logger = logging.getLogger(__name__)
+
+PREVIEW_SAMPLE_SIZE = 10
+PREVIEW_STATEMENT_TIMEOUT_MS = 5000
 
 
 class PolicyRenderError(Exception):
@@ -386,3 +393,109 @@ def validate_parameter_values(policy, values):
     if errors:
         raise ValidationError(errors)
     return normalized
+
+
+#
+# Preview
+#
+
+
+@dataclass
+class PreviewRow:
+    """The result of running one rendered rule against its model for preview."""
+
+    object_type: ContentType
+    actions: list
+    constraints: list
+    count: int
+    timed_out: bool = False
+    sample: list = field(default_factory=list)
+    list_url: str | None = None  # the model's list view filtered equivalently, when the constraint translates
+
+    def as_dict(self):
+        return {
+            "content_type": f"{self.object_type.app_label}.{self.object_type.model}",
+            "actions": list(self.actions),
+            "constraints": self.constraints,
+            "count": self.count,
+            "sample_size": len(self.sample),
+            "timed_out": self.timed_out,
+            "list_url": self.list_url,
+        }
+
+
+def filtered_list_url(model, constraints, user=None):
+    """
+    URL of `model`'s list view filtered to match `constraints`, or None when no equivalent FilterSet query exists
+    (or the model has no list view). Used to make preview counts and effective-access rows clickable without ever
+    linking to a list whose contents would differ from the constraint.
+    """
+    from urllib.parse import urlencode
+
+    from django.urls import NoReverseMatch, reverse
+
+    from nautobot.core.utils.filtering import constraint_to_filter_params
+    from nautobot.core.utils.lookup import get_route_for_model
+
+    tokens = {USER_TOKEN: str(user.pk)} if user is not None else {}
+    params = constraint_to_filter_params(model, constraints, tokens=tokens)
+    if params is None:
+        return None
+    try:
+        url = reverse(get_route_for_model(model, "list"))
+    except NoReverseMatch:
+        return None
+    return f"{url}?{urlencode(params)}" if params else url
+
+
+def _preview_querysets(model, constraints, user):
+    """(all matching objects, matching objects the user may view): the first is counted, the second sampled."""
+    matching = model._default_manager.filter(qs_filter_from_constraints(constraints, {USER_TOKEN: user}))
+    visible = matching.restrict(user, "view") if hasattr(matching, "restrict") else matching
+    return matching, visible
+
+
+def preview_policy(policy, parameter_values, user, *, sample_size=PREVIEW_SAMPLE_SIZE, rules=None):
+    """
+    Run each rule of `policy` with `parameter_values` and report the match count and a small sample per object type.
+
+    The count covers every matching object, so a count of zero reliably signals a wrong lookup path. The sample
+    (the first `sample_size` matches) is restricted to objects `user` can already view, so preview cannot reveal
+    objects the user has no access to. On PostgreSQL each rule runs under a statement timeout and reports
+    `timed_out` instead of failing the request; on MySQL the count is not bounded.
+
+    Args:
+        rules (iterable[PolicyRule], optional): The policy's rules, if the caller already fetched them.
+
+    Returns:
+        (list[PreviewRow]): One row per rule, in rule order. A count of zero is reported as zero.
+    """
+    rows = []
+    if rules is None:
+        rules = policy.rules.all()
+    for rule in rules:
+        constraints = render_rule_constraints(rule, parameter_values)
+        object_type = rule_content_type(rule)
+        model = object_type.model_class()
+        row = PreviewRow(object_type=object_type, actions=rule.actions, constraints=constraints, count=0)
+        if model is None:
+            rows.append(row)
+            continue
+        row.list_url = filtered_list_url(model, constraints, user)
+        try:
+            with transaction.atomic():
+                if connection.vendor == "postgresql":
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL statement_timeout = %s", [PREVIEW_STATEMENT_TIMEOUT_MS])
+                matching, visible = _preview_querysets(model, constraints, user)
+                row.count = matching.count()
+                row.sample = list(visible.order_by("pk")[:sample_size])
+                if connection.vendor == "postgresql":
+                    # `SET LOCAL` lasts until the outermost transaction ends; when this block is only a savepoint
+                    # inside a caller's transaction, restore the default so the timeout does not leak.
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL statement_timeout = DEFAULT")
+        except OperationalError:
+            row.timed_out = True
+        rows.append(row)
+    return rows

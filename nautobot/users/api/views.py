@@ -1,12 +1,16 @@
+import contextlib
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Group
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiTypes
 from rest_framework import status
 from rest_framework.authentication import BasicAuthentication
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.viewsets import ViewSet
@@ -29,8 +33,10 @@ from nautobot.users.models import (
 from nautobot.users.policies import (
     permission_names_for_rule,
     PolicyRenderError,
+    preview_policy,
     render_rule_constraints,
     rule_content_type,
+    validate_parameter_values,
 )
 
 from . import serializers
@@ -103,6 +109,18 @@ class ObjectPermissionViewSet(ModelViewSet):
 #
 
 
+class PermissionPolicyViewPermissions(BasePermission):
+    """Allow an action to any authenticated user who may view the permission policy (used for preview)."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated) and request.user.has_perm(
+            "users.view_permissionpolicy"
+        )
+
+    def has_object_permission(self, request, view, obj):
+        return request.user.has_perm("users.view_permissionpolicy", obj)
+
+
 def _model_from_label(label, parameter):
     """Resolve an `app_label.model` query parameter to a model class, raising ValueError with a usable message."""
     if not label:
@@ -116,6 +134,18 @@ def _model_from_label(label, parameter):
     if model is None:
         raise ValueError(f"'{label}' is not an installed model.")
     return model
+
+
+def _sample_payload(request, objects):
+    sample = []
+    for obj in objects:
+        entry = {"id": str(obj.pk), "display": str(obj)}
+        if hasattr(obj, "get_absolute_url"):
+            # A model without a UI route is still previewable; it simply has no link.
+            with contextlib.suppress(Exception):
+                entry["url"] = request.build_absolute_uri(obj.get_absolute_url())
+        sample.append(entry)
+    return sample
 
 
 class PermissionPolicyViewSet(ModelViewSet):
@@ -157,6 +187,32 @@ class PermissionPolicyViewSet(ModelViewSet):
                 "target_content_type": target_model._meta.label_lower,
                 "candidates": [candidate.as_dict() for candidate in candidates],
             }
+        )
+
+    @extend_schema(request=serializers.PolicyPreviewRequestSerializer, responses={200: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["post"], permission_classes=[PermissionPolicyViewPermissions])
+    def preview(self, request, pk=None):
+        """
+        Render this policy with the supplied parameter values and report, per object type, the match count and a
+        sample of matching objects. The sample is limited to objects the requesting user can already view.
+
+        Preview writes nothing, so it deliberately needs only the view permission (and is therefore open to
+        read-only tokens). The object is fetched with a view-restricted queryset rather than `get_object()`, whose
+        restriction would apply the `add` action to a POST.
+        """
+        policy = get_object_or_404(PermissionPolicy.objects.restrict(request.user, "view"), pk=pk)
+        body = serializers.PolicyPreviewRequestSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        try:
+            values = validate_parameter_values(policy, body.validated_data["parameter_values"])
+        except DjangoValidationError as exc:
+            return Response({"parameter_values": exc.messages}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            rows = preview_policy(policy, values, request.user, sample_size=body.validated_data["limit"])
+        except PolicyRenderError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"results": [{**row.as_dict(), "sample": _sample_payload(request, row.sample)} for row in rows]}
         )
 
 
