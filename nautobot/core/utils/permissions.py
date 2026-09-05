@@ -1,6 +1,15 @@
+import re
+
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
+
+#: Token that the permission evaluator replaces with the requesting user at query time.
+USER_TOKEN = "$user"  # noqa: S105  # not a secret, a substitution token
+
+#: A permission-policy placeholder occupies a complete JSON value, e.g. `"{{ tenant }}"`.
+#: Deliberately distinct from `$user`, which is substituted by the evaluator at a different time.
+CONSTRAINT_PLACEHOLDER_PATTERN = re.compile(r"^\{\{\s*([a-z][a-z0-9_]*)\s*\}\}$")
 
 
 def get_permission_for_model(model, action):
@@ -101,3 +110,24 @@ def qs_filter_from_constraints(constraints, tokens=None):
             return Q()
 
     return params
+
+
+def normalize_constraints(constraints):
+    """
+    Normalize a stored constraint value to a list of constraint dicts.
+
+    `None`, `{}` and `[]` all mean "no constraint" and normalize to `[{}]` so that
+    `qs_filter_from_constraints()` grants model-level access, exactly as it does for a null
+    `ObjectPermission.constraints` value.
+
+    Args:
+        constraints (dict, list, None): A constraint dict, a list of constraint dicts, or null.
+
+    Returns:
+        (list): A non-empty list of dicts.
+    """
+    if constraints is None or constraints == {} or constraints == []:
+        return [{}]
+    if isinstance(constraints, dict):
+        return [constraints]
+    return list(constraints)

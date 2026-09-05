@@ -1,0 +1,26 @@
+{% comment %}
+Visual constraint editor. The textarea is the real form value (JSON). The builder is rendered by
+js/constraint_editor.js when it initializes; without JavaScript the JSON textarea is simply shown.
+{% endcomment %}
+<div class="nb-constraint-editor"
+     data-name="{{ widget.name }}"
+     data-content-type="{{ editor.content_type }}"
+     data-parameters="{{ editor.parameters }}"
+     data-parameter-inputs="{{ editor.parameter_inputs }}"
+     data-allow-user-token="{{ editor.allow_user_token }}"
+     data-field-tree-url="{{ editor.field_tree_url }}"
+     data-lookup-choices-url="{{ editor.lookup_choices_url }}"
+     data-validate-path-url="{{ editor.validate_path_url }}"
+     data-value-widget-url="{{ editor.value_widget_url }}">
+    {# Bootstrap tabs; the JSON pane is the active one until the script initializes, so the textarea always shows without JavaScript. #}
+    <ul class="nav nav-tabs nb-constraint-editor-tabs mb-8" role="tablist" hidden>
+        <li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-bs-toggle="tab" data-bs-target="#{{ widget.attrs.id }}-builder" aria-controls="{{ widget.attrs.id }}-builder" aria-selected="false" tabindex="-1" data-nb-editor-tab="builder">Builder</button></li>
+        <li class="nav-item" role="presentation"><button type="button" class="nav-link active" role="tab" data-bs-toggle="tab" data-bs-target="#{{ widget.attrs.id }}-json" aria-controls="{{ widget.attrs.id }}-json" aria-selected="true" data-nb-editor-tab="json">JSON</button></li>
+    </ul>
+    <div class="tab-content">
+        <div class="tab-pane nb-constraint-editor-builder" id="{{ widget.attrs.id }}-builder" role="tabpanel"></div>
+        <div class="tab-pane active show nb-constraint-editor-json-pane" id="{{ widget.attrs.id }}-json" role="tabpanel">
+            {% include "django/forms/widgets/textarea.html" %}
+        </div>
+    </div>
+</div>

@@ -337,6 +337,17 @@ class ExpandAlphanumeric(testing.TestCase):
             sorted(forms.expand_alphanumeric_pattern("r[a,,b]a"))
 
 
+class ConstraintEditorFieldTest(testing.TestCase):
+    def test_clean_accepts_dict_or_list_of_dicts_only(self):
+        field = forms.ConstraintEditorField(required=False)
+        self.assertEqual(field.clean('{"name": "x"}'), {"name": "x"})
+        self.assertEqual(field.clean('[{"name": "x"}, {"name": "y"}]'), [{"name": "x"}, {"name": "y"}])
+        for value in ('"just a string"', "[1, 2]", "42"):
+            with self.subTest(value=value), self.assertRaises(django_forms.ValidationError) as cm:
+                field.clean(value)
+            self.assertIn("JSON object", str(cm.exception))
+
+
 class AddFieldToFormClassTest(testing.TestCase):
     def test_field_added(self):
         """

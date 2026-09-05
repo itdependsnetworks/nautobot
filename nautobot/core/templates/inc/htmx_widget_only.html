@@ -1,0 +1,2 @@
+{# HTMX swap target for a single bound form field rendered as its bare widget, with no label or layout wrapper. #}
+{% if field %}{{ field }}{% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}{% endif %}

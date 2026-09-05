@@ -36,6 +36,7 @@ __all__ = (
     "CSVMultipleChoiceField",
     "CSVMultipleContentTypeField",
     "CommentField",
+    "ConstraintEditorField",
     "DynamicModelChoiceField",
     "DynamicModelMultipleChoiceField",
     "ExpandableIPAddressField",
@@ -686,6 +687,69 @@ class JSONField(_JSONField):
         if data is None:
             return None
         return super().bound_data(data, initial)  # pylint: disable=no-member # https://github.com/pylint-dev/pylint-django/issues/477
+
+
+class ConstraintEditorField(JSONField):
+    """
+    A JSON form field for a permission constraint, rendered with the visual constraint editor.
+
+    Args:
+        content_type_source (str, ContentType, Model, optional): The model the constraint applies to. Either a fixed
+            model (class or `ContentType`) or a `$field_name` reference to a sibling form field whose value is a
+            ContentType, resolved live by the editor (the same convention as `APISelect.add_query_param()`).
+        parameter_names (list[str], optional): Policy parameter names offered as `{{ name }}` values.
+        parameter_inputs_selector (str, optional): CSS selector for form inputs whose current values are additional
+            parameter names (for a form that declares parameters and rules together, before anything is saved).
+        allow_user_token (bool): Offer the current user (`$user`) as a value for paths that end at a User.
+
+    The field accepts a JSON object (all conditions must match) or a list of objects (any object may match).
+    An empty value means "no constraint".
+    """
+
+    widget = widgets.ConstraintEditorWidget
+
+    def __init__(
+        self,
+        *args,
+        content_type_source=None,
+        parameter_names=(),
+        parameter_inputs_selector="",
+        allow_user_token=True,
+        **kwargs,
+    ):
+        kwargs.setdefault(
+            "help_text",
+            "Queryset filter in JSON, in the same shape as an object permission constraint. "
+            "Leave empty to match all objects of this type.",
+        )
+        super().__init__(*args, **kwargs)
+        self.content_type_source = content_type_source
+        self.parameter_names = list(parameter_names)
+        self.allow_user_token = allow_user_token
+        self.widget.attrs["data-content-type"] = self._content_type_attr()
+        self.widget.attrs["data-parameters"] = ",".join(self.parameter_names)
+        self.widget.attrs["data-parameter-inputs"] = parameter_inputs_selector
+        self.widget.attrs["data-allow-user-token"] = "true" if allow_user_token else "false"
+
+    def _content_type_attr(self):
+        source = self.content_type_source
+        if source is None:
+            return ""
+        if isinstance(source, str):
+            return source
+        if isinstance(source, ContentType):
+            return f"{source.app_label}.{source.model}"
+        return source._meta.label_lower
+
+    def clean(self, value):
+        value = super().clean(value)
+        if value in (None, ""):
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list) and all(isinstance(group, dict) for group in value):
+            return value
+        raise ValidationError("A constraint must be a JSON object or a list of JSON objects.")
 
 
 class JSONArrayFormField(django_forms.JSONField):

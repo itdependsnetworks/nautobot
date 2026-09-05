@@ -46,6 +46,7 @@ from nautobot.extras.api import serializers as extras_serializers
 from nautobot.ipam import filters as ipam_filters, models as ipam_models
 from nautobot.ipam.api import serializers as ipam_serializers, views as ipam_api_views
 from nautobot.tenancy import models as tenancy_models
+from nautobot.tenancy.models import Tenant
 from nautobot.users.models import ObjectPermission
 
 User = get_user_model()
@@ -1608,3 +1609,88 @@ class RenderJinjaViewTest(testing.APITestCase):
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertSequenceEqual(list(response.data.keys()), ["detail"])
                 self.assertEqual(response.data["detail"], f"Failed to render Jinja template: {data['error_msg']}")
+
+
+class ModelFieldIntrospectionAPITest(testing.APITestCase):
+    """The UI API endpoints behind the permission constraint editor."""
+
+    def test_field_tree_levels(self):
+        url = reverse("core-api:modelfield-list")
+        # Browsing a model's fields needs the view permission on that model, exactly like expanding into one.
+        response = self.client.get(f"{url}?content_type=dcim.interface", **self.header)
+        self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
+        self.add_permissions("dcim.view_interface")
+        response = self.client.get(f"{url}?content_type=dcim.interface", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        by_name = {field["name"]: field for field in response.data["fields"]}
+        # Relations to models the user may not view are listed but not expandable.
+        self.assertIn("device", by_name)
+        self.assertFalse(by_name["device"]["expandable"])
+        self.assertNotIn("tagged_vlans", by_name)  # many-to-many
+        self.assertFalse(any(name.startswith("_") for name in by_name))
+
+        response = self.client.get(f"{url}?content_type=dcim.interface&prefix=device", **self.header)
+        self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
+
+        self.add_permissions("dcim.view_device")
+        response = self.client.get(f"{url}?content_type=dcim.interface", **self.header)
+        by_name = {field["name"]: field for field in response.data["fields"]}
+        self.assertTrue(by_name["device"]["expandable"])
+
+        response = self.client.get(f"{url}?content_type=dcim.interface&prefix=device", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual(response.data["model"], "dcim.device")
+        self.assertIn("device__tenant", {field["path"] for field in response.data["fields"]})
+
+        response = self.client.get(f"{url}?content_type=dcim.device&prefix=tags", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        response = self.client.get(f"{url}?content_type=nope.nope", **self.header)
+        self.assertHttpStatus(response, status.HTTP_404_NOT_FOUND)
+
+    def test_validate_path_always_answers(self):
+        url = reverse("core-api:modelfield-validate-path")
+        response = self.client.get(f"{url}?content_type=circuits.circuit&path=module_name", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertFalse(response.data["valid"])
+        self.assertIn("module_name", response.data["detail"])
+
+        response = self.client.get(f"{url}?content_type=dcim.device&path=tenant__name", **self.header)
+        self.assertTrue(response.data["valid"])
+        self.assertIn("icontains", [lookup["id"] for lookup in response.data["lookups"]])
+        self.assertFalse(response.data["targets_user"])
+
+        response = self.client.get(f"{url}?content_type=dcim.rackreservation&path=user", **self.header)
+        self.assertTrue(response.data["targets_user"])
+
+    def test_lookup_choices_and_value_widget(self):
+        url = reverse("core-api:modelfield-list-lookupchoices")
+        response = self.client.get(f"{url}?content_type=dcim.device&path=tenant", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertEqual([lookup["id"] for lookup in response.data["results"]][:2], ["exact", "in"])
+
+        url = reverse("core-api:modelfield-retrieve-valuewidget")
+        response = self.client.get(f"{url}?content_type=dcim.device&path=tenant&lookup=in&name=v", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        body = response.content.decode(response.charset)
+        self.assertIn('name="v"', body)
+        self.assertIn("nautobot-select2-api", body)
+        self.assertIn("/api/tenancy/tenants/", body)
+        self.assertNotIn("col-md-3", body)  # bare widget, no form-row layout
+
+        # The current value renders into the widget, so the client need not patch it afterwards.
+        tenants = list(Tenant.objects.all()[:2])
+        response = self.client.get(
+            f"{url}?content_type=dcim.device&path=tenant&lookup=in&name=v&value={tenants[0].pk}&value={tenants[1].pk}",
+            **self.header,
+        )
+        body = response.content.decode(response.charset)
+        self.assertEqual(body.count("selected"), 2)
+        for tenant in tenants:
+            self.assertIn(f'value="{tenant.pk}"', body)
+        response = self.client.get(
+            f"{url}?content_type=dcim.device&path=name&lookup=icontains&name=v&value=core-", **self.header
+        )
+        self.assertIn('value="core-"', response.content.decode(response.charset))
+
+        response = self.client.get(f"{url}?content_type=dcim.device&path=nope&lookup=exact&name=v", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)

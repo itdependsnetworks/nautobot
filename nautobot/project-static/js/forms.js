@@ -331,6 +331,9 @@ function initializeInputs(context) {
 
     window.nb.checkbox.initializeCheckboxes()
     window.nb.select2.initializeSelect2Fields(this_context)
+    if (window.initializeConstraintEditors) {
+        window.initializeConstraintEditors(this_context)
+    }
 }
 
 function jsify_form(context) {

@@ -4,7 +4,7 @@ from urllib.parse import urljoin
 
 from django import forms
 from django.forms.models import ModelChoiceIterator
-from django.urls import get_script_prefix
+from django.urls import get_script_prefix, reverse
 
 from nautobot.core import choices as core_choices
 from nautobot.core.forms import utils
@@ -16,6 +16,7 @@ __all__ = (
     "BulkEditNullBooleanSelect",
     "ClearableFileInput",
     "ColorSelect",
+    "ConstraintEditorWidget",
     "ContentTypeSelect",
     "DatePicker",
     "DateTimePicker",
@@ -315,4 +316,36 @@ class NumberWithSelect(forms.NumberInput):
     def get_context(self, name, value, attrs):
         context = super().get_context(name, value, attrs)
         context["widget"]["choices"] = self.choices
+        return context
+
+
+class ConstraintEditorWidget(forms.Textarea):
+    """
+    Textarea holding a permission constraint as JSON, wrapped in the visual constraint editor.
+
+    The textarea is the real form value; the builder UI is progressive enhancement driven by `constraint_editor.js`
+    and configured through `data-*` attributes set by `ConstraintEditorField`.
+    """
+
+    template_name = "widgets/constraint_editor.html"
+
+    def __init__(self, attrs=None):
+        default_attrs = {"class": "form-control nb-constraint-editor-json font-monospace", "rows": 6}
+        if attrs:
+            default_attrs.update(attrs)
+        super().__init__(default_attrs)
+
+    def get_context(self, name, value, attrs):
+        context = super().get_context(name, value, attrs)
+        widget_attrs = context["widget"]["attrs"]
+        context["editor"] = {
+            "content_type": widget_attrs.pop("data-content-type", ""),
+            "parameters": widget_attrs.pop("data-parameters", ""),
+            "parameter_inputs": widget_attrs.pop("data-parameter-inputs", ""),
+            "allow_user_token": widget_attrs.pop("data-allow-user-token", "true"),
+            "field_tree_url": reverse("core-api:modelfield-list"),
+            "lookup_choices_url": reverse("core-api:modelfield-list-lookupchoices"),
+            "validate_path_url": reverse("core-api:modelfield-validate-path"),
+            "value_widget_url": reverse("core-api:modelfield-retrieve-valuewidget"),
+        }
         return context

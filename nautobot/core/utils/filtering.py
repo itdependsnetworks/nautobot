@@ -290,3 +290,84 @@ def build_filter_dict_from_filterset(
         new_filter[field_name] = new_value
 
     return new_filter
+
+
+def constraint_to_filter_params(model, constraints, *, tokens=None):
+    """
+    Translate a permission constraint into list-view FilterSet query parameters, when the two are equivalent.
+
+    ORM lookups and FilterSet parameters do not line up one-to-one: `location=<pk>` is an exact match in the ORM
+    but the `location` filter is tree-aware (it includes descendants), lookups such as `icontains` are spelled
+    `name__ic` as filters, and a list of constraint objects (OR) cannot be expressed as one filter URL. This
+    function therefore returns parameters only when every condition has a filter with the same semantics, and
+    `None` otherwise, so a caller never links to a list whose count would differ from the constraint's.
+
+    Args:
+        model (type): The model the constraint applies to.
+        constraints (dict, list, None): A constraint dict or list of dicts (as stored on an ObjectPermission).
+        tokens (dict, optional): Value substitutions, e.g. `{"$user": "<pk>"}`.
+
+    Returns:
+        (list[tuple[str, str]] | None): `(parameter, value)` pairs suitable for `urlencode()`; an empty list for a
+            constraint that matches everything; `None` when no equivalent filter exists.
+    """
+    # Imported here: `nautobot.core.filters` and `nautobot.core.utils.orm_paths` import model machinery this module
+    # must stay independent of at import time.
+    from nautobot.core.constants import FILTER_CHAR_BASED_LOOKUP_MAP, FILTER_NUMERIC_BASED_LOOKUP_MAP
+    from nautobot.core.filters import TreeNodeMultipleChoiceFilter
+    from nautobot.core.utils.orm_paths import split_path_and_lookup
+    from nautobot.core.utils.permissions import normalize_constraints
+
+    tokens = tokens or {}
+    groups = normalize_constraints(constraints)
+    if len(groups) != 1 or not isinstance(groups[0], dict):
+        return None
+    if not groups[0]:
+        return []
+    filterset_class = get_filterset_for_model(model)
+    if filterset_class is None:
+        return None
+    filters = filterset_class.base_filters
+
+    # ORM lookup -> filter suffix, excluding negations (which a constraint cannot express).
+    suffixes = {
+        lookup: suffix
+        for suffix, lookup in {**FILTER_CHAR_BASED_LOOKUP_MAP, **FILTER_NUMERIC_BASED_LOOKUP_MAP}.items()
+        if not suffix.startswith("n")
+    }
+    suffixes["isnull"] = "isnull"
+
+    params = []
+    for key, value in groups[0].items():
+        path, lookup = split_path_and_lookup(model, key)
+        if lookup in ("exact", "in"):
+            filter_field = filters.get(path)
+            if filter_field is None or isinstance(filter_field, TreeNodeMultipleChoiceFilter):
+                return None  # no filter, or a tree-aware filter that would also include descendants
+            if filter_field.lookup_expr not in ("exact", "in"):
+                return None
+            name = path
+        elif lookup == "in_tree":  # provisional lookup, see `InTreeLookup` in core/models/tree_queries.py
+            filter_field = filters.get(path)
+            if not isinstance(filter_field, TreeNodeMultipleChoiceFilter):
+                return None
+            name = path
+        else:
+            suffix = suffixes.get(lookup)
+            name = f"{path}__{suffix}" if suffix else None
+            filter_field = filters.get(name) if name else None
+            if filter_field is None or filter_field.lookup_expr != lookup:
+                return None
+        if filter_field.field_name != path or getattr(filter_field, "method", None):
+            return None
+
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if isinstance(item, str):
+                item = tokens.get(item, item)
+            if item is None:
+                return None
+            if isinstance(item, bool):
+                item = "True" if item else "False"
+            params.append((name, str(item)))
+    return params

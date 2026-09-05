@@ -14,7 +14,7 @@ from django.db.models import ProtectedError
 from django.db.models.fields.related import ForeignKey, ManyToManyField, RelatedField
 from django.db.models.fields.reverse_related import ManyToManyRel, ManyToOneRel
 from django.http.response import HttpResponseBadRequest
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.decorators import method_decorator
 from django.views.decorators.gzip import gzip_page
 from drf_spectacular.plumbing import get_relative_url, set_query_parameters
@@ -48,6 +48,7 @@ from nautobot.core.models.fields import TagsField
 from nautobot.core.utils.data import is_uuid, render_jinja2
 from nautobot.core.utils.filtering import get_all_lookup_expr_for_field, get_filterset_parameter_form_field
 from nautobot.core.utils.lookup import get_form_for_model
+from nautobot.core.utils.permissions import permission_is_exempt
 from nautobot.core.utils.querysets import maybe_prefetch_related, maybe_select_related
 from nautobot.core.utils.requests import ensure_content_type_and_field_name_in_query_params
 from nautobot.core.views.utils import get_csv_form_fields_from_serializer_class
@@ -1046,3 +1047,205 @@ class RenderJinjaView(NautobotAPIVersionMixin, GenericAPIView):
                 "context": context,
             }
         )
+
+
+#
+# Model field introspection (constraint editor)
+#
+
+
+def _model_from_content_type_param(query_params):
+    """Resolve the `content_type` query parameter (`app_label.model`) to a model class or raise ValidationError."""
+    label = query_params.get("content_type")
+    if not label:
+        raise ValidationError("The 'content_type' query parameter is required, as 'app_label.model'.", code=400)
+    try:
+        app_label, model_name = label.lower().split(".")
+        content_type = ContentType.objects.get_by_natural_key(app_label, model_name)
+    except (ValueError, ContentType.DoesNotExist):
+        raise ValidationError(f"'{label}' is not a known content type.", code=404)
+    model = content_type.model_class()
+    if model is None:
+        raise ValidationError(f"'{label}' is not an installed model.", code=404)
+    return model
+
+
+def _user_may_view_model(user, model):
+    """Return True if `user` may view objects of `model` (superusers, exempt models, or the view permission)."""
+    permission = f"{model._meta.app_label}.view_{model._meta.model_name}"
+    return bool(user.is_superuser or permission_is_exempt(permission) or user.has_perm(permission))
+
+
+class ModelFieldTreeAPIView(NautobotAPIVersionMixin, APIView):
+    """
+    One level of a model's field tree, for building ORM lookup paths in the constraint editor.
+
+    `?content_type=dcim.interface` lists the fields of Interface; adding `&prefix=device` lists the fields of the
+    model reached by that lookup path (Device), each with its full path (`device__name`). Relations that the
+    requesting user may not view, and relations beyond the depth limit, are reported as not expandable.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(exclude=True)
+    def get(self, request):
+        from nautobot.core.utils.orm_paths import enumerate_model_fields, validate_lookup_path
+
+        try:
+            root_model = _model_from_content_type_param(request.GET)
+        except ValidationError as err:
+            return Response({"detail": err.message}, status=err.code)
+        prefix = request.GET.get("prefix", "")
+        model = root_model
+        depth = 0
+        if prefix:
+            try:
+                terminal = validate_lookup_path(root_model, prefix)
+            except ValidationError as err:
+                return Response({"detail": err.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+            if not terminal.is_relation:
+                return Response(
+                    {"detail": f"'{prefix}' is not a relation and cannot be expanded."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            model = terminal.related_model
+            depth = prefix.count("__") + 1
+        # The user must be allowed to view every model on the way, not only the one being listed: the root model
+        # and each intermediate hop, so a hand-built prefix cannot browse past a model the tree would not expand.
+        visited = [root_model]
+        current = root_model
+        for part in filter(None, prefix.split("__")):
+            current = current._meta.get_field(part).related_model
+            visited.append(current)
+        for visited_model in visited:
+            if not _user_may_view_model(request.user, visited_model):
+                return Response(
+                    {"detail": f"You do not have permission to browse {visited_model._meta.label_lower}."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        nodes = enumerate_model_fields(model, prefix=prefix, depth=depth, user=request.user)
+        return Response(
+            {
+                "content_type": root_model._meta.label_lower,
+                "prefix": prefix,
+                "model": model._meta.label_lower,
+                "verbose_name": str(model._meta.verbose_name),
+                "fields": [node.as_dict() for node in nodes],
+            }
+        )
+
+
+class ModelFieldLookupChoicesAPIView(NautobotAPIVersionMixin, APIView):
+    """
+    The lookups available at the end of an ORM lookup path, in the select2 result envelope.
+
+    `?content_type=dcim.device&path=tenant__name`
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(exclude=True)
+    def get(self, request):
+        from nautobot.core.utils.orm_paths import lookup_label, lookups_for_field, validate_lookup_path
+
+        try:
+            model = _model_from_content_type_param(request.GET)
+        except ValidationError as err:
+            return Response({"detail": err.message}, status=err.code)
+        path = request.GET.get("path", "")
+        try:
+            field = validate_lookup_path(model, path)
+        except ValidationError as err:
+            return Response({"detail": err.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+        results = [{"id": lookup, "name": lookup_label(lookup)} for lookup in lookups_for_field(field)]
+        return Response({"count": len(results), "next": None, "previous": None, "results": results})
+
+
+class ModelFieldPathValidationAPIView(NautobotAPIVersionMixin, APIView):
+    """
+    Validate an ORM lookup path against a model and describe its terminal field, for the constraint editor.
+
+    `?content_type=dcim.device&path=tenant__name`. Always responds 200 with a `valid` flag, so that checking a row
+    after the object type changes does not surface as a failed request; `detail` explains an invalid path.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(exclude=True)
+    def get(self, request):
+        from nautobot.core.utils.orm_paths import (
+            lookup_label,
+            lookups_for_field,
+            path_targets_user_model,
+            validate_lookup_path,
+        )
+
+        try:
+            model = _model_from_content_type_param(request.GET)
+        except ValidationError as err:
+            return Response({"detail": err.message}, status=err.code)
+        path = request.GET.get("path", "")
+        try:
+            field = validate_lookup_path(model, path)
+        except ValidationError as err:
+            return Response({"valid": False, "path": path, "detail": err.messages[0], "lookups": []})
+        return Response(
+            {
+                "valid": True,
+                "path": path,
+                "field_type": field.get_internal_type(),
+                "is_relation": bool(field.is_relation),
+                "lookups": [{"id": lookup, "name": lookup_label(lookup)} for lookup in lookups_for_field(field)],
+                "targets_user": path_targets_user_model(model, path),
+            }
+        )
+
+
+class ModelFieldValueWidgetAPIView(NautobotAPIVersionMixin, APIView):
+    """
+    Render a form widget suited to entering a value for a lookup on an ORM lookup path.
+
+    `?content_type=dcim.device&path=tenant&lookup=in&name=rows-0-value` returns an HTMX-ready HTML fragment.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(exclude=True)
+    def get(self, request):
+        from nautobot.core.utils.orm_paths import form_field_for_lookup, validate_lookup_path
+
+        try:
+            model = _model_from_content_type_param(request.GET)
+        except ValidationError as err:
+            return Response({"detail": err.message}, status=err.code)
+        path = request.GET.get("path", "")
+        lookup = request.GET.get("lookup") or "exact"
+        field_name = request.GET.get("name") or "value"
+        try:
+            field = validate_lookup_path(model, path)
+        except ValidationError as err:
+            return Response({"detail": err.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+        if lookup not in field.get_lookups():
+            return Response(
+                {"detail": f"'{lookup}' is not a valid lookup for '{path}'."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        form_field = form_field_for_lookup(field, lookup)
+        form_field.label = ""
+        # Compact, full-width controls: the widget is embedded in a table cell, not a form row.
+        css_class = form_field.widget.attrs.get("class", "")
+        if "select" in form_field.widget.__class__.__name__.lower():
+            css_class = f"{css_class} form-select form-select-sm w-100".strip()
+        elif not isinstance(form_field.widget, forms.CheckboxInput):
+            css_class = f"{css_class} form-control form-control-sm w-100".strip()
+        form_field.widget.attrs["class"] = css_class
+
+        class _ValueOnlyForm(forms.Form):
+            pass
+
+        # The current value(s), so the widget renders pre-filled and the client need not patch it afterwards.
+        values = [value for value in request.GET.getlist("value") if value != ""]
+        multiple = lookup == "in" or getattr(form_field.widget, "allow_multiple_selected", False)
+        initial = values if multiple else (values[0] if values else None)
+        form = _ValueOnlyForm(auto_id="id_%s", initial={field_name: initial} if values else None)
+        form.fields[field_name] = form_field
+        return render(request, "inc/htmx_widget_only.html", {"field": form[field_name]})

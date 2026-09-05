@@ -11,6 +11,10 @@ from nautobot.core.api.views import (
     GetFilterSetFieldDOMElementAPIView,
     GetFilterSetFieldLookupExpressionChoicesAPIView,
     GraphQLDRFAPIView,
+    ModelFieldLookupChoicesAPIView,
+    ModelFieldPathValidationAPIView,
+    ModelFieldTreeAPIView,
+    ModelFieldValueWidgetAPIView,
     NautobotSpectacularAPIView,
     NautobotSpectacularRedocView,
     NautobotSpectacularSwaggerView,
@@ -33,6 +37,23 @@ core_api_patterns = [
         name="filtersetfield-retrieve-lookupvaluedomelement",
     ),
     path("render-jinja-template/", RenderJinjaView.as_view(), name="render_jinja_template"),
+    # Model field introspection for the permission constraint editor
+    path("model-fields/", ModelFieldTreeAPIView.as_view(), name="modelfield-list"),
+    path(
+        "model-fields/lookup-choices/",
+        ModelFieldLookupChoicesAPIView.as_view(),
+        name="modelfield-list-lookupchoices",
+    ),
+    path(
+        "model-fields/validate-path/",
+        ModelFieldPathValidationAPIView.as_view(),
+        name="modelfield-validate-path",
+    ),
+    path(
+        "model-fields/value-widget/",
+        ModelFieldValueWidgetAPIView.as_view(),
+        name="modelfield-retrieve-valuewidget",
+    ),
 ]
 ui_api_patterns = [
     # Lookup Expr
