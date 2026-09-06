@@ -35,6 +35,7 @@ __all__ = (
     "FormLayout",
     "FormLayoutMixin",
     "FormPanel",
+    "InlineFields",
 )
 
 
@@ -290,6 +291,69 @@ class FormField(FormComponent):
             full_width=self.full_width,
         )
         return self._wrap(render_component_template("utilities/render_field.html", context, **extra))
+
+
+class InlineFields(FormComponent):
+    """
+    Several fields rendered side by side under one shared label.
+
+    Args:
+        *names (str): Names of the form fields, in display order.
+
+    Keyword Args:
+        label (str, optional): The shared label. Defaults to the first field's label.
+        help_text (str, optional): Help text shown beneath the row. Rendered as HTML, like a field's own help text,
+            so pass literal markup only, never a value derived from data.
+        widths (tuple, optional): Bootstrap column widths (out of the 9 columns beside the label) for each field.
+            Defaults to an even split.
+    """
+
+    help_text = None
+    names = ()
+    template_path = "components/form/inline_fields.html"
+    widths = None
+
+    def __init__(self, *names, **kwargs):
+        if not names:
+            raise TypeError("InlineFields() requires at least one field name")
+        if any(not isinstance(name, str) for name in names):
+            raise TypeError("InlineFields() field names must be strings")
+        kwargs["names"] = tuple(names)
+        super().__init__(**kwargs)
+        if self.widths is not None:
+            if len(self.widths) != len(self.names):
+                raise ValueError("InlineFields() widths must have one entry per field")
+            if sum(self.widths) > 9:
+                raise ValueError("InlineFields() widths must sum to at most 9 columns")
+
+    @property
+    def field_names(self):
+        return self.names
+
+    def bind(self, layout, weight=None):
+        bound = super().bind(layout, weight)
+        for name in self.names:
+            layout.claim(name, bound)
+        return bound
+
+    def render(self, context):
+        context = _as_context(context)
+        if not self.should_render(context):
+            return ""
+        bound_fields = [self.form[name] for name in self.names]
+        widths = self.widths or [9 // len(self.names)] * len(self.names)
+        label = self.label if self.label is not None else bound_fields[0].label
+        return self._wrap(
+            render_component_template(
+                self.template_path,
+                context,
+                label=label,
+                help_text=self.help_text,
+                fields=list(zip(bound_fields, widths)),
+                required=any(bound_field.field.required for bound_field in bound_fields),
+                errors=[error for bound_field in bound_fields for error in bound_field.errors],
+            )
+        )
 
 
 class FormPanel(FormComponent):

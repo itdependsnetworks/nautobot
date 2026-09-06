@@ -18,6 +18,7 @@ from nautobot.core.ui.object_form import (
     FormField,
     FormLayout,
     FormPanel,
+    InlineFields,
     resolve_dotted_path,
 )
 from nautobot.dcim.forms import ManufacturerForm, SoftwareVersionForm
@@ -339,6 +340,29 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIn('class="form-label" for="id_description"', html)
         self.assertIn('class="col-md-3 col-form-label nb-required" for="id_name"', html)
         self.assertEqual(form["name"].label, "Vendor")
+
+    def test_inline_fields(self):
+        with self.assertRaises(ValueError):
+            InlineFields("name", "description", widths=(5,))
+        with self.assertRaises(ValueError):
+            InlineFields("name", "description", widths=(6, 6))
+        fieldsets = (("Main", (InlineFields("name", "description", label="Identity", widths=(6, 3)),)),)
+        form = form_class_with_fieldsets(fieldsets)()
+        self.assertEqual(form.layout.panels[0].field_names, ("name", "description"))
+        html = form.layout.render(self.context())
+        self.assertIn("Identity", html)
+        self.assertIn('class="col-md-6"', html)
+        self.assertIn('class="col-md-3"', html)
+        self.assertIn('id="id_name"', html)
+        self.assertIn('id="id_description"', html)
+        # Defaults: the first field's label, an even split of the nine columns, help text beneath
+        fieldsets = (("Main", (InlineFields("name", "description", help_text="Two <em>inline</em>"),)),)
+        form = form_class_with_fieldsets(fieldsets)(data={"description": "x" * 300})
+        html = form.layout.render(self.context())
+        self.assertIn(">Name</label>", html)
+        self.assertEqual(html.count('class="col-md-4"'), 2)
+        self.assertIn("Two <em>inline</em>", html)
+        self.assertIn("has-error", html)  # errors of every inline field are aggregated on the row
 
     def test_panel_markup_options(self):
         fieldsets = (

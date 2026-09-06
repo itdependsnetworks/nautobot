@@ -1,0 +1,31 @@
+{% comment %}
+Several fields side by side under one shared label. `fields` is a list of (bound_field, column_width) pairs; the
+widths are Bootstrap columns out of the nine beside the label.
+
+Each field renders its own help text and errors with the ids Django's `aria-describedby` points at
+(`<auto_id>_helptext`, `<auto_id>_error`), so those references never dangle. `help_text` on the component itself is
+an optional caption for the row as a whole.
+{% endcomment %}
+<div class="mb-10 d-md-flex justify-content-center{% if errors %} has-error{% endif %}">
+    <label class="col-md-3 col-form-label{% if required %} nb-required{% endif %}" for="{{ fields.0.0.id_for_label }}">{{ label }}</label>
+    {% for field, width in fields %}
+        <div class="col-md-{{ width }}">
+            {{ field }}
+            {% if field.help_text %}
+                <span class="form-text"{% if field.auto_id %} id="{{ field.auto_id }}_helptext"{% endif %}>{{ field.help_text|safe }}</span>
+            {% endif %}
+            {% if field.errors %}
+                <ul class="mb-0 mt-4"{% if field.auto_id %} id="{{ field.auto_id }}_error"{% endif %}>
+                    {% for error in field.errors %}
+                        {# Embed an HTML comment indicating the error for extraction by tests #}
+                        <!-- FORM-ERROR {{ field.name }}: {{ error }} -->
+                        <li class="text-danger">{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+    {% endfor %}
+    {% if help_text %}
+        <span class="form-text w-100">{{ help_text|safe }}</span>
+    {% endif %}
+</div>

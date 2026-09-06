@@ -80,6 +80,7 @@ from nautobot.core.ui.object_form import (
     FormLayout,
     FormLayoutMixin,
     FormPanel,
+    InlineFields,
 )
 from nautobot.core.ui.titles import Titles
 from nautobot.core.ui.utils import (
@@ -129,6 +130,7 @@ __all__ = (
     "HomePageGroup",
     "HomePageItem",
     "HomePagePanel",
+    "InlineFields",
     "InstanceBreadcrumbItem",
     "InstanceParentBreadcrumbItem",
     "KeyValueTablePanel",
