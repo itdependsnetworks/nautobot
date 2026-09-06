@@ -104,14 +104,6 @@ const initializeSelect2 = (context, selector, options) =>
       selection.querySelector('.select2-selection__rendered')?.setAttribute('aria-labelledby', labelIds.join(' '));
     }
 
-    /*
-     * NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new behaviour. Select2 reports every
-     * selection change through jQuery only (`$(el).trigger('change')`), which native listeners, HTMX `hx-trigger`
-     * and `form_visibility.js` never see. Each page used to bridge this by hand (`htmx.trigger(...)`, a
-     * `select2:select` handler, ...). Bridge it once here instead: a jQuery-triggered `change` with no
-     * `originalEvent` is re-dispatched as one native, bubbling `change`. Several jQuery triggers in the same tick
-     * (a clear of a multi-select) collapse into one native event.
-     */
     if (element.dataset.nbNativeChangeBridged !== 'true') {
       /*
        * Bound once per element: pages re-initialize Select2 on swapped-in content, and a second bridge would mean a

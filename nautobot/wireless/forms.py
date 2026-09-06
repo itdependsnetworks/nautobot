@@ -243,8 +243,6 @@ class WirelessNetworkForm(NautobotModelForm):
                     "secrets_group",
                     "hidden",
                     "enabled",
-                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `tenant` is now on the
-                    # page; the old template omitted it although the form had the field.
                     "tenant",
                 ),
             ),

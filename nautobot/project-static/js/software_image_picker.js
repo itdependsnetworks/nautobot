@@ -4,10 +4,6 @@
  * Attached to any create/edit form containing a `[data-nb-software-image-picker]` container (rendered by
  * `dcim/inc/software_image_list.html`, placed in a form layout via `SoftwareImagePanel`). Configuration comes from
  * the container's data attributes so the same script serves every form that includes the panel.
- *
- * NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): vanilla JavaScript throughout (jQuery is
- * deprecated as of Nautobot 3.0); shows and hides the container with `d-none`/`d-flex` rather than an `!important`
- * inline style; the description is a `role="status"` region so its updates are announced.
  */
 (function () {
     "use strict";
@@ -162,8 +158,6 @@
             }
         };
 
-        // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): was `select2:select` /
-        // `select2:unselect` jQuery handlers; select2.js now dispatches a native `change`, so one listener suffices.
         version.addEventListener("change", () => (version.value ? populate(version.value) : hide()));
         if (version.value) {
             populate(version.value);

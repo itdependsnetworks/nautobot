@@ -138,8 +138,6 @@ class VRFForm(NautobotModelForm, TenancyForm):
             ("VRF", ("name", "namespace", "rd", "status", "description")),
             ("Devices", ("devices",)),
             ("Virtual Machines", ("virtual_machines",)),
-            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `virtual_device_contexts` is now
-            # on the page; the old template omitted it although the form had the field.
             ("Virtual Device Contexts", ("virtual_device_contexts",)),
             ("Prefixes", ("prefixes",)),
             ("Route Targets", ("import_targets", "export_targets")),

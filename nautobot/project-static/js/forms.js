@@ -21,9 +21,6 @@ function slugify(s, num_chars) {
 *  JS-ify Inputs
 */
 
-// NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `jsify_form` is called with a sub-element
-// (a formset row via `added: jsify_form`, a RemoteFragment after an HTMX swap), and elements have no
-// `getElementById`. Element ids are document-global, so resolve them on the document whatever the context.
 function getFieldById(context, elementId) {
     const root = context && typeof context.getElementById === "function" ? context : document;
     return root.getElementById(elementId);

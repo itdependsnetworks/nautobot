@@ -3,7 +3,6 @@ Default body for a `FormSetPanel`: the formset rendered as a table, one row per 
 attributes on the table configure js/formset_panel.js (shipped by the panel's Media), which initializes
 `jquery.formset.js` on the `formset_row-<prefix>` rows: "Add another" button, per-row delete, `added: jsify_form`.
 {% endcomment %}
-{# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the data-nb-formset-* attributes are new. #}
 {% if formset.errors %}
     <div class="text-danger">
         Please correct the error(s) below:

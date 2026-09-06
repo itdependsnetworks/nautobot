@@ -129,8 +129,6 @@ class ClusterForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
     class Meta:
         model = Cluster
         fieldsets = (
-            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `devices` is now on the page; the
-            # old template omitted it although the form had the field (and saved it in `save()`).
             ("Cluster", ("name", "cluster_type", "cluster_group", "location", "devices")),
             Contributed("tenancy"),
             ("Comments", ("comments",)),

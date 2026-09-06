@@ -62,8 +62,6 @@ script that swaps the value widget when the metadata type changes.
             };
 
             if (metadataTypeSelect) {
-                // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the select2 -> native
-                // `change` bridge that used to sit here now lives in select2.js for every Select2 widget.
                 metadataTypeSelect.addEventListener("change", updateFieldVisibility);
                 updateFieldVisibility();
             }

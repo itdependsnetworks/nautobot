@@ -8,9 +8,6 @@ The form itself is laid out by `CustomFieldForm.Meta.fieldsets`, including the t
 validation rules and choices, the HTMX refresh of the scope filter (`RemoteFragment`) and the choices formset
 (`FormSetPanel`); this template only carries the page script that the dynamic filter form (filter_form.js) needs.
 {% endcomment %}
-{# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): removed from this block: the choices #}
-{# formset initialization (now done by FormSetPanel), the select2 -> htmx.trigger('change') bridge (select2.js now #}
-{# dispatches native change events) and initializeScopeFilter (RemoteFragment runs jsify_form after each swap). #}
 
 {% block javascript %}
     {{ block.super }}

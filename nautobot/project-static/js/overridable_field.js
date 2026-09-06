@@ -9,9 +9,6 @@
  * Checkboxes cannot be read-only and selects may not offer the default as an option, so those two are *disabled*
  * rather than read-only, and re-enabled at submit time so that the browser sends them. `JobEditForm.clean()`
  * reverts non-overridden properties on the server regardless.
- *
- * NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new file; the same logic used to be an
- * inline script in job_update.html keyed on `[id$=_override]` and a page-level `job_class_properties` JSON.
  */
 (function () {
     "use strict";

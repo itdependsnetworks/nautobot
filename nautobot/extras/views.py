@@ -1537,8 +1537,6 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
             context = self.get_scope_filter_context(model_class)
 
         # Render the inner HTML of the "Scope filter" `RemoteFragment` declared in CustomFieldForm.Meta.fieldsets.
-        # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): used to render the whole card
-        # (customfield_scope_filter_panel.html, deleted) for the widgets' `hx-select`.
         html = render_to_string(
             template_name="extras/inc/customfield_scope_filter.html",
             context=context,

@@ -100,8 +100,6 @@
                         </div>
                         <div class="card-body job_execution">
                             {% block schedule_form %}
-                                {# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): was `render_form`; #}
-                                {# the schedule rows now hide/show via `visible_if` declared on JobScheduleForm. #}
                                 {% render_form_layout schedule_form bare=True %}
                             {% endblock %}
                         </div>
@@ -173,9 +171,6 @@
                     run.classList.toggle('btn-primary', immediately);
                     run.classList.toggle('btn-warning', !immediately);
 
-                    // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): showing and hiding the
-                    // schedule rows is now `visible_if` on JobScheduleForm (form_visibility.js); only the
-                    // "required" marking, which the layout does not express, is still toggled here.
                     const markRequired = (selector, required) => {
                         const input = document.querySelector(selector);
                         const label = input?.parentElement.parentElement.querySelector('label');

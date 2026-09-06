@@ -743,9 +743,6 @@ class IncludedTemplate(FormComponent):
         return self._wrap(render_component_template(self.template_path, context, form=self.form, component=self))
 
 
-# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new component. Replaces the hand-written
-# `hx-*` widget attributes plus per-page `select2 -> htmx.trigger` bridging that the Custom Field scope filter used;
-# the ObjectMetadata value widget, Secret parameters form and cable type editor are later candidates.
 class RemoteFragment(FormComponent):
     """
     A region of the form that the server re-renders, over HTMX, whenever the watched fields change.
@@ -977,10 +974,6 @@ class FormPanel(FormComponent):
     server re-renders on demand holds a `RemoteFragment`.
     """
 
-    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): declared panels take slot weights
-    # 100, 200, ...; contributed panels sit at 5100+. On the eleven migrated forms whose old template placed the
-    # Custom Fields / Relationships / Notes / Tags cards *before* a trailing "Comments" card, Comments now comes
-    # first. Pinning with `Contributed(...)` would restore the old order per form.
     WEIGHT_TENANCY_PANEL = 5100
     WEIGHT_CUSTOM_FIELDS_PANEL = 5200
     WEIGHT_RELATIONSHIPS_PANEL = 5300
@@ -1149,9 +1142,6 @@ class FormSetPanel(FormPanel):
             `keep_field_values` and `component`.
     """
 
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `add_label`, `keep_field_values`, the
-    # `Media` declaration and `get_add_label()` are new; the seven templates that used to carry the
-    # `$('.formset_row-...').formset({...})` block were reduced to shims.
     add_label = None
     context_key = None
     keep_field_values = None
@@ -1417,8 +1407,6 @@ class FormLayout:
             panels = format_html_join("", "{}", ((panel.render(context),) for panel in self.panels))
         return format_html("{}{}", self.render_hidden_fields(), panels)
 
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new. Lets a page that already draws its
-    # own card (the job run page's "Job Schedule Type" card) use `visible_if` rows without nesting cards.
     def render_bare(self, context):
         """
         Render hidden fields followed by the *items* of every panel, in weight order, without the card chrome.

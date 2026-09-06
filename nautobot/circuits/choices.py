@@ -26,8 +26,6 @@ class CircuitStatusChoices(ChoiceSet):
 class CircuitSpeedChoices(ChoiceSet):
     """Common circuit speeds (Kbps), offered as suggestions beside the speed inputs on the circuit forms."""
 
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new. The same list used to be hard-coded
-    # in circuits/inc/speed_widget.html, rendered by the `SpeedField` layout item (both removed).
     SPEED_10M = 10_000
     SPEED_100M = 100_000
     SPEED_1G = 1_000_000

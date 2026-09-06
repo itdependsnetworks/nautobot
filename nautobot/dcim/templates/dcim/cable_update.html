@@ -7,9 +7,6 @@
 {% block javascript %}
     {{ block.super }}
     <script>
-        // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the select2 -> htmx.trigger('change')
-        // bridge for `#id_cable_type` and the `*_type` selects was removed; select2.js now dispatches a native
-        // `change` for every Select2 widget, which `hx-trigger="change"` observes directly.
         // Re-initialize Select2 on swapped-in content. We use `htmx:afterSettle` (rather than
         // `htmx:afterSwap`) so HTMX has finished walking the swapped nodes for hx-* attribute
         // processing before select2 init runs — running select2 init too early can leave the

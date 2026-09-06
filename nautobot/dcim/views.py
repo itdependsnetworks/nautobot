@@ -4297,9 +4297,6 @@ class ModuleUIViewSet(BulkComponentCreateUIViewSetMixin, NautobotUIViewSet):
             context["modulebay_count"] = instance.module_bays.count()
             populated_module_count = instance.module_bays.filter(installed_module__isnull=False).count()
             context["module_count"] = f"{populated_module_count}/{context['modulebay_count']}"
-        # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `_get_edit_view_active_parent_tab`
-        # (which built a second ModuleForm per request to pick the open tab) was removed; `ModuleForm.Meta.fieldsets`
-        # TabbedGroups opens on the first tab whose field carries a value.
         return context
 
     @action(

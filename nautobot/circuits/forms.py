@@ -173,9 +173,6 @@ class CircuitTypeFilterForm(NautobotFilterForm):
 #
 
 
-# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the `SpeedField` layout item (own row
-# template + js/speed_widget.js via Media) was removed; the speed inputs use the existing `NumberWithSelect` widget
-# with `CircuitSpeedChoices`, exactly as the interface speed field does. The layout no longer ships any Media here.
 class CircuitForm(NautobotModelForm, TenancyForm):
     provider = DynamicModelChoiceField(queryset=Provider.objects.all())
     circuit_type = DynamicModelChoiceField(queryset=CircuitType.objects.all())

@@ -7,9 +7,6 @@ The form itself is laid out by `ControllerManagedDeviceGroupForm.Meta.fieldsets`
 formset, a `FormSetPanel`); this template only carries the page script that keeps `controller` in step with the
 selected parent group.
 {% endcomment %}
-{# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the wireless networks formset init moved #}
-{# into FormSetPanel; the `select2:select`/`select2:unselect` handlers below became plain `change` listeners #}
-{# because select2.js now dispatches native change events. #}
 
 {% block javascript %}
     {{ block.super }}

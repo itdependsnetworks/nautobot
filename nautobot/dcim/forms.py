@@ -2292,8 +2292,6 @@ class SoftwareImagePanel(FormPanel):
     `"software_version"` among its items; the list container is added for you.
     """
 
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the panel now inserts its own
-    # `IncludedTemplate` for the image list; the three forms using it no longer name it.
     image_list_template_path = "dcim/inc/software_image_list.html"
 
     class Media:
@@ -3607,8 +3605,6 @@ class InterfaceForm(InterfaceCommonForm, ModularComponentEditForm):
                 "Interface",
                 (
                     "device",
-                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `module_family` and
-                    # `module` are now on the page; the old template omitted them although the form had the fields.
                     "module_family",
                     "module",
                     "name",
@@ -3639,9 +3635,6 @@ class InterfaceForm(InterfaceCommonForm, ModularComponentEditForm):
                     "mode",
                     # Mirrors the model rules enforced in InterfaceCommonForm.clean(): an untagged VLAN applies to
                     # any mode, tagged VLANs only to "tagged" mode. Hidden fields are cleared, client- and server-side.
-                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `clear_on_hide` means
-                    # tagged VLANs submitted with access / tagged-all mode are now *discarded* server-side instead of
-                    # rejected with a validation error; two tests in dcim/tests/test_forms.py changed accordingly.
                     FormField("untagged_vlan", visible_if=When("mode", is_set=True), clear_on_hide=True),
                     FormField(
                         "tagged_vlans",
@@ -5586,8 +5579,6 @@ class PowerFeedForm(NautobotModelForm):
         fieldsets = (
             ("Power Panel", ("location", "power_panel", "destination_panel")),
             ("Power Feed", ("rack", "name", "status")),
-            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `power_path` is now on the page;
-            # the old template omitted it although the form had the field.
             ("Characteristics", ("type", "power_path", "supply", "voltage", "amperage", "phase", "max_utilization")),
             ("Circuit Breaker Configuration", ("breaker_position", "breaker_pole_count")),
             ("Comments", ("comments",)),
@@ -6213,9 +6204,6 @@ class ControllerForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
                 (
                     "external_integration",
                     # A controller runs on either a single device or a device redundancy group, never both.
-                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the first tab
-                    # ("Controller Device") is now active by default; the old template opened on the redundancy
-                    # group tab.
                     TabbedGroups(
                         ("Controller Device", ("controller_device",)),
                         ("Controller Device Redundancy Group", ("controller_device_redundancy_group",)),

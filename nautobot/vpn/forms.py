@@ -68,8 +68,6 @@ class VPNProfileForm(NautobotModelForm, TenancyForm):  # pylint: disable=too-man
             ),
             FormSetPanel("Phase 1 Policy Assignments", context_key="vpn_phase1_policies", add_label="Policy"),
             FormSetPanel("Phase 2 Policy Assignments", context_key="vpn_phase2_policies", add_label="Policy"),
-            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the Tenancy card is now on the
-            # page; the old template omitted it although the form mixes in TenancyForm.
             Contributed("tenancy"),
         )
         fields = [

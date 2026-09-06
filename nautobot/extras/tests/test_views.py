@@ -2335,8 +2335,6 @@ class CustomFieldTestCase(
         self.assertEqual(response.status_code, HTTPStatus.OK)
 
         response_content = response.content.decode(response.charset)
-        # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the endpoint now returns the inner
-        # HTML of the `RemoteFragment`, not the whole "Scope filter" card, so the container id is no longer present.
         self.assertNotIn("<strong>Scope filter</strong>", response_content)  # inner HTML only, no card
         self.assertInHTML("Please select content types first to load scope filter available fields.", response_content)
 

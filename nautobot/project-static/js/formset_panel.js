@@ -4,9 +4,6 @@
  * The panel's table carries `data-nb-formset-prefix`, `data-nb-formset-add-label` and, optionally,
  * `data-nb-formset-keep-field-values` (see components/form/formset_body.html). Shipped through the panel's `Media`
  * declaration, so a page template no longer needs its own `$('.formset_row-...').formset({...})` block.
- *
- * NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new file; replaces seven identical
- * per-template script blocks.
  */
 (function () {
     "use strict";

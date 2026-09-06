@@ -289,9 +289,6 @@
         roots.forEach((root) => {
             if (!root.nbVisibilityBound) {
                 root.nbVisibilityBound = true;
-                // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): was a jQuery `change`
-                // listener because Select2 only fired jQuery events; select2.js now re-dispatches those as native
-                // `change` events, so one native listener covers plain inputs and Select2 alike.
                 root.addEventListener("change", () => applyAll(root));
                 root.addEventListener("shown.bs.tab", () => applyAll(root));
             }

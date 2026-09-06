@@ -6,8 +6,6 @@ clear the control is locked and shows the job class default (the JSON script bel
 installed and exposes the property). Receives `field`, `override_field`, `has_default`, `default_value`,
 `default_script_id`.
 {% endcomment %}
-{# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): data-nb-overridable-* and the default #}
-{# JSON script are new; they replace the page-level `job_class_properties` json_script in job_update.html. #}
 
 <div class="mb-10 d-lg-flex justify-content-center{% if field.errors %} has-error{% endif %}"
      data-nb-overridable

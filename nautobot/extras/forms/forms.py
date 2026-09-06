@@ -610,9 +610,6 @@ class ConfigContextForm(FormLayoutMixin, BootstrapMixin, NoteModelFormMixin, for
 
     class Meta:
         model = ConfigContext
-        # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the Notes card now comes from
-        # NoteModelFormMixin's contributed panel and is gated on `extras.add_note` like every other form; the old
-        # template rendered it unconditionally.
         fieldsets = (
             ("Config Context", ("name", "weight", "description", "config_context_schema", "is_active")),
             (
@@ -844,8 +841,6 @@ class CustomFieldForm(FormLayoutMixin, BootstrapMixin, forms.ModelForm):
         label="Description",
         required=False,
     )
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the `hx-*` attrs that used to sit on this
-    # widget (and on `required`, in `__init__`) moved to the `RemoteFragment` in the "Scope filter" panel below.
     content_types = MultipleContentTypeField(
         feature="custom_fields",
         help_text="The object(s) to which this field applies.",
@@ -888,8 +883,6 @@ class CustomFieldForm(FormLayoutMixin, BootstrapMixin, forms.ModelForm):
             FormPanel(
                 "Validation Rules",
                 (
-                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the help text of the
-                    # min/max fields is now fixed; customfield_form.js used to reword it for numeric vs text types.
                     FormField(
                         "validation_minimum",
                         visible_if=When("type", in_=CustomFieldTypeChoices.MIN_MAX_TYPES),
@@ -1550,8 +1543,6 @@ class OverridableFormField(FormComponent):
         name (str): The property field; the override field is `f"{name}_override"`.
     """
 
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the `Media` declaration and the
-    # per-row default value are new; the script used to live in job_update.html keyed on `[id$=_override]`.
     name = None
     template_path = "extras/inc/overridable_field.html"
 
@@ -2099,8 +2090,6 @@ class JobScheduleForm(FormLayoutMixin, BootstrapMixin, forms.Form):
         help_text="Custom crontab syntax (* * * * *)",
     )
 
-    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `FormLayoutMixin` and `Meta.fieldsets`
-    # are new; job.html used to toggle these rows with `classList.toggle('d-none', ...)`.
     class Meta:
         fieldsets = (
             FormPanel(
