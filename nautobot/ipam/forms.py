@@ -20,6 +20,7 @@ from nautobot.core.forms import (
     TagFilterField,
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
+from nautobot.core.ui.object_form import Contributed
 from nautobot.dcim.form_mixins import (
     LocatableModelBulkEditFormMixin,
     LocatableModelFilterFormMixin,
@@ -79,6 +80,7 @@ IPADDRESS_MASK_LENGTH_CHOICES = add_blank_choice(
 class NamespaceForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
     class Meta:
         model = Namespace
+        fieldsets = (("Namespace", ("name", "description", "location")), Contributed("tenancy"))
         fields = ["name", "description", "tenant", "location", "tags"]
 
 
@@ -132,6 +134,17 @@ class VRFForm(NautobotModelForm, TenancyForm):
 
     class Meta:
         model = VRF
+        fieldsets = (
+            ("VRF", ("name", "namespace", "rd", "status", "description")),
+            ("Devices", ("devices",)),
+            ("Virtual Machines", ("virtual_machines",)),
+            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `virtual_device_contexts` is now
+            # on the page; the old template omitted it although the form had the field.
+            ("Virtual Device Contexts", ("virtual_device_contexts",)),
+            ("Prefixes", ("prefixes",)),
+            ("Route Targets", ("import_targets", "export_targets")),
+            Contributed("tenancy"),
+        )
         fields = [
             "name",
             "rd",
@@ -331,6 +344,12 @@ class PrefixForm(NautobotModelForm, TenancyForm, PrefixFieldMixin):
 
     class Meta:
         model = Prefix
+        fieldsets = (
+            ("Prefix", ("prefix", "namespace", "type", "status", "role", "rir", "date_allocated", "description")),
+            ("VRF Assignment", ("vrfs",)),
+            ("Location/VLAN Assignment", ("locations", "vlan_group", "vlan")),
+            Contributed("tenancy"),
+        )
         fields = [
             "prefix",
             "namespace",
@@ -956,6 +975,11 @@ class VLANForm(NautobotModelForm, TenancyForm):
 
     class Meta:
         model = VLAN
+        fieldsets = (
+            ("VLAN", ("vid", "name", "status", "role", "description")),
+            ("Assignment", ("locations", "vlan_group")),
+            Contributed("tenancy"),
+        )
         fields = [
             "locations",
             "vlan_group",

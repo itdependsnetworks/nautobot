@@ -44,6 +44,9 @@ from nautobot.core.forms import (
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from nautobot.core.forms.fields import LaxURLField
+from nautobot.core.ui.object_form import (
+    Contributed,
+)
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.extras.forms import (
     CustomFieldModelBulkEditFormMixin,
@@ -386,6 +389,26 @@ class LocationForm(NautobotModelForm, TenancyForm):
 
     class Meta:
         model = Location
+        fieldsets = (
+            (
+                "Location",
+                ("location_type", "parent", "name", "status", "facility", "asn", "time_zone", "description"),
+            ),
+            Contributed("tenancy"),
+            (
+                "Contact Info",
+                (
+                    "physical_address",
+                    "shipping_address",
+                    "latitude",
+                    "longitude",
+                    "contact_name",
+                    "contact_phone",
+                    "contact_email",
+                ),
+            ),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "location_type",
             "parent",

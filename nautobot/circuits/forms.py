@@ -11,7 +11,8 @@ from nautobot.core.forms import (
     TagFilterField,
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
-from nautobot.core.forms.widgets import StaticSelect2
+from nautobot.core.forms.widgets import NumberWithSelect, StaticSelect2
+from nautobot.core.ui.object_form import Contributed
 from nautobot.dcim.form_mixins import (
     LocatableModelBulkEditFormMixin,
     LocatableModelFilterFormMixin,
@@ -28,6 +29,7 @@ from nautobot.extras.forms import (
 from nautobot.tenancy.forms import TenancyFilterForm, TenancyForm
 from nautobot.tenancy.models import Tenant
 
+from .choices import CircuitSpeedChoices
 from .models import Circuit, CircuitTermination, CircuitType, Provider, ProviderNetwork
 
 #
@@ -171,6 +173,9 @@ class CircuitTypeFilterForm(NautobotFilterForm):
 #
 
 
+# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the `SpeedField` layout item (own row
+# template + js/speed_widget.js via Media) was removed; the speed inputs use the existing `NumberWithSelect` widget
+# with `CircuitSpeedChoices`, exactly as the interface speed field does. The layout no longer ships any Media here.
 class CircuitForm(NautobotModelForm, TenancyForm):
     provider = DynamicModelChoiceField(queryset=Provider.objects.all())
     circuit_type = DynamicModelChoiceField(queryset=CircuitType.objects.all())
@@ -178,6 +183,14 @@ class CircuitForm(NautobotModelForm, TenancyForm):
 
     class Meta:
         model = Circuit
+        fieldsets = (
+            (
+                "Circuit",
+                ("provider", "cid", "circuit_type", "status", "install_date", "commit_rate", "description"),
+            ),
+            Contributed("tenancy"),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "cid",
             "circuit_type",
@@ -197,6 +210,7 @@ class CircuitForm(NautobotModelForm, TenancyForm):
         }
         widgets = {
             "install_date": DatePicker(),
+            "commit_rate": NumberWithSelect(choices=CircuitSpeedChoices),
         }
 
 

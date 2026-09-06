@@ -1,15 +1,5 @@
 {% extends 'generic/object_create.html' %}
-{% load form_helpers %}
-
-{% block form %}
-    <div class="card">
-        <div class="card-header"><strong>Namespace</strong></div>
-        <div class="card-body">
-            {% render_field form.name %}
-            {% render_field form.description %}
-            {% render_field form.location %}
-        </div>
-    </div>
-    {% include 'inc/tenancy_form_panel.html' %}
-    {% include 'inc/extras_features_edit_form_fields.html' %}
-{% endblock %}
+{% comment %}
+The Namespace form is laid out by `NamespaceForm.Meta.fieldsets` (see nautobot/ipam/forms.py); this template intentionally
+adds nothing and remains only so that Apps extending it keep working.
+{% endcomment %}

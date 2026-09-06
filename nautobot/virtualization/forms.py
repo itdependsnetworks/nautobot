@@ -17,6 +17,7 @@ from nautobot.core.forms import (
     TagFilterField,
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
+from nautobot.core.ui.object_form import Contributed
 from nautobot.dcim.choices import InterfaceModeChoices
 from nautobot.dcim.constants import INTERFACE_MTU_MAX, INTERFACE_MTU_MIN
 from nautobot.dcim.form_mixins import (
@@ -127,6 +128,13 @@ class ClusterForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
 
     class Meta:
         model = Cluster
+        fieldsets = (
+            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `devices` is now on the page; the
+            # old template omitted it although the form had the field (and saved it in `save()`).
+            ("Cluster", ("name", "cluster_type", "cluster_group", "location", "devices")),
+            Contributed("tenancy"),
+            ("Comments", ("comments",)),
+        )
         fields = (
             "name",
             "cluster_type",
