@@ -12,6 +12,7 @@ from nautobot.core.forms import (
     TagFilterField,
 )
 from nautobot.core.forms.fields import JSONArrayFormField
+from nautobot.core.ui.object_form import FormSetPanel
 from nautobot.dcim.models import ControllerManagedDeviceGroup, Location
 from nautobot.extras.forms import NautobotBulkEditForm, NautobotFilterForm, NautobotModelForm, TagsBulkEditFormMixin
 from nautobot.extras.models import SecretsGroup
@@ -230,6 +231,29 @@ class SupportedDataRateBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm)
 class WirelessNetworkForm(NautobotModelForm):
     class Meta:
         model = WirelessNetwork
+        fieldsets = (
+            (
+                "Wireless Network",
+                (
+                    "name",
+                    "ssid",
+                    "description",
+                    "mode",
+                    "authentication",
+                    "secrets_group",
+                    "hidden",
+                    "enabled",
+                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `tenant` is now on the
+                    # page; the old template omitted it although the form had the field.
+                    "tenant",
+                ),
+            ),
+            FormSetPanel(
+                "Controller Managed Device Group Assignment",
+                context_key="controller_managed_device_groups",
+                add_label="Controller Managed Device Group",
+            ),
+        )
         fields = "__all__"
         field_order = [
             "ssid",

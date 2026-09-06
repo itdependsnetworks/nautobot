@@ -23,6 +23,7 @@ from nautobot.apps.forms import (
     TagsBulkEditFormMixin,
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
+from nautobot.core.ui.object_form import Contributed, FormSetPanel
 from nautobot.dcim.choices import InterfaceTypeChoices
 from nautobot.dcim.models import Device, Interface
 from nautobot.extras.models import DynamicGroup, SecretsGroup, Status
@@ -50,6 +51,27 @@ class VPNProfileForm(NautobotModelForm, TenancyForm):  # pylint: disable=too-man
         """Meta attributes."""
 
         model = models.VPNProfile
+        fieldsets = (
+            (
+                "VPN Profile",
+                (
+                    "name",
+                    "description",
+                    "role",
+                    "secrets_group",
+                    "keepalive_interval",
+                    "keepalive_retries",
+                    "keepalive_enabled",
+                    "nat_traversal",
+                    "extra_options",
+                ),
+            ),
+            FormSetPanel("Phase 1 Policy Assignments", context_key="vpn_phase1_policies", add_label="Policy"),
+            FormSetPanel("Phase 2 Policy Assignments", context_key="vpn_phase2_policies", add_label="Policy"),
+            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the Tenancy card is now on the
+            # page; the old template omitted it although the form mixes in TenancyForm.
+            Contributed("tenancy"),
+        )
         fields = [
             "name",
             "description",

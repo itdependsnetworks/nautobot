@@ -47,6 +47,7 @@ from nautobot.core.forms.widgets import ClearableFileInput
 from nautobot.core.ui.object_form import (
     FormField,
     FormLayoutMixin,
+    FormSetPanel,
 )
 from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, DeviceType, Location, Platform
 from nautobot.extras.choices import (
@@ -250,6 +251,7 @@ __all__ = (
 
 
 class ApprovalWorkflowDefinitionForm(
+    FormLayoutMixin,
     BootstrapMixin,
     CustomFieldModelFormMixin,
     NoteModelFormMixin,
@@ -276,6 +278,15 @@ class ApprovalWorkflowDefinitionForm(
         """Meta attributes."""
 
         model = ApprovalWorkflowDefinition
+        fieldsets = (
+            ("Approval Workflow Definition", ("name", "model_content_type", "model_constraints", "weight")),
+            FormSetPanel(
+                "Approval Workflow Stage Definitions",
+                context_key="stages",
+                add_label="Approval Workflow Stage",
+                keep_field_values='input[type="number"]',
+            ),
+        )
         fields = "__all__"
 
 
@@ -2124,6 +2135,16 @@ class MetadataTypeForm(NautobotModelForm):
 
     class Meta:
         model = MetadataType
+        fieldsets = (
+            ("Metadata Type", ("name", "description", "data_type")),
+            ("Assignment", ("content_types",)),
+            FormSetPanel(
+                "Choices (select and multi-select data types)",
+                context_key="choices",
+                add_label="Choice",
+                keep_field_values='input[type="number"]',
+            ),
+        )
         fields = (
             "name",
             "description",
@@ -2757,6 +2778,10 @@ class SecretsGroupForm(NautobotModelForm):
 
     class Meta:
         model = SecretsGroup
+        fieldsets = (
+            ("Secrets Group", ("name", "description")),
+            FormSetPanel("Secret Assignment", context_key="secrets", add_label="Secret"),
+        )
         fields = [
             "name",
             "description",

@@ -48,6 +48,7 @@ from nautobot.core.ui.object_form import (
     Contributed,
     FormField,
     FormPanel,
+    FormSetPanel,
     IncludedTemplate,
     InlineFields,
     Omitted,
@@ -6367,6 +6368,25 @@ class ControllerManagedDeviceGroupForm(NautobotModelForm, TenancyForm):
 
     class Meta:
         model = ControllerManagedDeviceGroup
+        fieldsets = (
+            (
+                "Controller",
+                (
+                    IncludedTemplate("dcim/inc/controllermanageddevicegroup_hidden_controller.html"),
+                    "controller",
+                    "name",
+                    "devices",
+                    "virtual_device_contexts",
+                    "parent",
+                    "capabilities",
+                    "weight",
+                    "radio_profiles",
+                    "description",
+                ),
+            ),
+            FormSetPanel("Wireless Network Assignment", context_key="wireless_networks", add_label="Wireless Network"),
+            Contributed("tenancy"),
+        )
         fields = (
             "controller",
             "name",

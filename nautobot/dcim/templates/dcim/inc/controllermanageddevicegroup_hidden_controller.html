@@ -1,0 +1,5 @@
+{% comment %}
+Hidden copy of the `controller` value, kept in sync by the page script: when a parent group is chosen the visible
+`controller` select is disabled (it follows the parent) and this copy carries the value on submit.
+{% endcomment %}
+{{ form.controller.as_hidden }}
