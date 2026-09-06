@@ -1,0 +1,12 @@
+{% comment %}
+A titled group of form fields. Markup intentionally matches the hand-written cards that model form templates
+have historically used, so that a form migrating to `Meta.fieldsets` renders the same page.
+{% endcomment %}
+<div class="card{% if css_class %} border-{{ css_class }}{% endif %}{% if extra_class %} {{ extra_class }}{% endif %}"{{ wrapper_attrs }}>
+    {% if label %}
+        <div class="card-header{% if css_class %} bg-{{ css_class }}-subtle border-{{ css_class }}{% endif %}"><strong>{{ label }}</strong></div>
+    {% endif %}
+    <div class="card-body">
+        {{ body }}
+    </div>
+</div>

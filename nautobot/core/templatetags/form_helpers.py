@@ -9,10 +9,20 @@ from nautobot.core.api.constants import NON_FILTER_QUERY_PARAMS
 register = template.Library()
 
 
-@register.inclusion_tag("utilities/render_field.html", takes_context=True)
-def render_field(context, field, bulk_nullable=False, container_class=None):
+def get_render_field_context(request, field, bulk_nullable=False, container_class=None, full_width=False):
     """
-    Render a single form field from template
+    Build the template context used by `utilities/render_field.html` to render a single bound form field.
+
+    Shared by the `{% render_field %}` template tag and by `nautobot.core.ui.object_form.FormField`, so that both
+    rendering paths emit identical markup (embedded create/search buttons, nullable toggles, errors, aria wiring).
+
+    Args:
+        request (HttpRequest or None): The current request, if any. Embedded create/search affordances are only
+            offered when a request with a user is available.
+        field (BoundField): The bound form field to render.
+        bulk_nullable (bool): Render the bulk-edit "Set null" checkbox alongside the field.
+        container_class (str or None): Extra CSS class for the field's container element.
+        full_width (bool): Render the control across the full row instead of the 3/9 label/control split.
     """
     field_instance = getattr(field, "field", None)
     embedded_create = getattr(field_instance, "embedded_create", False)
@@ -21,10 +31,14 @@ def render_field(context, field, bulk_nullable=False, container_class=None):
     # came from one of the embedded-action buttons (which set HX-Embedded-Action explicitly).
     # Plain HTMX swaps (e.g. dynamic field updates within a normal form) don't suppress the
     # embedded-action affordances on their fields.
-    is_embedded = context.request.headers.get("HX-Embedded-Action", "") in ("create", "search")
-    has_embedded_create_permissions = context.request.user.has_perms(
-        getattr(field_instance, "embedded_create_permissions", [])
-    )
+    if request is not None:
+        is_embedded = request.headers.get("HX-Embedded-Action", "") in ("create", "search")
+        has_embedded_create_permissions = request.user.has_perms(
+            getattr(field_instance, "embedded_create_permissions", [])
+        )
+    else:
+        is_embedded = False
+        has_embedded_create_permissions = False
 
     embedded_create_query_params = []
     embedded_search_query_params = []
@@ -72,7 +86,22 @@ def render_field(context, field, bulk_nullable=False, container_class=None):
         "embedded_search_query_string": urlencode(embedded_search_query_params),
         "embedded_search_content_type": embedded_search_content_type,
         "container_class": container_class,
+        "full_width": full_width,
     }
+
+
+@register.inclusion_tag("utilities/render_field.html", takes_context=True)
+def render_field(context, field, bulk_nullable=False, container_class=None, full_width=False):
+    """
+    Render a single form field from template
+    """
+    return get_render_field_context(
+        getattr(context, "request", None),
+        field,
+        bulk_nullable=bulk_nullable,
+        container_class=container_class,
+        full_width=full_width,
+    )
 
 
 @register.inclusion_tag("utilities/render_custom_fields.html")

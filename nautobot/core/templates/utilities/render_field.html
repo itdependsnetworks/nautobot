@@ -30,6 +30,25 @@ Hence the `id` attributes below; do not rename them without matching Django's na
             {% if field.help_text %}
                 <span class="form-text"{% if field.auto_id %} id="{{ field.auto_id }}_helptext"{% endif %}>{{ field.help_text|safe }}</span>
             {% endif %}
+    {% elif full_width %}
+        <div class="col-md-12">
+            {% comment %}
+            Full-width variant for large editor-style widgets (JSON editors, constraint builders, orderable lists):
+            the label sits above the control rather than beside it.
+            {% endcomment %}
+            <label class="form-label{% if field.field.required %} nb-required{% endif %}" for="{{ field.id_for_label }}">
+                {{ field.label }}
+            </label>
+            {{ field }}
+            {% if bulk_nullable %}
+                <div class="form-check mt-6">
+                    <input class="form-check-input" id="{{ field.id_for_label }}_nullify" name="_nullify" type="checkbox" value="{{ field.name }}">
+                    <label class="form-check-label" for="{{ field.id_for_label }}_nullify">Set null</label>
+                </div>
+            {% endif %}
+            {% if field.help_text %}
+                <span class="form-text"{% if field.auto_id %} id="{{ field.auto_id }}_helptext"{% endif %}>{{ field.help_text|safe }}</span>
+            {% endif %}
     {% elif field|widget_type == 'textarea' and not field.label %}
         <div class="col-md-12">
             {% comment %}
