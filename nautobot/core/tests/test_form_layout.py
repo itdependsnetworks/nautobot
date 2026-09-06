@@ -1,10 +1,14 @@
 """Tests for `nautobot.core.ui.object_form`: declarative form layout via `Meta.fieldsets`."""
 
+import importlib
+import inspect
 import json
 import re
 from types import SimpleNamespace
 
 from django import forms
+from django.apps import apps
+from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.forms import formset_factory, modelformset_factory
@@ -24,6 +28,7 @@ from nautobot.core.ui.object_form import (
     FieldGroup,
     FormField,
     FormLayout,
+    FormLayoutMixin,
     FormPanel,
     FormSetPanel,
     IncludedTemplate,
@@ -40,7 +45,7 @@ from nautobot.dcim.forms import ManufacturerForm, SoftwareImagePanel, SoftwareVe
 from nautobot.dcim.models import Device, Manufacturer, Platform
 from nautobot.extras.choices import CustomFieldTypeChoices, RelationshipTypeChoices
 from nautobot.extras.forms import NautobotModelForm
-from nautobot.extras.models import CustomField, Relationship
+from nautobot.extras.models import CustomField, Job as JobModel, Relationship
 
 
 def normalize_html(html):
@@ -1036,6 +1041,33 @@ class VisibleIfEnforcementTestCase(TestCase):
         self.assertEqual(form.cleaned_data["extra"], "e")
 
 
+class JobPagesLayoutTestCase(TestCase):
+    """The Job edit and run pages ship their behaviours through layout components rather than page scripts."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+    def test_edit_page_overridable_fields(self):
+        job = JobModel.objects.filter(installed=True).first()
+        self.assertIsNotNone(job, "an installed Job is required for this test")
+        response = self.client.get(reverse("extras:job_edit", kwargs={"pk": job.pk}))
+        self.assertHttpStatus(response, 200)
+        content = response.content.decode(response.charset)
+        # Each property row carries its own configuration and default; the script comes from the component's Media
+        self.assertIn('data-nb-overridable-field="id_name"', content)
+        self.assertIn('data-nb-overridable-override="id_name_override"', content)
+        self.assertIn('id="id_name_default"', content)
+        self.assertIn("js/overridable_field.js", content)
+        # Every property in `properties_dict` carries its default; `job_queues` is not one (the class exposes
+        # `task_queues` instead), so its row has no default script and the browser keeps the rendered selection
+        self.assertIn('id="id_dryrun_default_default"', content)
+        self.assertIn('data-nb-overridable-field="id_job_queues"', content)
+        self.assertNotIn('id="id_job_queues_default"', content)
+        self.assertNotIn("job_class_properties", content)
+
+
 class DeviceFormLayoutTestCase(TestCase):
     """`DeviceForm.Meta.fieldsets` reproduces the former hand-written template, including its conditional parts."""
 
@@ -1104,3 +1136,85 @@ class IPAddressFormLayoutTestCase(TestCase):
         # `nat_inside` sits after the tabs, outside any pane
         self.assertIn('id="id_nat_inside"', content)
         self.assertLess(content.index('id="id_nat_vrf"'), content.index('id="id_nat_inside"'))
+
+
+class DeclaredFieldsetsTestCase(TestCase):
+    """Every core form that declares `Meta.fieldsets` must resolve (rule 4: names are validated) and render."""
+
+    @staticmethod
+    def declared_forms():
+        seen = set()
+        for app_config in apps.get_app_configs():
+            if not app_config.name.startswith("nautobot."):
+                continue
+            try:
+                module = importlib.import_module(f"{app_config.name}.forms")
+            except ImportError:
+                continue
+            for _, klass in inspect.getmembers(module, inspect.isclass):
+                if (
+                    klass not in seen
+                    and klass.__module__.startswith("nautobot.")
+                    and issubclass(klass, FormLayoutMixin)
+                    and FormLayout.declared_fieldsets(klass)
+                ):
+                    seen.add(klass)
+                    yield klass
+
+    def test_every_declared_layout_resolves_and_renders(self):
+        self.user.is_superuser = True
+        self.user.save()
+        request = RequestFactory().get("/")
+        request.user = self.user
+        count = 0
+        for form_class in sorted(self.declared_forms(), key=lambda klass: klass.__name__):
+            with self.subTest(form=form_class.__name__):
+                form = form_class()
+                layout = form.layout
+                self.assertTrue(layout.has_declared_panels)
+                # Plain (non-model) forms such as JobScheduleForm have neither an instance nor a model
+                model = getattr(getattr(form, "_meta", None), "model", None)
+                context = Context(
+                    {
+                        "request": request,
+                        "editing": True,
+                        "obj": getattr(form, "instance", None),
+                        "obj_type": model._meta.verbose_name if model is not None else form_class.__name__,
+                        "settings": settings,
+                    }
+                )
+                html = layout.render(context)
+                self.assertIn('class="card', html)
+                for name, field in form.fields.items():
+                    # Leading space: the `name` attribute itself, not `data-name` on a widget's dropdown entries
+                    needle = f' name="{form.add_prefix(name)}"'
+                    if field.widget.is_hidden:
+                        continue
+                    component = layout.claimed_component(name)
+                    if layout.is_claimed(name) and component is None:
+                        # `Omitted`: must not appear at all
+                        self.assertNotIn(needle, html, f"{name} is Omitted but was rendered")
+                        continue
+                    if not self.component_renders(layout, component, context):
+                        continue
+                    occurrences = html.count(needle)
+                    self.assertGreaterEqual(occurrences, 1, f"{name} was not rendered")
+                    if not isinstance(field.widget, (forms.RadioSelect, forms.CheckboxSelectMultiple)):
+                        allowed = self.DUPLICATE_NAME_ALLOWED.get(form_class.__name__, ())
+                        if name not in allowed:
+                            self.assertEqual(occurrences, 1, f"{name} was rendered {occurrences} times")
+                count += 1
+        self.assertGreaterEqual(count, 40, "expected the bulk of core model forms to declare fieldsets")
+
+    # Fields a form deliberately renders twice: the visible control plus a hidden copy a page script keeps in step.
+    DUPLICATE_NAME_ALLOWED = {"ControllerManagedDeviceGroupForm": ("controller",)}
+
+    @staticmethod
+    def component_renders(layout, component, context):
+        """Whether `component` and every panel enclosing it pass their `render_if` for this context."""
+        if component is None or not component.should_render(context):
+            return False
+        for panel in layout.panels:
+            if any(item is component for item in panel.iter_components()):
+                return panel.should_render(context)
+        return True

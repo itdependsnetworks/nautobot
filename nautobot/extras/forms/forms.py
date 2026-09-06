@@ -51,6 +51,7 @@ from nautobot.core.ui.object_form import (
     FormLayoutMixin,
     FormPanel,
     FormSetPanel,
+    IncludedTemplate,
     RemoteFragment,
     When,
 )
@@ -1613,6 +1614,32 @@ class JobEditForm(NautobotModelForm):
 
     class Meta:
         model = Job
+        fieldsets = (
+            FormPanel("Job Source", (IncludedTemplate("extras/inc/job_source_fields.html"),)),
+            (
+                "Job",
+                (
+                    "enabled",
+                    OverridableFormField("name"),
+                    OverridableFormField("grouping"),
+                    OverridableFormField("description"),
+                ),
+            ),
+            (
+                "Properties",
+                (
+                    OverridableFormField("console_log_default"),
+                    OverridableFormField("dryrun_default"),
+                    OverridableFormField("hidden"),
+                    OverridableFormField("soft_time_limit"),
+                    OverridableFormField("time_limit"),
+                    OverridableFormField("has_sensitive_variables"),
+                    OverridableFormField("job_queues"),
+                    OverridableFormField("default_job_queue"),
+                    OverridableFormField("is_singleton"),
+                ),
+            ),
+        )
         fields = [
             "enabled",
             "name_override",
