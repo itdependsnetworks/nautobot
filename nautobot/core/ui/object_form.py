@@ -17,6 +17,7 @@ from collections.abc import Mapping
 import copy
 from functools import cached_property
 import json
+import logging
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models
@@ -31,6 +32,8 @@ from nautobot.core.templatetags.helpers import hyperlinked_object
 from nautobot.core.ui.object_detail import Component
 from nautobot.core.ui.utils import render_component_template
 
+logger = logging.getLogger(__name__)
+
 __all__ = (
     "AllOf",
     "AnyOf",
@@ -43,6 +46,7 @@ __all__ = (
     "FormLayout",
     "FormLayoutMixin",
     "FormPanel",
+    "FormSetPanel",
     "IncludedTemplate",
     "InlineFields",
     "Not",
@@ -1027,6 +1031,83 @@ class _TrailingPanel(ContributedFieldsPanel):
         if model is not None:
             return capfirst(model._meta.verbose_name)
         return None
+
+
+class FormSetPanel(FormPanel):
+    """
+    A card containing a formset that the *view* constructed, rendered as a table of rows with an "Add another"
+    button and a delete button per row.
+
+    Constructing, validating and saving the formset remain the view's responsibility. The panel renders the rows
+    and initializes `jquery.formset.js` on them (through `js/formset_panel.js`, shipped via its `Media`), so the
+    page template needs no `javascript` block for it. Rows carry the `formset_row-<prefix>` class.
+
+    When the panel is hidden by `visible_if`, the browser reports zero forms in the formset's management inputs, so
+    the view constructs an empty formset and existing rows are left untouched (neither saved nor deleted). A formset
+    with `validate_min` would fail validation while hidden; do not combine the two.
+
+    Args:
+        label (str, optional): The card header.
+        context_key (str): Key under which the formset is found in the render context.
+
+    Keyword Args:
+        add_label (str, optional): Noun for the "Add another ..." button. Defaults to the formset model's
+            `verbose_name`, else the panel label.
+        keep_field_values (str, optional): CSS selector of inputs that keep their initial value in a newly added row
+            instead of being blanked (e.g. `'input[type="number"]'` so a new choice starts with the default weight).
+        row_template_path (str, optional): Custom template for the table; receives `formset`, `add_label`,
+            `keep_field_values` and `component`.
+    """
+
+    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `add_label`, `keep_field_values`, the
+    # `Media` declaration and `get_add_label()` are new; the seven templates that used to carry the
+    # `$('.formset_row-...').formset({...})` block were reduced to shims.
+    add_label = None
+    context_key = None
+    keep_field_values = None
+    row_template_path = None
+    body_template_path = "components/form/formset_body.html"
+
+    class Media:
+        js = ["js/formset_panel.js"]
+
+    def __init__(self, label=None, context_key=None, **kwargs):
+        if not isinstance(context_key, str) or not context_key:
+            raise TypeError("FormSetPanel() requires a context_key naming the formset in the render context")
+        kwargs["context_key"] = context_key
+        super().__init__(label, (), **kwargs)
+
+    @property
+    def has_content(self):
+        """Whether the panel would render anything; only known at render time, when the formset is in context."""
+        return True
+
+    def get_add_label(self, formset):
+        """Noun for the "Add another ..." button."""
+        if self.add_label:
+            return self.add_label
+        model = getattr(formset, "model", None)
+        if model is not None:
+            return capfirst(model._meta.verbose_name)
+        return self.label or "row"
+
+    def render(self, context):
+        context = _as_context(context)
+        if not self.should_render(context):
+            return ""
+        formset = context.get(self.context_key)
+        if formset is None:
+            logger.warning("FormSetPanel: no formset found in the render context under %r", self.context_key)
+            return ""
+        body = render_component_template(
+            self.row_template_path or self.body_template_path,
+            context,
+            formset=formset,
+            add_label=self.get_add_label(formset),
+            keep_field_values=self.keep_field_values,
+            component=self,
+        )
+        return self.render_card(context, body)
 
 
 #

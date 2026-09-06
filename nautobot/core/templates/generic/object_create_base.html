@@ -102,6 +102,8 @@
 
 {% block javascript %}
     {{ block.super }}
+    {# Before form.media: components such as FormSetPanel ship scripts that build on jquery.formset.js. #}
+    <script src="{% static 'jquery/jquery.formset.js' %}" onerror="nb.media.handleFailure(this)"></script>
     {{ form.media }}
     <script>
         (() => {
@@ -160,5 +162,4 @@
             window.nb.embeddedAction = { handleEnd, handleStart, targetFieldName: null };
         })();
     </script>
-    <script src="{% static 'jquery/jquery.formset.js' %}" onerror="nb.media.handleFailure(this)"></script>
 {% endblock %}

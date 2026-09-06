@@ -1,0 +1,64 @@
+{% comment %}
+Default body for a `FormSetPanel`: the formset rendered as a table, one row per form. The `data-nb-formset-*`
+attributes on the table configure js/formset_panel.js (shipped by the panel's Media), which initializes
+`jquery.formset.js` on the `formset_row-<prefix>` rows: "Add another" button, per-row delete, `added: jsify_form`.
+{% endcomment %}
+{# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the data-nb-formset-* attributes are new. #}
+{% if formset.errors %}
+    <div class="text-danger">
+        Please correct the error(s) below:
+        {% for subform in formset.forms %}
+            {% if subform.errors %}
+                {% for error in subform.errors.values %}{{ error }}{% endfor %}
+            {% endif %}
+        {% endfor %}
+    </div>
+{% endif %}
+{{ formset.non_field_errors }}
+<div class="overflow-auto">
+    <table class="table"
+           id="{{ formset.prefix }}"
+           data-nb-formset-prefix="{{ formset.prefix }}"
+           data-nb-formset-add-label="{{ add_label }}"
+           {% if keep_field_values %}data-nb-formset-keep-field-values="{{ keep_field_values }}"{% endif %}>
+        <caption class="visually-hidden">{{ component.label|default:add_label }}</caption>
+        {{ formset.management_form }}
+        {% for subform in formset.forms %}
+            {% if forloop.first %}
+                <thead>
+                    <tr>
+                        {% for field in subform.visible_fields %}
+                            <th scope="col">
+                                {% if field.help_text %}
+                                    <span data-bs-toggle="tooltip" data-bs-placement="top" title="{{ field.help_text }}">{{ field.label|capfirst }}</span>
+                                {% else %}
+                                    {{ field.label|capfirst }}
+                                {% endif %}
+                            </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+            {% endif %}
+            <tr class="formset_row-{{ formset.prefix }}">
+                {% for field in subform.visible_fields %}
+                    <td>
+                        {% if forloop.first %}
+                            {% for hidden in subform.hidden_fields %}
+                                {{ hidden }}
+                            {% endfor %}
+                        {% endif %}
+                        {{ field }}
+                        {% if field.errors %}
+                            <ul class="mb-0 mt-4"{% if field.auto_id %} id="{{ field.auto_id }}_error"{% endif %}>
+                                {% for error in field.errors %}
+                                    <!-- FORM-ERROR {{ field.name }}: {{ error }} -->
+                                    <li class="text-danger">{{ error }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    </td>
+                {% endfor %}
+            </tr>
+        {% endfor %}
+    </table>
+</div>

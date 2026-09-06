@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from django import forms
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.forms import formset_factory, modelformset_factory
 from django.template import Context, engines
 from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
@@ -24,6 +25,7 @@ from nautobot.core.ui.object_form import (
     FormField,
     FormLayout,
     FormPanel,
+    FormSetPanel,
     IncludedTemplate,
     InlineFields,
     Not,
@@ -640,6 +642,45 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIsInstance(included, IncludedTemplate)
         self.assertEqual(included.field_names, ())
         self.assertEqual(form.layout.panels[-1].field_names, ("description", "extra"))
+
+    def test_formset_panel(self):
+        class RowForm(forms.Form):
+            value = forms.CharField()
+
+        formset = formset_factory(RowForm, extra=2)(prefix="rows")
+        with self.assertRaises(TypeError):
+            FormSetPanel("Rows")
+        form = form_class_with_fieldsets((("Main", ("name",)), FormSetPanel("Rows", context_key="rows")))()
+        html = form.layout.render(self.context(rows=formset))
+        self.assertIn("<strong>Rows</strong>", html)
+        self.assertIn('name="rows-TOTAL_FORMS"', html)
+        self.assertEqual(html.count('class="formset_row-rows"'), 2)
+        # The panel initializes jquery.formset.js itself: configuration on the table, script via Media
+        self.assertIn('data-nb-formset-prefix="rows"', html)
+        self.assertIn('data-nb-formset-add-label="Rows"', html)  # no model: falls back to the panel label
+        self.assertNotIn("data-nb-formset-keep-field-values", html)
+        self.assertIn("js/formset_panel.js", str(form.media))
+        # Missing formset renders nothing rather than erroring, and says so in the log
+        with self.assertLogs("nautobot.core.ui.object_form", "WARNING"):
+            self.assertEqual(form.layout.panels[1].render(self.context()), "")
+        # A model formset labels its button after the model
+        model_formset = modelformset_factory(Manufacturer, fields=("name",), extra=1)(
+            prefix="m", queryset=Manufacturer.objects.none()
+        )
+        form = form_class_with_fieldsets((FormSetPanel("Makers", context_key="makers"),))()
+        html = form.layout.render(self.context(makers=model_formset))
+        self.assertIn('data-nb-formset-add-label="Manufacturer"', html)
+
+    def test_formset_panel_add_label_and_keep_field_values(self):
+        class RowForm(forms.Form):
+            value = forms.CharField()
+
+        formset = formset_factory(RowForm, extra=1)(prefix="rows")
+        panel = FormSetPanel("Rows", context_key="rows", add_label="Row", keep_field_values='input[type="number"]')
+        form = form_class_with_fieldsets((panel,))()
+        html = form.layout.render(self.context(rows=formset))
+        self.assertIn('data-nb-formset-add-label="Row"', html)
+        self.assertIn('data-nb-formset-keep-field-values="input[type=&quot;number&quot;]"', html)
 
     def test_software_image_panel_inserts_image_list(self):
         panel = SoftwareImagePanel("Software", ("platform", "software_version", "software_image_files"))

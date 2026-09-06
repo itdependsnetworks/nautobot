@@ -345,6 +345,10 @@ function initializeInputs(context) {
     if (window.initializeFormVisibility) {
         window.initializeFormVisibility(this_context)
     }
+    // Formset panels (components/form/formset_body.html) may arrive with swapped-in content too.
+    if (window.nb && window.nb.formsetPanel) {
+        window.nb.formsetPanel.initialize(this_context)
+    }
 
     window.nb.checkbox.initializeCheckboxes()
     window.nb.select2.initializeSelect2Fields(this_context)

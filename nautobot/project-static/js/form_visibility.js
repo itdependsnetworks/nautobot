@@ -135,6 +135,32 @@
         });
     }
 
+    // Django formset management inputs must always submit; when their formset is hidden, report zero forms instead.
+    const MANAGEMENT_RE = /-(TOTAL_FORMS|INITIAL_FORMS|MIN_NUM_FORMS|MAX_NUM_FORMS)$/;
+    const ZEROED_RE = /-(TOTAL_FORMS|INITIAL_FORMS)$/;
+
+    function isManagementInput(control) {
+        return control.type === "hidden" && MANAGEMENT_RE.test(control.name || "");
+    }
+
+    function syncManagementInputs(root) {
+        root.querySelectorAll(CONTROL_SELECTOR).forEach((control) => {
+            if (!isManagementInput(control) || !ZEROED_RE.test(control.name)) {
+                return;
+            }
+            const hidden = control.closest(HIDDEN_ANCESTOR_SELECTOR) !== null;
+            if (hidden) {
+                if (!Object.hasOwn(control.dataset, "nbOriginalValue")) {
+                    control.dataset.nbOriginalValue = control.value;
+                }
+                control.value = "0";
+            } else if (Object.hasOwn(control.dataset, "nbOriginalValue")) {
+                control.value = control.dataset.nbOriginalValue;
+                delete control.dataset.nbOriginalValue;
+            }
+        });
+    }
+
     function recordActiveTabs(root) {
         let cleared = false;
         root.querySelectorAll(".nb-form-tabbed-groups").forEach((group) => {
@@ -165,6 +191,9 @@
 
     function syncControls(root) {
         root.querySelectorAll(CONTROL_SELECTOR).forEach((control) => {
+            if (isManagementInput(control)) {
+                return;
+            }
             const shouldDisable = control.closest(HIDDEN_ANCESTOR_SELECTOR) !== null;
             if (shouldDisable) {
                 if (!control.disabled) {
@@ -220,6 +249,7 @@
                     cleared = true;
                 }
                 syncControls(root);
+                syncManagementInputs(root);
                 if (!cleared) {
                     break;
                 }
