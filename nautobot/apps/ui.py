@@ -73,6 +73,7 @@ from nautobot.core.ui.object_detail import (
     TextPanel,
 )
 from nautobot.core.ui.object_form import (
+    Contributed,
     ContributedFieldsPanel,
     FormComponent,
     FormField,
@@ -108,6 +109,7 @@ __all__ = (
     "Component",
     "ConnectedEndpointsPanel",
     "ConnectionPanel",
+    "Contributed",
     "ContributedFieldsPanel",
     "DataTablePanel",
     "DistinctViewTab",

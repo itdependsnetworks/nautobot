@@ -26,6 +26,7 @@ from nautobot.core.ui.object_detail import Component
 from nautobot.core.ui.utils import render_component_template
 
 __all__ = (
+    "Contributed",
     "ContributedFieldsPanel",
     "FormComponent",
     "FormField",
@@ -40,6 +41,30 @@ def _as_context(context):
     if isinstance(context, Context):
         return context
     return Context(context or {})
+
+
+#
+# Declaration-only helpers (not components)
+#
+
+
+class Contributed:
+    """
+    Reference to a panel contributed by a form mixin via its `form_panels` attribute.
+
+    At the top level of `Meta.fieldsets`, pins that contributed panel to this slot (overriding its default weight).
+    Inside `FormPanel.items`, splices that panel's not-yet-claimed fields into the enclosing panel instead.
+
+    Well-known names: `"tenancy"`, `"custom_fields"`, `"relationships"`, `"notes"`, `"dynamic_groups"`, `"tags"`.
+    """
+
+    def __init__(self, name):
+        if not isinstance(name, str) or not name:
+            raise TypeError("Contributed() requires a non-empty name")
+        self.name = name
+
+    def __repr__(self):
+        return f"Contributed({self.name!r})"
 
 
 #
@@ -367,7 +392,7 @@ class _TrailingPanel(ContributedFieldsPanel):
 
 def _coerce_toplevel(entry):
     """Apply top-level shorthand: `("Label", (...))` and the floor-plan `("Label", {"tabs": ...})` form."""
-    if isinstance(entry, FormPanel):
+    if isinstance(entry, (FormPanel, Contributed)):
         return entry
     if isinstance(entry, (tuple, list)) and len(entry) == 2 and isinstance(entry[0], (str, type(None))):
         label, spec = entry
@@ -386,7 +411,7 @@ def _coerce_item(item):
         return FormField(item)
     if isinstance(item, FormPanel):
         raise TypeError(f"{item!r} cannot be nested inside another panel")
-    if isinstance(item, FormComponent):
+    if isinstance(item, (FormComponent, Contributed)):
         return item
     if isinstance(item, (tuple, list)):
         raise TypeError(
@@ -461,6 +486,8 @@ class FormLayout:
     def bind_item(self, item):
         """Resolve one item inside a panel into a list of bound components (a `Contributed` splice may expand)."""
         item = _coerce_item(item)
+        if isinstance(item, Contributed):
+            return self._splice_contributed(item)
         return [item.bind(self)]
 
     def _contributed_declaration(self, name):
@@ -472,6 +499,12 @@ class FormLayout:
                 f"available: {sorted(self._contributed)}"
             )
         return declaration
+
+    def _splice_contributed(self, item):
+        """A `Contributed(name)` inside a panel: bind that panel's not-yet-claimed fields as plain rows here."""
+        declaration = self._contributed_declaration(item.name)
+        names = [name for name in declaration.discover_field_names(self.form) if not self.is_claimed(name)]
+        return [FormField(name).bind(self) for name in names]
 
     def _resolve(self):
         self._contributed = self._collect_contributed()
@@ -493,6 +526,10 @@ class FormLayout:
         for index, entry in enumerate(self.declared_fieldsets(type(self.form))):
             slot_weight = (index + 1) * 100
             entry = _coerce_toplevel(entry)
+            if isinstance(entry, Contributed):
+                self._contributed_declaration(entry.name)  # validates the name
+                pinned[entry.name] = slot_weight
+                continue
             bound.append(entry.bind(self, weight=entry.weight or slot_weight))
             self.has_declared_panels = True
         return bound, pinned

@@ -9,6 +9,7 @@ from nautobot.core.forms import (
     TagFilterField,
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
+from nautobot.core.ui.object_form import ContributedFieldsPanel, FormPanel
 from nautobot.extras.forms import (
     NautobotBulkEditForm,
     NautobotFilterForm,
@@ -102,6 +103,15 @@ class TenantFilterForm(NautobotFilterForm):
 
 
 class TenancyForm(forms.Form):
+    form_panels = (
+        ContributedFieldsPanel(
+            name="tenancy",
+            label="Tenancy",
+            fields=("tenant_group", "tenant"),
+            weight=FormPanel.WEIGHT_TENANCY_PANEL,
+        ),
+    )
+
     tenant_group = DynamicModelChoiceField(
         queryset=TenantGroup.objects.all(),
         required=False,

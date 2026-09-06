@@ -11,6 +11,7 @@ from django.urls import reverse
 from nautobot.circuits.forms import ProviderNetworkForm
 from nautobot.core.testing import TestCase
 from nautobot.core.ui.object_form import (
+    Contributed,
     ContributedFieldsPanel,
     FormField,
     FormLayout,
@@ -111,6 +112,23 @@ class FormLayoutResolutionTestCase(TestCase):
         self.assertLess(labels.index("Heavy"), labels.index("First"))
         self.assertLess(labels.index("First"), labels.index("Third"))
 
+    def test_contributed_pin(self):
+        """`Contributed(name)` at the top level moves a mixin panel into that slot."""
+        fieldsets = (("Main", ("name",)), Contributed("notes"), ("More", ("description",)))
+        layout = form_class_with_fieldsets(fieldsets)().layout
+        notes = layout.contributed_panels["notes"]
+        self.assertEqual(notes.weight, 200)
+        self.assertEqual(notes.field_names, ("object_note",))
+        labels = self.panel_labels(layout)
+        self.assertEqual(labels[:3], ["Main", "Notes", "More"])
+
+    def test_contributed_splice(self):
+        """`Contributed(name)` inside a panel splices the fields in; the contributed panel then has nothing left."""
+        fieldsets = (("Main", ("name", Contributed("notes"), "description")),)
+        layout = form_class_with_fieldsets(fieldsets)().layout
+        self.assertEqual(layout.panels[0].field_names, ("name", "object_note", "description"))
+        self.assertFalse(layout.contributed_panels["notes"].has_content)
+
     def test_explicit_claim_beats_contributed_panel(self):
         fieldsets = (("Main", ("name", "object_note")),)
         layout = form_class_with_fieldsets(fieldsets)().layout
@@ -121,6 +139,10 @@ class FormLayoutResolutionTestCase(TestCase):
             form_class_with_fieldsets((("A", ("name",)), ("B", ("name",))))().layout  # pylint: disable=expression-not-assigned
         with self.assertRaisesRegex(ValueError, "unknown field 'nope'"):
             form_class_with_fieldsets((("A", ("nope",)),))().layout  # pylint: disable=expression-not-assigned
+        with self.assertRaisesRegex(ValueError, "unknown contributed panel 'nope'"):
+            form_class_with_fieldsets((("A", ("name",)), Contributed("nope")))().layout  # pylint: disable=expression-not-assigned
+        with self.assertRaisesRegex(ValueError, "unknown contributed panel 'nope'"):
+            form_class_with_fieldsets((("A", ("name", Contributed("nope"))),))().layout  # pylint: disable=expression-not-assigned
 
     def test_component_declaration_validation(self):
         with self.assertRaises(TypeError):
@@ -181,6 +203,11 @@ class FormLayoutResolutionTestCase(TestCase):
         self.assertEqual(layout.contributed_panels["custom_fields"].field_names, ("cf_layout_test",))
         self.assertEqual(layout.contributed_panels["relationships"].field_names, ("cr_mfr_platforms__destination",))
         self.assertNotIn("cf_layout_test", layout.panels[-1].field_names)
+
+        # Spliced into an explicit panel
+        layout = form_class_with_fieldsets((("Main", ("name", Contributed("custom_fields"))),))().layout
+        self.assertEqual(layout.panels[0].field_names, ("name", "cf_layout_test"))
+        self.assertFalse(layout.contributed_panels["custom_fields"].has_content)
 
         # Named explicitly by its runtime name
         layout = form_class_with_fieldsets((("Main", ("name", "cf_layout_test")),))().layout
