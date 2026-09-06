@@ -529,6 +529,13 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertNotIn('for="id_name"', html)
         self.assertIn("justify-content-center nb-wide", html)
 
+    def test_field_as_hidden(self):
+        fieldsets = (("Main", ("name", FormField("description", as_hidden=True))),)
+        html = form_class_with_fieldsets(fieldsets)().layout.render(self.context())
+        self.assertIn('type="hidden" name="description"', html)
+        self.assertEqual(html.count('name="description"'), 1)
+        self.assertNotIn('for="id_description"', html)
+
     def test_static_field(self):
         fieldsets = (
             (

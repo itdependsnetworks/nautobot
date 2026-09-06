@@ -520,8 +520,10 @@ class FormField(FormComponent):
         template_path (str, optional): Render the row from this template instead of the standard one. The template
             receives `field` (the bound field), `form` and `component`. For rows whose markup genuinely differs
             (an input group with a dropdown, a tabbed editor around one field).
+        as_hidden (bool, optional): Render the field as a hidden input, in place, regardless of its widget.
     """
 
+    as_hidden = False
     container_class = None
     full_width = False
     help_text = None
@@ -563,6 +565,8 @@ class FormField(FormComponent):
         if not self.should_render(context):
             return ""
         bound_field = self.form[self.name]
+        if self.as_hidden:
+            return bound_field.as_hidden()
         if bound_field.is_hidden:
             # Hidden fields are emitted once by the layout itself, outside of any panel.
             return ""
