@@ -533,6 +533,13 @@ class FormLayout:
             panels = format_html_join("", "{}", ((panel.render(context),) for panel in self.panels))
         return format_html("{}{}", self.render_hidden_fields(), panels)
 
+    def render_panels(self, context, names):
+        """Render only the named contributed panels. Used by the deprecated `extras_features_edit_form_fields.html`."""
+        context = _as_context(context)
+        panels = self.contributed_panels
+        with context.update({"form": self.form}):
+            return format_html_join("", "{}", ((panels[name].render(context),) for name in names if name in panels))
+
 
 class FormLayoutMixin:
     """

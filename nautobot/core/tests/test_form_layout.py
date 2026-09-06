@@ -4,7 +4,7 @@ import re
 
 from django import forms
 from django.contrib.contenttypes.models import ContentType
-from django.template import Context
+from django.template import Context, engines
 from django.test import RequestFactory
 
 from nautobot.core.testing import TestCase
@@ -25,6 +25,11 @@ def normalize_html(html):
     html = re.sub(r"\s+", " ", str(html))
     html = re.sub(r">\s+<", "><", html)
     return html.strip()
+
+
+def render_string(template_string, context, request):
+    """Render a template string with the full set of context processors (so `perms` etc. are available)."""
+    return engines["django"].from_string(template_string).render(context, request=request)
 
 
 class ManufacturerLayoutForm(NautobotModelForm):
@@ -234,6 +239,14 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIn('class="form-label" for="id_description"', html)
         self.assertIn('class="col-md-3 col-form-label nb-required" for="id_name"', html)
         self.assertEqual(form["name"].label, "Vendor")
+
+    def test_render_form_layout_tag_default_label(self):
+        html = render_string(
+            '{% load form_helpers %}{% render_form_layout form "job data" %}',
+            {"form": ManufacturerLayoutForm()},
+            self.request,
+        )
+        self.assertIn("<strong>Job data</strong>", html)
 
 
 class ContributedFieldsPanelTestCase(TestCase):

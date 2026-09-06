@@ -104,6 +104,42 @@ def render_field(context, field, bulk_nullable=False, container_class=None, full
     )
 
 
+@register.simple_tag(takes_context=True)
+def render_form_layout(context, form, default_label=None):
+    """
+    Render a form according to its resolved layout (`Meta.fieldsets` plus mixin-contributed panels).
+
+    Hidden fields are emitted first, followed by each panel in weight order. Fields not claimed by any panel are
+    collected into a trailing panel, so nothing is silently dropped.
+
+    Args:
+        form (FormLayoutMixin): A form exposing `layout`.
+        default_label (str, optional): Header for the trailing panel when the form declares no panels of its own
+            (defaults to the `obj_type` in the render context, then the model's verbose name).
+    """
+    layout = form.layout
+    layout.default_label = default_label
+    return layout.render(context)
+
+
+@register.simple_tag(takes_context=True)
+def render_contributed_panels(context, form, names):
+    """
+    Render only the named mixin-contributed panels of a form's layout.
+
+    Exists so that templates which still hand-render their fields can include the shared panels (custom fields,
+    relationships, notes, dynamic groups, tags) from the same single source of truth as `render_form_layout`.
+
+    Args:
+        form (Form): The form; forms without a `layout` render nothing.
+        names (str): Comma-separated contributed panel names, e.g. `"custom_fields,relationships,tags"`.
+    """
+    layout = getattr(form, "layout", None)
+    if layout is None:
+        return ""
+    return layout.render_panels(context, [name.strip() for name in names.split(",") if name.strip()])
+
+
 @register.inclusion_tag("utilities/render_custom_fields.html")
 def render_custom_fields(form):
     """
