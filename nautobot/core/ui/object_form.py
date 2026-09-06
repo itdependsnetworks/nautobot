@@ -34,6 +34,7 @@ __all__ = (
     "Condition",
     "Contributed",
     "ContributedFieldsPanel",
+    "FieldGroup",
     "FormComponent",
     "FormField",
     "FormLayout",
@@ -41,6 +42,7 @@ __all__ = (
     "FormPanel",
     "InlineFields",
     "Not",
+    "TabbedGroups",
     "When",
 )
 
@@ -338,6 +340,17 @@ class Contributed:
         return f"Contributed({self.name!r})"
 
 
+class FieldGroup:
+    """One tab within a `TabbedGroups` item. A declaration only; not itself a component."""
+
+    def __init__(self, label, items=()):
+        self.label = label
+        self.items = tuple(items)
+
+    def __repr__(self):
+        return f"FieldGroup({self.label!r}, {self.items!r})"
+
+
 #
 # Components
 #
@@ -600,6 +613,133 @@ class InlineFields(FormComponent):
         )
 
 
+class TabbedGroups(FormComponent):
+    """
+    Two or more groups of fields under tabs, for mutually exclusive ways of filling in the same thing.
+
+    The initially active tab is the first one whose fields carry a value, falling back to the first tab.
+
+    Args:
+        *groups (FieldGroup): The tabs. A `("Label", (items...))` tuple is accepted as shorthand for a `FieldGroup`.
+
+    Keyword Args:
+        clear_inactive (bool, optional): Treat the tabs as mutually exclusive: switching tabs clears what was
+            entered on the tab being left, and on the server the inactive tabs' fields are cleared rather than merely
+            ignored. Default `False` (the inactive tabs' submitted values are ignored, existing values kept).
+    """
+
+    clear_inactive = False
+    groups = ()
+    template_path = "components/form/tabbed_groups.html"
+
+    def __init__(self, *groups, **kwargs):
+        if len(groups) < 2:
+            raise TypeError("TabbedGroups() requires at least two groups")
+        coerced = []
+        for group in groups:
+            if isinstance(group, FieldGroup):
+                coerced.append(group)
+            elif isinstance(group, (tuple, list)) and len(group) == 2 and isinstance(group[0], str):
+                coerced.append(FieldGroup(group[0], group[1]))
+            else:
+                raise TypeError(
+                    f"TabbedGroups() groups must be FieldGroup instances or (label, items) tuples; got {group!r}"
+                )
+        kwargs["groups"] = tuple(coerced)
+        super().__init__(**kwargs)
+        self._bound_groups = ()
+
+    @property
+    def field_names(self):
+        return tuple(name for _, items in self._bound_groups for item in items for name in item.field_names)
+
+    def _bind_children(self, layout):
+        self._bound_groups = tuple(
+            (group.label, tuple(bound for item in group.items for bound in layout.bind_item(item)))
+            for group in self.groups
+        )
+
+    def iter_components(self):
+        yield self
+        for _, items in self._bound_groups:
+            for item in items:
+                yield from item.iter_components()
+
+    @property
+    def active_tab_input_name(self):
+        """
+        Name of the hidden input that records which tab is active.
+
+        The browser keeps it current as the user switches tabs; on submit the server uses it to treat the fields of
+        the inactive tabs as hidden (not required, submitted values ignored). Absent from the submitted data, no
+        tab is treated as inactive.
+        """
+        return self.form.add_prefix(f"_nb_active_tab_{self.component_id[:10]}")
+
+    def _submitted_active_index(self, data):
+        if not data:
+            return None
+        try:
+            index = int(data.get(self.active_tab_input_name))
+        except (TypeError, ValueError):
+            return None
+        return index if 0 <= index < len(self._bound_groups) else None
+
+    def _active_index(self):
+        """The initially active tab: the submitted one, else the first whose fields carry a value, else the first."""
+        submitted = self._submitted_active_index(self.form.data if self.form.is_bound else None)
+        if submitted is not None:
+            return submitted
+        for index, (_, items) in enumerate(self._bound_groups):
+            for item in items:
+                for name in item.field_names:
+                    if _normalize_value(self.form[name].value()) not in (None, []):
+                        return index
+        return 0
+
+    def inactive_field_names(self, data):
+        """Names of the fields in every tab other than the one `data` marks as active; empty when that is unknown."""
+        active = self._submitted_active_index(data)
+        if active is None:
+            return ()
+        return tuple(
+            name
+            for index, (_, items) in enumerate(self._bound_groups)
+            if index != active
+            for item in items
+            for name in item.field_names
+        )
+
+    def render(self, context):
+        context = _as_context(context)
+        if not self.should_render(context):
+            return ""
+        prefix = (self.form.auto_id or "id_%s").replace("%s", "").strip("_") or "id"
+        id_base = f"{prefix}-nbtab-{self.component_id[:10]}"
+        active = self._active_index()
+        tabs = []
+        for index, (label, items) in enumerate(self._bound_groups):
+            body = format_html_join("", "{}", ((item.render(context),) for item in items))
+            tabs.append(
+                {
+                    "id": f"{id_base}-{index}",
+                    "label": label,
+                    "body": body,
+                    "active": index == active,
+                }
+            )
+        return self._wrap(
+            render_component_template(
+                self.template_path,
+                context,
+                tabs=tabs,
+                active_index=active,
+                active_tab_input_name=self.active_tab_input_name,
+                clear_inactive=self.clear_inactive,
+            )
+        )
+
+
 class FormPanel(FormComponent):
     """
     A titled group of fields, rendered as a card.
@@ -769,12 +909,24 @@ class _TrailingPanel(ContributedFieldsPanel):
 #
 
 
+def _coerce_tabs_shorthand(label, spec):
+    """The nautobot-app-floor-plan `("Label", {"tabs": ((label, items), ...)})` form: a panel holding one TabbedGroups."""
+    unknown = set(spec) - {"tabs"}
+    if unknown:
+        raise TypeError(
+            f"Unsupported fieldset options {sorted(unknown)} for panel {label!r}; only 'tabs' is recognized"
+        )
+    return FormPanel(label, items=(TabbedGroups(*spec["tabs"]),))
+
+
 def _coerce_toplevel(entry):
     """Apply top-level shorthand: `("Label", (...))` and the floor-plan `("Label", {"tabs": ...})` form."""
     if isinstance(entry, (FormPanel, Contributed)):
         return entry
     if isinstance(entry, (tuple, list)) and len(entry) == 2 and isinstance(entry[0], (str, type(None))):
         label, spec = entry
+        if isinstance(spec, dict):
+            return _coerce_tabs_shorthand(label, spec)
         if isinstance(spec, (tuple, list)):
             return FormPanel(label, items=spec)
     if isinstance(entry, FormComponent):
@@ -792,6 +944,8 @@ def _coerce_item(item):
         raise TypeError(f"{item!r} cannot be nested inside another panel")
     if isinstance(item, (FormComponent, Contributed)):
         return item
+    if isinstance(item, FieldGroup):
+        raise TypeError("FieldGroup is only valid inside TabbedGroups")
     if isinstance(item, (tuple, list)):
         raise TypeError(
             f"Nested tuple {item!r} is not a valid item; use TabbedGroups for grouped fields within a panel"
@@ -1006,6 +1160,7 @@ class FormLayoutMixin:
             return {}
         hidden = {}
         self._collect_fields_hidden_by_conditions(hidden)
+        self._collect_fields_in_inactive_tabs(hidden)
         return {name: clear for name, clear in hidden.items() if name in self.fields}
 
     def _collect_fields_hidden_by_conditions(self, hidden):
@@ -1020,10 +1175,17 @@ class FormLayoutMixin:
                 continue
             # `clear_on_hide` may be set on the hidden component itself or on any field it contains.
             for leaf in component.iter_components():
-                if isinstance(leaf, FormPanel):
+                if isinstance(leaf, (FormPanel, TabbedGroups)):
                     continue
                 for name in leaf.field_names:
                     hidden[name] = hidden.get(name, False) or component.clear_on_hide or leaf.clear_on_hide
+
+    def _collect_fields_in_inactive_tabs(self, hidden):
+        """Add to `hidden` every field of a `TabbedGroups` tab other than the one the submission marks active."""
+        for component in self.layout.iter_components():
+            if isinstance(component, TabbedGroups):
+                for name in component.inactive_field_names(self.data):
+                    hidden[name] = hidden.get(name, False) or component.clear_inactive
 
     def _clean_fields(self):
         """

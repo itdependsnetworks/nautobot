@@ -20,12 +20,14 @@ from nautobot.core.ui.object_form import (
     Contributed,
     ContributedFieldsPanel,
     evaluate_render_if,
+    FieldGroup,
     FormField,
     FormLayout,
     FormPanel,
     InlineFields,
     Not,
     resolve_dotted_path,
+    TabbedGroups,
     When,
 )
 from nautobot.dcim.forms import ManufacturerForm, SoftwareVersionForm
@@ -255,6 +257,16 @@ class FormLayoutResolutionTestCase(TestCase):
         self.assertEqual(trailing.weight, FormPanel.WEIGHT_TRAILING_PANEL)
         self.assertEqual(trailing.field_names, ("extra",))
         self.assertEqual(trailing.get_label(self.context()), "Other")
+
+    def test_floor_plan_tabs_sugar(self):
+        fieldsets = (("Axes", {"tabs": (("X", ("name",)), ("Y", ("description",)))}),)
+        layout = form_class_with_fieldsets(fieldsets)().layout
+        panel = layout.panels[0]
+        self.assertEqual(panel.label, "Axes")
+        self.assertIsInstance(panel._bound_items[0], TabbedGroups)
+        self.assertEqual(panel.field_names, ("name", "description"))
+        with self.assertRaises(TypeError):
+            form_class_with_fieldsets((("Axes", {"columns": ()}),))().layout  # pylint: disable=expression-not-assigned
 
     def test_implicit_and_explicit_weights(self):
         fieldsets = (
@@ -487,6 +499,25 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertEqual(html.count('class="col-md-4"'), 2)
         self.assertIn("Two <em>inline</em>", html)
         self.assertIn("has-error", html)  # errors of every inline field are aggregated on the row
+
+    def test_tabbed_groups(self):
+        with self.assertRaises(TypeError):
+            TabbedGroups(FieldGroup("Only", ("name",)))
+        fieldsets = (
+            ("Main", (TabbedGroups(("By name", ("name",)), FieldGroup("By description", ("description",))), "extra")),
+        )
+        form_class = form_class_with_fieldsets(fieldsets)
+        html = form_class().layout.render(self.context())
+        self.assertIn('class="nav nav-tabs"', html)
+        self.assertIn(">By name<", html)
+        self.assertIn(">By description<", html)
+        self.assertIn('id="id_extra"', html)
+        # First tab is active by default...
+        self.assertRegex(html, r'nav-link active"\s+id="[^"]*-0-tab"')
+        self.assertIn('aria-selected="true"', html)
+        # ...but a tab whose field carries a value wins
+        html = form_class(initial={"description": "something"}).layout.render(self.context())
+        self.assertRegex(html, r'nav-link active"\s+id="[^"]*-1-tab"')
 
     def test_panel_markup_options(self):
         fieldsets = (
@@ -741,3 +772,63 @@ class VisibleIfEnforcementTestCase(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertNotIn("detail", form.cleaned_data)
         self.assertEqual(form.cleaned_data["scratch"], "")
+
+    def test_inactive_tab_fields_are_ignored(self):
+        class TabForm(ManufacturerLayoutForm):
+            class Meta(ManufacturerLayoutForm.Meta):
+                fieldsets = (("Main", ("name", TabbedGroups(("A", ("description",)), ("B", ("extra",))))),)
+
+        context = Context({"request": self.request})
+        unbound = TabForm()
+        tabs = unbound.layout.panels[0]._bound_items[1]
+        input_name = tabs.active_tab_input_name
+        self.assertTrue(input_name.startswith("_nb_active_tab_"))
+        html = unbound.layout.render(context)
+        self.assertIn(f'name="{input_name}" value="0" data-nb-active-tab', html)
+
+        # Tab B active: tab A's field is ignored, tab B's is kept, and tab B stays active on re-render
+        form = TabForm(data={"name": "Vendor", "description": "d", "extra": "e", input_name: "1"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn("description", form.cleaned_data)
+        self.assertEqual(form.cleaned_data["extra"], "e")
+        html = form.layout.render(context)
+        self.assertIn(f'name="{input_name}" value="1" data-nb-active-tab', html)
+        self.assertRegex(html, r'nav-link active"\s+id="[^"]*-1-tab"')
+
+        # Without the marker (no JavaScript), nothing is treated as inactive
+        form = TabForm(data={"name": "Vendor", "description": "d", "extra": "e"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["description"], "d")
+        self.assertEqual(form.cleaned_data["extra"], "e")
+
+        # An out-of-range marker is ignored too
+        form = TabForm(data={"name": "Vendor", "description": "d", "extra": "e", input_name: "7"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["description"], "d")
+
+    def test_clear_inactive_tab_fields_are_cleared_on_a_prefixed_form(self):
+        """With `clear_inactive`, the inactive tab's fields are cleared rather than ignored; prefixes are honoured."""
+
+        class ExclusiveTabForm(ManufacturerLayoutForm):
+            class Meta(ManufacturerLayoutForm.Meta):
+                fieldsets = (
+                    (
+                        "Main",
+                        ("name", TabbedGroups(("A", ("description",)), ("B", ("extra",)), clear_inactive=True)),
+                    ),
+                )
+
+        unbound = ExclusiveTabForm(prefix="p")
+        tabs = unbound.layout.panels[0]._bound_items[1]
+        input_name = tabs.active_tab_input_name
+        self.assertTrue(input_name.startswith("p-_nb_active_tab_"))
+        html = unbound.layout.render(Context({"request": self.request}))
+        self.assertIn('data-nb-clear-inactive="true"', html)
+        self.assertIn('id="id_p-description"', html)
+
+        form = ExclusiveTabForm(
+            prefix="p", data={"p-name": "Vendor", "p-description": "d", "p-extra": "e", input_name: "1"}
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["description"], "")  # cleared, not dropped
+        self.assertEqual(form.cleaned_data["extra"], "e")

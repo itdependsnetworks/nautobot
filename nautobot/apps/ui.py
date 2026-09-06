@@ -78,6 +78,7 @@ from nautobot.core.ui.object_form import (
     Condition,
     Contributed,
     ContributedFieldsPanel,
+    FieldGroup,
     FormComponent,
     FormField,
     FormLayout,
@@ -85,6 +86,7 @@ from nautobot.core.ui.object_form import (
     FormPanel,
     InlineFields,
     Not,
+    TabbedGroups,
     When,
 )
 from nautobot.core.ui.titles import Titles
@@ -127,6 +129,7 @@ __all__ = (
     "EChartsPanel",
     "EChartsThemeColors",
     "EChartsTypeChoices",
+    "FieldGroup",
     "FormButton",
     "FormComponent",
     "FormField",
@@ -164,6 +167,7 @@ __all__ = (
     "SectionChoices",
     "StatsPanel",
     "Tab",
+    "TabbedGroups",
     "TemplateExtension",
     "TextPanel",
     "Titles",

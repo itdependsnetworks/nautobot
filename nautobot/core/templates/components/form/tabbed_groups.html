@@ -1,0 +1,33 @@
+{% comment %}
+Mutually exclusive groups of fields under Bootstrap tabs. `tabs` is a list of dicts with `id`, `label`, `body`
+and `active`. Inactive panes are hidden with `display:none` by Bootstrap; the client-side form runtime additionally
+disables the controls inside inactive panes so they neither submit nor feed cross-field query narrowing.
+{% endcomment %}
+<div class="nb-form-tabbed-groups"{% if clear_inactive %} data-nb-clear-inactive="true"{% endif %}>
+    {# Kept current by form_visibility.js; lets the server treat the inactive tabs' fields as hidden. #}
+    <input type="hidden" name="{{ active_tab_input_name }}" value="{{ active_index }}" data-nb-active-tab>
+    <ul class="nav nav-tabs" role="tablist">
+        {% for tab in tabs %}
+            <li class="nav-item" role="presentation">
+                <a class="nav-link{% if tab.active %} active{% endif %}"
+                   id="{{ tab.id }}-tab"
+                   href="#{{ tab.id }}"
+                   aria-controls="{{ tab.id }}"
+                   aria-selected="{% if tab.active %}true{% else %}false{% endif %}"
+                   role="tab"
+                   data-bs-toggle="tab">{{ tab.label }}</a>
+            </li>
+        {% endfor %}
+    </ul>
+    <div class="tab-content">
+        {% for tab in tabs %}
+            <div class="tab-pane{% if tab.active %} active{% endif %}"
+                 id="{{ tab.id }}"
+                 role="tabpanel"
+                 aria-labelledby="{{ tab.id }}-tab"
+                 data-nb-form-tab-pane>
+                {{ tab.body }}
+            </div>
+        {% endfor %}
+    </div>
+</div>

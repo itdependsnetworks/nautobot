@@ -26,7 +26,7 @@
 
     const CONTROL_SELECTOR = "input, select, textarea";
     // A control inside any of these is hidden from the user and must neither submit nor take part in narrowing.
-    const HIDDEN_ANCESTOR_SELECTOR = "[data-nb-visible-if][hidden]";
+    const HIDDEN_ANCESTOR_SELECTOR = "[data-nb-visible-if][hidden], [data-nb-form-tab-pane]:not(.active)";
     // Values the browser (and Select2 in particular) uses to mean "nothing selected".
     const EMPTY_VALUES = new Set(["", "null"]);
     const FALSE_STRINGS = new Set(["", "0", "false", "off", "no", "null", "none"]);
@@ -110,7 +110,7 @@
 
     function clearControls(container) {
         container.querySelectorAll(CONTROL_SELECTOR).forEach((control) => {
-            if (control.type === "hidden") {
+            if (control.type === "hidden" || control.dataset.nbActiveTab !== undefined) {
                 return;
             }
             const isCheckable = control.type === "checkbox" || control.type === "radio";
@@ -133,6 +133,34 @@
             }
             control.dispatchEvent(new Event("change", { bubbles: true }));
         });
+    }
+
+    function recordActiveTabs(root) {
+        let cleared = false;
+        root.querySelectorAll(".nb-form-tabbed-groups").forEach((group) => {
+            const input = group.querySelector(":scope > input[data-nb-active-tab]");
+            if (!input) {
+                return;
+            }
+            const panes = [...group.querySelectorAll(":scope > .tab-content > [data-nb-form-tab-pane]")];
+            const active = panes.findIndex((pane) => pane.classList.contains("active"));
+            if (active < 0) {
+                return;
+            }
+            const previous = group.dataset.nbActiveIndex;
+            input.value = String(active);
+            group.dataset.nbActiveIndex = String(active);
+            // For mutually exclusive tabs, switching away from a tab discards what was entered on it.
+            if (group.dataset.nbClearInactive === "true" && previous !== undefined && previous !== String(active)) {
+                panes.forEach((pane, index) => {
+                    if (index !== active) {
+                        clearControls(pane);
+                        cleared = true;
+                    }
+                });
+            }
+        });
+        return cleared;
     }
 
     function syncControls(root) {
@@ -188,6 +216,9 @@
                         });
                     }
                 });
+                if (recordActiveTabs(root)) {
+                    cleared = true;
+                }
                 syncControls(root);
                 if (!cleared) {
                     break;
@@ -232,6 +263,7 @@
                 // listener because Select2 only fired jQuery events; select2.js now re-dispatches those as native
                 // `change` events, so one native listener covers plain inputs and Select2 alike.
                 root.addEventListener("change", () => applyAll(root));
+                root.addEventListener("shown.bs.tab", () => applyAll(root));
             }
             applyAll(root);
         });
