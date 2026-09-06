@@ -2306,6 +2306,10 @@ class CustomFieldTestCase(
 
         response_content = response.content.decode(response.charset)
         self.assertIn("nb-scope-filter-form-container", response_content)
+        # The RemoteFragment refreshes itself when content_types or required change, sending both values.
+        self.assertIn('hx-trigger="change from:#id_content_types, change from:#id_required"', response_content)
+        self.assertIn('hx-include="#id_content_types, #id_required"', response_content)
+        self.assertNotIn('hx-select="#nb-scope-filter-form-container"', response_content)
         self.assertInHTML('<select name="scope-location_type"', response_content)
         self.assertInHTML('<select name="scope-parent"', response_content)
 
@@ -2331,7 +2335,9 @@ class CustomFieldTestCase(
         self.assertEqual(response.status_code, HTTPStatus.OK)
 
         response_content = response.content.decode(response.charset)
-        self.assertIn("nb-scope-filter-form-container", response_content)
+        # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the endpoint now returns the inner
+        # HTML of the `RemoteFragment`, not the whole "Scope filter" card, so the container id is no longer present.
+        self.assertNotIn("<strong>Scope filter</strong>", response_content)  # inner HTML only, no card
         self.assertInHTML("Please select content types first to load scope filter available fields.", response_content)
 
     def test_scope_filter_fields_with_invalid_content_type(self):
@@ -2343,7 +2349,7 @@ class CustomFieldTestCase(
         self.assertEqual(response.status_code, HTTPStatus.OK)
 
         response_content = response.content.decode(response.charset)
-        self.assertIn("nb-scope-filter-form-container", response_content)
+        self.assertNotIn("<strong>Scope filter</strong>", response_content)  # inner HTML only, no card
         self.assertInHTML("Please select content types first to load scope filter available fields.", response_content)
         self.assertNotIn('<select name="scope-location_type"', response_content)
         self.assertNotIn('<select name="scope-parent"', response_content)
@@ -2358,7 +2364,7 @@ class CustomFieldTestCase(
         self.assertEqual(response.status_code, HTTPStatus.OK)
 
         response_content = response.content.decode(response.charset)
-        self.assertIn("nb-scope-filter-form-container", response_content)
+        self.assertNotIn("<strong>Scope filter</strong>", response_content)  # inner HTML only, no card
         # Check if tabs are present
         self.assertIn("Basic", response_content)
         self.assertIn("Advanced", response_content)
@@ -2375,7 +2381,7 @@ class CustomFieldTestCase(
         self.assertEqual(response.status_code, HTTPStatus.OK)
 
         response_content = response.content.decode(response.charset)
-        self.assertIn("nb-scope-filter-form-container", response_content)
+        self.assertNotIn("<strong>Scope filter</strong>", response_content)  # inner HTML only, no card
         self.assertInHTML("Scope filter can be set only for non-required custom fields.", response_content)
         self.assertNotIn('<select name="scope-location_type"', response_content)
         self.assertNotIn('<select name="scope-parent"', response_content)

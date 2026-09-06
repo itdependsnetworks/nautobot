@@ -1536,10 +1536,11 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
         if model_class and not required_checked:
             context = self.get_scope_filter_context(model_class)
 
-        # It's rendering the whole template, but due to `hx-swap-oob` in template
-        # HTMX will swap only part of the page
+        # Render the inner HTML of the "Scope filter" `RemoteFragment` declared in CustomFieldForm.Meta.fieldsets.
+        # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): used to render the whole card
+        # (customfield_scope_filter_panel.html, deleted) for the widgets' `hx-select`.
         html = render_to_string(
-            template_name=self.template_name,
+            template_name="extras/inc/customfield_scope_filter.html",
             context=context,
             request=request,
         )

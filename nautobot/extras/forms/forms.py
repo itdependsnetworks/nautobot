@@ -45,9 +45,13 @@ from nautobot.core.forms.fields import MultiValueCharField
 from nautobot.core.forms.forms import ConfirmationForm
 from nautobot.core.forms.widgets import ClearableFileInput
 from nautobot.core.ui.object_form import (
+    AnyOf,
     FormField,
     FormLayoutMixin,
+    FormPanel,
     FormSetPanel,
+    RemoteFragment,
+    When,
 )
 from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, DeviceType, Location, Platform
 from nautobot.extras.choices import (
@@ -55,6 +59,7 @@ from nautobot.extras.choices import (
     ButtonClassChoices,
     ComputedFieldTypeChoices,
     CustomFieldFilterLogicChoices,
+    CustomFieldTypeChoices,
     DynamicGroupTypeChoices,
     JobCancelTypeChoices,
     JobExecutionType,
@@ -821,7 +826,7 @@ class CustomFieldBulkEditForm(BootstrapMixin, NoteModelBulkEditFormMixin):
         ]
 
 
-class CustomFieldForm(BootstrapMixin, forms.ModelForm):
+class CustomFieldForm(FormLayoutMixin, BootstrapMixin, forms.ModelForm):
     label = forms.CharField(
         required=True, max_length=CHARFIELD_MAX_LENGTH, help_text="Name of the field as displayed to users."
     )
@@ -835,23 +840,85 @@ class CustomFieldForm(BootstrapMixin, forms.ModelForm):
         label="Description",
         required=False,
     )
+    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the `hx-*` attrs that used to sit on this
+    # widget (and on `required`, in `__init__`) moved to the `RemoteFragment` in the "Scope filter" panel below.
     content_types = MultipleContentTypeField(
         feature="custom_fields",
         help_text="The object(s) to which this field applies.",
-        widget=StaticSelect2Multiple(
-            attrs={
-                "hx-trigger": "change",
-                "hx-get": reverse_lazy("extras:customfield_scope_filter_fields"),
-                "hx-select": "#nb-scope-filter-form-container",
-                "hx-target": "#nb-scope-filter-form-container",
-                "hx-swap": "outerHTML",
-                "hx-include": "[name='required']",
-            }
-        ),
+        widget=StaticSelect2Multiple(),
     )
 
     class Meta:
         model = CustomField
+        fieldsets = (
+            (
+                "Custom Field",
+                (
+                    "label",
+                    "grouping",
+                    "key",
+                    "type",
+                    "weight",
+                    "description",
+                    "required",
+                    "default",
+                    "filter_logic",
+                    "advanced_ui",
+                ),
+            ),
+            ("Assignment", ("content_types",)),
+            # The scope filter's fields depend on the chosen content types, so the server re-renders them whenever
+            # `content_types` or `required` change; see CustomFieldUIViewSet.scope_filter_fields_for_content_types.
+            FormPanel(
+                "Scope filter",
+                (
+                    RemoteFragment(
+                        reverse_lazy("extras:customfield_scope_filter_fields"),
+                        watch=("content_types", "required"),
+                        template_path="extras/inc/customfield_scope_filter.html",
+                        attrs={"id": "nb-scope-filter-form-container"},
+                    ),
+                ),
+            ),
+            # Only the validation rules that apply to the selected type are shown; the others are cleared.
+            FormPanel(
+                "Validation Rules",
+                (
+                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the help text of the
+                    # min/max fields is now fixed; customfield_form.js used to reword it for numeric vs text types.
+                    FormField(
+                        "validation_minimum",
+                        visible_if=When("type", in_=CustomFieldTypeChoices.MIN_MAX_TYPES),
+                        clear_on_hide=True,
+                    ),
+                    FormField(
+                        "validation_maximum",
+                        visible_if=When("type", in_=CustomFieldTypeChoices.MIN_MAX_TYPES),
+                        clear_on_hide=True,
+                    ),
+                    FormField(
+                        "validation_regex",
+                        visible_if=When("type", in_=CustomFieldTypeChoices.REGEX_TYPES),
+                        clear_on_hide=True,
+                    ),
+                ),
+                visible_if=AnyOf(
+                    When("type", in_=CustomFieldTypeChoices.MIN_MAX_TYPES),
+                    When("type", in_=CustomFieldTypeChoices.REGEX_TYPES),
+                ),
+                attrs={"id": "nb-validation-rules-card"},
+            ),
+            FormSetPanel(
+                "Custom Field Choices",
+                context_key="choices",
+                add_label="Custom Field Choice",
+                keep_field_values='input[type="number"]',
+                visible_if=When(
+                    "type", in_=[CustomFieldTypeChoices.TYPE_SELECT, CustomFieldTypeChoices.TYPE_MULTISELECT]
+                ),
+                attrs={"id": "nb-custom-field-choices-card"},
+            ),
+        )
         fields = (
             "label",
             "grouping",
@@ -874,17 +941,6 @@ class CustomFieldForm(BootstrapMixin, forms.ModelForm):
 
         if self.initial.get("key"):
             self.fields["key"].disabled = True
-
-        self.fields["required"].widget.attrs.update(
-            {
-                "hx-trigger": "change",
-                "hx-get": reverse_lazy("extras:customfield_scope_filter_fields"),
-                "hx-select": "#nb-scope-filter-form-container",
-                "hx-target": "#nb-scope-filter-form-container",
-                "hx-swap": "outerHTML",
-                "hx-include": "[name='content_types']",
-            }
-        )
 
 
 class CustomFieldFilterForm(NautobotFilterForm):
