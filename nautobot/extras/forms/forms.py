@@ -44,6 +44,9 @@ from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from nautobot.core.forms.fields import MultiValueCharField
 from nautobot.core.forms.forms import ConfirmationForm
 from nautobot.core.forms.widgets import ClearableFileInput
+from nautobot.core.ui.object_form import (
+    FormField,
+)
 from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, DeviceType, Location, Platform
 from nautobot.extras.choices import (
     ApprovalWorkflowStateChoices,
@@ -2679,6 +2682,13 @@ class SecretForm(NautobotModelForm):
 
     class Meta:
         model = Secret
+        fieldsets = (
+            ("Secret", ("name", "description", "provider")),
+            (
+                "Parameters",
+                (FormField("parameters", template_path="extras/inc/secret_parameters_field.html"),),
+            ),
+        )
         fields = [
             "name",
             "description",

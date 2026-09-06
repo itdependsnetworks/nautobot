@@ -2238,6 +2238,19 @@ class PlatformForm(NautobotModelForm):
 
     class Meta:
         model = Platform
+        fieldsets = (
+            (
+                "Platform",
+                (
+                    "name",
+                    "manufacturer",
+                    FormField("network_driver", template_path="dcim/inc/platform_network_driver_field.html"),
+                    "napalm_driver",
+                    "napalm_args",
+                    "description",
+                ),
+            ),
+        )
         fields = [
             "name",
             "manufacturer",
