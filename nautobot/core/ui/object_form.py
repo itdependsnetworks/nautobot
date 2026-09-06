@@ -521,6 +521,8 @@ class FormField(FormComponent):
             receives `field` (the bound field), `form` and `component`. For rows whose markup genuinely differs
             (an input group with a dropdown, a tabbed editor around one field).
         as_hidden (bool, optional): Render the field as a hidden input, in place, regardless of its widget.
+        optional (bool, optional): Silently skip this item if the form has no such field, for fields a form adds
+            or removes conditionally in `__init__`.
     """
 
     as_hidden = False
@@ -528,6 +530,7 @@ class FormField(FormComponent):
     full_width = False
     help_text = None
     name = None
+    optional = False
 
     def __init__(self, name, **kwargs):
         if not isinstance(name, str) or not name:
@@ -1145,6 +1148,8 @@ class FormLayout:
             return self._splice_contributed(item)
         if isinstance(item, Omitted):
             return self._claim_omitted(item)
+        if isinstance(item, FormField) and item.optional and item.name not in self.form.fields:
+            return []
         return [item.bind(self)]
 
     def _contributed_declaration(self, name):

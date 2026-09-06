@@ -345,6 +345,15 @@ class FormLayoutResolutionTestCase(TestCase):
         with self.assertRaises(TypeError):
             Omitted()
 
+    def test_optional_field(self):
+        """`FormField(optional=True)` is skipped when the form has no such field; a plain name raises."""
+        layout = form_class_with_fieldsets((("Main", ("name", FormField("missing", optional=True))),))().layout
+        self.assertEqual(layout.panels[0].field_names, ("name",))
+        layout = form_class_with_fieldsets((("Main", ("name", FormField("description", optional=True))),))().layout
+        self.assertEqual(layout.panels[0].field_names, ("name", "description"))
+        with self.assertRaisesRegex(ValueError, "unknown field 'missing'"):
+            form_class_with_fieldsets((("Main", ("name", "missing")),))().layout  # pylint: disable=expression-not-assigned
+
     def test_invalid_shapes_raise(self):
         with self.assertRaises(TypeError):
             form_class_with_fieldsets(
