@@ -1,17 +1,9 @@
 {% extends 'generic/object_create.html' %}
 {% load form_helpers %}
-
-{% block form %}
-    <div class="card">
-        <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
-        <div class="card-body">
-            {% for field in form.visible_fields %}
-                {% render_field field %}
-            {% endfor %}
-        </div>
-    </div>
-    {% include 'inc/extras_features_edit_form_fields.html' %}
-{% endblock form %}
+{% comment %}
+The form renders through the default form layout (one card of all fields); this template only carries the page
+script that swaps the value widget when the metadata type changes.
+{% endcomment %}
 
 {% block javascript %}
     {{ block.super }}
@@ -70,14 +62,8 @@
             };
 
             if (metadataTypeSelect) {
-                if (window.jQuery) {
-                    window.jQuery(metadataTypeSelect).on(
-                        "select2:select select2:clear",
-                        () => {
-                            metadataTypeSelect.dispatchEvent(new Event("change", { bubbles: true }));
-                        },
-                    );
-                }
+                // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the select2 -> native
+                // `change` bridge that used to sit here now lives in select2.js for every Select2 widget.
                 metadataTypeSelect.addEventListener("change", updateFieldVisibility);
                 updateFieldVisibility();
             }

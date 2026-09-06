@@ -643,8 +643,16 @@ class InterfaceTestCase(NautobotTestCaseMixin, TestCase):
         interface = form.save()
         self.assertEqual(list(interface.tagged_vlans.all()), [self.vlan])
 
-    def test_interface_form_module_interface_access_mode_rejects_tagged_vlans(self):
-        """Assert that access mode still rejects tagged VLANs on an Interface with no parent Device."""
+    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): this test used to assert a validation
+    # *error* for tagged VLANs in access mode; the layout's `clear_on_hide` now discards them instead.
+    def test_interface_form_module_interface_access_mode_discards_tagged_vlans(self):
+        """
+        Assert that access mode discards tagged VLANs on an Interface with no parent Device.
+
+        `InterfaceForm.Meta.fieldsets` hides `tagged_vlans` (with `clear_on_hide`) unless the mode is "tagged", and
+        that condition is enforced server-side too: tagged VLANs submitted alongside access mode are cleared rather
+        than rejected, exactly as the browser would have cleared them.
+        """
         data = {
             "name": self.location_module_interface.name,
             "type": self.location_module_interface.type,
@@ -653,9 +661,10 @@ class InterfaceTestCase(NautobotTestCaseMixin, TestCase):
             "tagged_vlans": [self.vlan.pk],
         }
         form = InterfaceForm(data=data, instance=self.location_module_interface)
-        self.assertFalse(form.is_valid())
-        self.assertIn("mode", form.errors)
-        self.assertNotIn("tagged_vlans", form.errors)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertFalse(form.cleaned_data["tagged_vlans"])
+        interface = form.save()
+        self.assertFalse(interface.tagged_vlans.exists())
 
     def test_interface_create_form_module_in_bay_uses_parent_device_location(self):
         """Assert that a Module's parent Device location is used to validate tagged VLANs when device is blank."""
@@ -796,10 +805,13 @@ class InterfaceTestCase(NautobotTestCaseMixin, TestCase):
         self.assertTrue(form.is_valid())
         self.assertEqual(form.cleaned_data["tagged_vlans"], [])
 
-        # Access mode + tagged VLANs - invalid
+        # Access mode + tagged VLANs - valid, VLANs are discarded: the layout hides `tagged_vlans` for any mode other
+        # than "tagged" (see `InterfaceForm.Meta.fieldsets`), and hidden fields are cleared server-side as well.
+        # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): previously asserted form invalid.
         data.update({"mode": InterfaceModeChoices.MODE_ACCESS})
         form = InterfaceForm(data=data)
-        self.assertFalse(form.is_valid())
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertFalse(form.cleaned_data["tagged_vlans"])
 
     def test_interface_form_fields_and_blank(self):
         data = {

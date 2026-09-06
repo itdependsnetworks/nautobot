@@ -47,7 +47,9 @@ from nautobot.core.forms.fields import LaxURLField
 from nautobot.core.ui.object_form import (
     Contributed,
     FormField,
+    FormPanel,
     InlineFields,
+    When,
 )
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.extras.forms import (
@@ -3478,6 +3480,55 @@ class InterfaceForm(InterfaceCommonForm, ModularComponentEditForm):
             "tags",
             "status",
         ]
+        fieldsets = (
+            (
+                "Interface",
+                (
+                    "device",
+                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `module_family` and
+                    # `module` are now on the page; the old template omitted them although the form had the fields.
+                    "module_family",
+                    "module",
+                    "name",
+                    "label",
+                    "status",
+                    "role",
+                    "type",
+                    "port_type",
+                    "speed",
+                    "duplex",
+                    "enabled",
+                    "parent_interface",
+                    "breakout_position",
+                    "bridge",
+                    "lag",
+                    "mtu",
+                    "vrf",
+                    "virtual_device_contexts",
+                    "mac_address",
+                    "description",
+                    "mgmt_only",
+                    "ip_addresses",
+                ),
+            ),
+            FormPanel(
+                "802.1Q Switching",
+                (
+                    "mode",
+                    # Mirrors the model rules enforced in InterfaceCommonForm.clean(): an untagged VLAN applies to
+                    # any mode, tagged VLANs only to "tagged" mode. Hidden fields are cleared, client- and server-side.
+                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `clear_on_hide` means
+                    # tagged VLANs submitted with access / tagged-all mode are now *discarded* server-side instead of
+                    # rejected with a validation error; two tests in dcim/tests/test_forms.py changed accordingly.
+                    FormField("untagged_vlan", visible_if=When("mode", is_set=True), clear_on_hide=True),
+                    FormField(
+                        "tagged_vlans",
+                        visible_if=When("mode", eq=InterfaceModeChoices.MODE_TAGGED),
+                        clear_on_hide=True,
+                    ),
+                ),
+            ),
+        )
         widgets = {
             "type": StaticSelect2(),
             "mode": StaticSelect2(),
