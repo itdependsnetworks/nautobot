@@ -2,6 +2,7 @@ from django import forms
 from django.contrib.contenttypes.models import ContentType
 
 from nautobot.core.forms import DynamicModelChoiceField, DynamicModelMultipleChoiceField
+from nautobot.core.ui.object_form import FormField
 from nautobot.extras.models import Role, Status
 from nautobot.extras.models.contacts import Contact, ContactAssociation, Team
 
@@ -95,6 +96,18 @@ class ObjectNewContactForm(NautobotModelForm):
             "role",
             "status",
         ]
+        fieldsets = (
+            ("Contact", ("name", "phone", "email", "address", "teams", "comments")),
+            (
+                "Contact Association",
+                (
+                    "role",
+                    "status",
+                    FormField("associated_object_type", as_hidden=True),
+                    FormField("associated_object_id", as_hidden=True),
+                ),
+            ),
+        )
 
     def save(self, *args, **kwargs):
         """
@@ -141,6 +154,18 @@ class ObjectNewTeamForm(NautobotModelForm):
             "role",
             "status",
         ]
+        fieldsets = (
+            ("Team", ("name", "phone", "email", "address", "contacts", "comments")),
+            (
+                "Contact Association",
+                (
+                    "role",
+                    "status",
+                    FormField("associated_object_type", as_hidden=True),
+                    FormField("associated_object_id", as_hidden=True),
+                ),
+            ),
+        )
 
 
 class ContactAssociationForm(NautobotModelForm):

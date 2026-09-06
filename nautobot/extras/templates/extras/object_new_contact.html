@@ -1,33 +1,13 @@
 {% extends 'generic/object_create.html' %}
 {% load form_helpers %}
 {% load helpers %}
+{% comment %}
+The form itself is laid out by `ObjectNewContactForm.Meta.fieldsets`; this template only exists for the
+contact/team/assign tab header above the form.
+{% endcomment %}
 
 {% block tabs %}
     {% if not editing %}
         {% include 'extras/inc/object_contact_header.html' with active_tab='contact' %}
     {% endif %}
-{% endblock %}
-
-{% block form %}
-    <div class="card">
-        <div class="card-header"><strong>Contact</strong></div>
-        <div class="card-body">
-            {% render_field form.name %}
-            {% render_field form.phone %}
-            {% render_field form.email %}
-            {% render_field form.address %}
-            {% render_field form.teams %}
-            {% render_field form.comments %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header"><strong>Contact Association</strong></div>
-        <div class="card-body">
-            {% render_field form.role %}
-            {% render_field form.status %}
-            {% render_field form.associated_object_type.as_hidden %}
-            {% render_field form.associated_object_id.as_hidden %}
-        </div>
-    </div>
-    {% include 'inc/extras_features_edit_form_fields.html' %}
 {% endblock %}
