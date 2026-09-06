@@ -46,6 +46,7 @@ from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from nautobot.core.forms.fields import LaxURLField
 from nautobot.core.ui.object_form import (
     Contributed,
+    FormField,
 )
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.extras.forms import (
@@ -6309,6 +6310,22 @@ class VirtualDeviceContextForm(NautobotModelForm):
 
     class Meta:
         model = VirtualDeviceContext
+        fieldsets = (
+            ("Virtual Device Context", ("name", "device", "role", "interfaces", "description")),
+            (
+                "Management",
+                (
+                    "status",
+                    "identifier",
+                    "controller_managed_device_group",
+                    FormField("primary_ip4", render_if="editing"),
+                    FormField("primary_ip6", render_if="editing"),
+                ),
+            ),
+            ("VRF Assignments", ("vrfs",)),
+            # Plain tenant fields here rather than the TenancyForm mixin, hence an explicit panel.
+            ("Tenancy", ("tenant_group", "tenant")),
+        )
         fields = [
             "name",
             "device",

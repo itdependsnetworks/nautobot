@@ -1,35 +1,5 @@
 {% extends 'generic/object_create.html' %}
-{% load form_helpers %}
-
-{% block form %}
-    <div class="card">
-        <div class="card-header"><strong>Virtual Device Context</strong></div>
-        <div class="card-body">
-            {% render_field form.name %}
-            {% render_field form.device %}
-            {% render_field form.role %}
-            {% render_field form.interfaces %}
-            {% render_field form.description %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header"><strong>Management</strong></div>
-        <div class="card-body">
-            {% render_field form.status %}
-            {% render_field form.identifier %}
-            {% render_field form.controller_managed_device_group %}
-            {% if editing %}
-                {% render_field form.primary_ip4 %}
-                {% render_field form.primary_ip6 %}
-            {% endif %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header"><strong>VRF Assignments</strong></div>
-        <div class="card-body">
-            {% render_field form.vrfs %}
-        </div>
-    </div>
-    {% include 'inc/tenancy_form_panel.html' %}
-    {% include 'inc/extras_features_edit_form_fields.html' %}
-{% endblock %}
+{% comment %}
+The Virtual Device Context form is laid out by `VirtualDeviceContextForm.Meta.fieldsets` (see nautobot/dcim/forms.py); this template intentionally
+adds nothing and remains only so that Apps extending it keep working.
+{% endcomment %}
