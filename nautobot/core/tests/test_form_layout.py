@@ -45,6 +45,7 @@ from nautobot.dcim.forms import ManufacturerForm, SoftwareImagePanel, SoftwareVe
 from nautobot.dcim.models import Device, Manufacturer, Platform
 from nautobot.extras.choices import CustomFieldTypeChoices, JobExecutionType, RelationshipTypeChoices
 from nautobot.extras.forms import JobScheduleForm, NautobotModelForm
+from nautobot.extras.jobs import IntegerVar, Job, StringVar
 from nautobot.extras.models import CustomField, Job as JobModel, Relationship
 
 
@@ -1060,6 +1061,73 @@ class VisibleIfEnforcementTestCase(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["description"], "")  # cleared, not dropped
         self.assertEqual(form.cleaned_data["extra"], "e")
+
+
+class JobFieldsetsTestCase(TestCase):
+    """Jobs declare `Meta.fieldsets` over their variables and get the same layout machinery."""
+
+    def test_job_with_fieldsets(self):
+        class LayoutJob(Job):
+            alpha = StringVar()
+            beta = IntegerVar(required=False)
+            gamma = StringVar(required=False)
+
+            class Meta:
+                name = "Layout Job"
+                fieldsets = (("Target", ("alpha",)), ("Options", ("beta",)))
+
+            def run(self, *args, **kwargs):
+                pass
+
+        form = LayoutJob.as_form()
+        self.assertTrue(form.has_declared_layout)
+        panels = [panel for panel in form.layout.panels if panel.has_content]
+        self.assertEqual([panel.field_names for panel in panels], [("alpha",), ("beta",), ("gamma",)])
+        self.assertEqual(panels[0].label, "Target")
+        self.assertEqual(panels[-1].get_label(Context({})), "Other")
+
+    def test_job_without_fieldsets_renders_as_before(self):
+        class PlainJob(Job):
+            alpha = StringVar()
+
+            class Meta:
+                name = "Plain Job"
+
+            def run(self, *args, **kwargs):
+                pass
+
+        form = PlainJob.as_form()
+        self.assertFalse(form.has_declared_layout)
+        self.assertEqual(form.layout.panels[0].field_names, ("alpha",))
+        form.layout.default_label = "Job Data"
+        self.assertEqual(form.layout.panels[0].get_label(Context({})), "Job Data")
+
+    def test_job_fieldsets_validation(self):
+        class BadTypeJob(Job):
+            alpha = StringVar()
+
+            class Meta:
+                name = "Bad Type Job"
+                fieldsets = "alpha"
+
+            def run(self, *args, **kwargs):
+                pass
+
+        with self.assertRaises(TypeError):
+            BadTypeJob.as_form_class()
+
+        class BadNameJob(Job):
+            alpha = StringVar()
+
+            class Meta:
+                name = "Bad Name Job"
+                fieldsets = (("Target", ("nope",)),)
+
+            def run(self, *args, **kwargs):
+                pass
+
+        with self.assertRaisesRegex(ValueError, "unknown field 'nope'"):
+            BadNameJob.as_form().layout  # pylint: disable=expression-not-assigned
 
 
 class JobPagesLayoutTestCase(TestCase):

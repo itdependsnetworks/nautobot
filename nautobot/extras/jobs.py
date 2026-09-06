@@ -138,6 +138,8 @@ class BaseJob:
         - description (str)
         - dryrun_default (bool)
         - field_order (list)
+        - fieldsets (tuple): declarative layout of the job's variables on the run form, using the same syntax as
+          a form's `Meta.fieldsets` (see `nautobot.core.ui.object_form`); variables not named are still rendered.
         - has_sensitive_variables (bool)
         - hidden (bool)
         - soft_time_limit (int)
@@ -382,6 +384,12 @@ class BaseJob:
 
     @final
     @classproperty
+    def fieldsets(cls):  # pylint: disable=no-self-argument
+        """Declarative layout of the job variables on the run form; see `nautobot.core.ui.object_form`."""
+        return cls._get_meta_attr_and_assert_type("fieldsets", (), expected_type=(list, tuple))
+
+    @final
+    @classproperty
     def read_only(cls) -> bool:  # pylint: disable=no-self-argument
         return cls._get_meta_attr_and_assert_type("read_only", False, expected_type=bool)
 
@@ -489,8 +497,13 @@ class BaseJob:
 
         In most cases you should use `.as_form()` instead of calling this method directly.
         """
-        fields = {name: var.as_field() for name, var in cls._get_vars().items()}
-        return type("JobForm", (JobForm,), fields)
+        attrs = {name: var.as_field() for name, var in cls._get_vars().items()}
+        # https://github.com/PyCQA/pylint/issues/3484
+        if cls.fieldsets:  # pylint: disable=using-constant-test
+            # The generated form resolves this layout (and validates the names against the job's variables) on
+            # first render or validation, exactly as a model form's `Meta.fieldsets` is.
+            attrs["Meta"] = type("Meta", (), {"fieldsets": tuple(cls.fieldsets)})
+        return type("JobForm", (JobForm,), attrs)
 
     @classmethod
     def as_form(cls, data=None, files=None, initial=None, approval_view=False):

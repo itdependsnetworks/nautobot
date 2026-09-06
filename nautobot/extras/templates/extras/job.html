@@ -60,22 +60,27 @@
                         </div>
                     {% endif %}
                     {% block job_form_wrapper %}
-                        <div class="card">
-                            <div class="card-header">
-                                <strong>Job Data</strong>
+                        {% if job_form.has_declared_layout %}
+                            {# The job declares `Meta.fieldsets`; render its variables through the resolved layout. #}
+                            {% render_form_layout job_form "Job Data" %}
+                        {% else %}
+                            <div class="card">
+                                <div class="card-header">
+                                    <strong>Job Data</strong>
+                                </div>
+                                <div class="card-body">
+                                    {% block job_form %}
+                                        {% render_form job_form excluded_fields="[]" %}
+                                        {% if not job_form.visible_fields %}
+                                            <span class="form-text w-100">
+                                                <span class="mdi mdi-information-outline"></span>
+                                                This job does not take any user inputs.
+                                            </span>
+                                        {% endif %}
+                                    {% endblock %}
+                                </div>
                             </div>
-                            <div class="card-body">
-                                {% block job_form %}
-                                    {% render_form job_form excluded_fields="[]" %}
-                                    {% if not job_form.visible_fields %}
-                                        <span class="form-text w-100">
-                                            <span class="mdi mdi-information-outline"></span>
-                                            This job does not take any user inputs.
-                                        </span>
-                                    {% endif %}
-                                {% endblock %}
-                            </div>
-                        </div>
+                        {% endif %}
                     {% endblock job_form_wrapper %}
                     {% block job_execution_form_wrapper %}
                         <div class="card">

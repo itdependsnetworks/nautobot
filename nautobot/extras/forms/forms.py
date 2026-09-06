@@ -1525,10 +1525,13 @@ class ImageAttachmentForm(BootstrapMixin, forms.ModelForm):
 #
 
 
-class JobForm(BootstrapMixin, forms.Form):
+class JobForm(FormLayoutMixin, BootstrapMixin, forms.Form):
     """
     This form is used to render the user input fields for a Job class. Its fields are dynamically
     controlled by the job definition. See `nautobot.extras.jobs.BaseJob.as_form`
+
+    A job may declare `Meta.fieldsets` to lay out its variables; `as_form_class()` copies that declaration onto the
+    generated form, where `FormLayoutMixin` resolves it.
     """
 
     # 4.0 TODO: Rename JobForm to JobDataForm and JobEditForm to JobForm.
