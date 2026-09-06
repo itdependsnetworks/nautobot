@@ -1,42 +1,52 @@
 {% load form_helpers %}
-
-{% if form.custom_fields %}
-    <div class="card">
-        <div class="card-header"><strong>Custom Fields</strong></div>
-        <div class="card-body">
-            {% render_custom_fields form %}
+{% comment %}
+Deprecated in 3.3: the Custom Fields, Relationships, Notes, Dynamic Groups and Tags panels are now contributed to a
+form's layout by the corresponding form mixins (see `nautobot.core.ui.object_form`). Forms that declare
+`Meta.fieldsets` render these panels automatically via `{% render_form_layout %}`; templates that still hand-render
+their fields may keep including this file, which renders the very same panels from the very same source.
+The fallback below only applies to forms that do not use `FormLayoutMixin` (i.e. are not `NautobotModelForm`s).
+{% endcomment %}
+{% if form.layout %}
+    {% render_contributed_panels form "custom_fields,relationships,notes,dynamic_groups,tags" %}
+{% else %}
+    {% if form.custom_fields %}
+        <div class="card">
+            <div class="card-header"><strong>Custom Fields</strong></div>
+            <div class="card-body">
+                {% render_custom_fields form %}
+            </div>
         </div>
-    </div>
-{% endif %}
-{% if form.relationships %}
-    <div class="card">
-        <div class="card-header"><strong>Relationships</strong></div>
-        <div class="card-body">
-            {% render_relationships form %}
+    {% endif %}
+    {% if form.relationships %}
+        <div class="card">
+            <div class="card-header"><strong>Relationships</strong></div>
+            <div class="card-body">
+                {% render_relationships form %}
+            </div>
         </div>
-    </div>
-{% endif %}
-{% if form.object_note and perms.extras.add_note %}
-    <div class="card">
-        <div class="card-header"><strong>Notes</strong></div>
-        <div class="card-body">
-            {% render_field form.object_note %}
+    {% endif %}
+    {% if form.object_note and perms.extras.add_note %}
+        <div class="card">
+            <div class="card-header"><strong>Notes</strong></div>
+            <div class="card-body">
+                {% render_field form.object_note %}
+            </div>
         </div>
-    </div>
-{% endif %}
-{% if form.dynamic_groups and perms.extras.add_staticgroupassociation %}
-    <div class="card">
-        <div class="card-header"><strong>Static Assignment to Dynamic Groups</strong></div>
-        <div class="card-body">
-            {% render_field form.dynamic_groups %}
+    {% endif %}
+    {% if form.dynamic_groups and perms.extras.add_staticgroupassociation %}
+        <div class="card">
+            <div class="card-header"><strong>Static Assignment to Dynamic Groups</strong></div>
+            <div class="card-body">
+                {% render_field form.dynamic_groups %}
+            </div>
         </div>
-    </div>
-{% endif %}
-{% if form.tags %}
-    <div class="card">
-        <div class="card-header"><strong>Tags</strong></div>
-        <div class="card-body">
-            {% render_field form.tags %}
+    {% endif %}
+    {% if form.tags %}
+        <div class="card">
+            <div class="card-header"><strong>Tags</strong></div>
+            <div class="card-body">
+                {% render_field form.tags %}
+            </div>
         </div>
-    </div>
+    {% endif %}
 {% endif %}

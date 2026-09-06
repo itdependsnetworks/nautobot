@@ -1,5 +1,9 @@
 {% load form_helpers %}
-
+{% comment %}
+Deprecated in 3.3: forms that mix in `TenancyForm` now contribute a "Tenancy" panel to their layout automatically
+(see `nautobot.core.ui.object_form`). Declare `Meta.fieldsets` on the form, optionally pinning the panel with
+`Contributed("tenancy")`, instead of including this file.
+{% endcomment %}
 <div class="card">
     <div class="card-header"><strong>Tenancy</strong></div>
     <div class="card-body">

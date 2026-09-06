@@ -248,6 +248,20 @@ class FormLayoutRenderTestCase(TestCase):
         )
         self.assertIn("<strong>Job data</strong>", html)
 
+    def test_deprecated_include_renders_contributed_panels(self):
+        self.user.is_superuser = True
+        self.user.save()
+        template = "{% include 'inc/extras_features_edit_form_fields.html' %}"
+        html = render_string(template, {"form": ManufacturerLayoutForm()}, self.request)
+        self.assertIn("<strong>Notes</strong>", html)
+        self.assertNotIn("<strong>Manufacturer</strong>", html)
+
+        class PlainForm(forms.Form):
+            name = forms.CharField()
+
+        html = render_string(template, {"form": PlainForm()}, self.request)
+        self.assertEqual(normalize_html(html), "")
+
 
 class ContributedFieldsPanelTestCase(TestCase):
     def test_declaration_validation(self):
