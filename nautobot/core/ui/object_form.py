@@ -42,6 +42,7 @@ __all__ = (
     "FormPanel",
     "InlineFields",
     "Not",
+    "Omitted",
     "TabbedGroups",
     "When",
 )
@@ -338,6 +339,25 @@ class Contributed:
 
     def __repr__(self):
         return f"Contributed({self.name!r})"
+
+
+class Omitted:
+    """
+    Explicitly keeps the named form fields off the page.
+
+    Unlisted fields are never dropped (they fall into the trailing panel), so a field that must exist on the form
+    but must not be rendered — typically one the form derives in `clean()` from other inputs — is declared here.
+    The fields are claimed, so they neither render nor land in the trailing panel; they are not submitted, so the
+    form receives them as empty, exactly as when a template simply left them out.
+    """
+
+    def __init__(self, *names):
+        if not names or any(not isinstance(name, str) for name in names):
+            raise TypeError("Omitted() requires one or more field names")
+        self.names = tuple(names)
+
+    def __repr__(self):
+        return f"Omitted({', '.join(map(repr, self.names))})"
 
 
 class FieldGroup:
@@ -942,7 +962,7 @@ def _coerce_item(item):
         return FormField(item)
     if isinstance(item, FormPanel):
         raise TypeError(f"{item!r} cannot be nested inside another panel")
-    if isinstance(item, (FormComponent, Contributed)):
+    if isinstance(item, (FormComponent, Contributed, Omitted)):
         return item
     if isinstance(item, FieldGroup):
         raise TypeError("FieldGroup is only valid inside TabbedGroups")
@@ -1021,6 +1041,8 @@ class FormLayout:
         item = _coerce_item(item)
         if isinstance(item, Contributed):
             return self._splice_contributed(item)
+        if isinstance(item, Omitted):
+            return self._claim_omitted(item)
         return [item.bind(self)]
 
     def _contributed_declaration(self, name):
@@ -1038,6 +1060,12 @@ class FormLayout:
         declaration = self._contributed_declaration(item.name)
         names = [name for name in declaration.discover_field_names(self.form) if not self.is_claimed(name)]
         return [FormField(name).bind(self) for name in names]
+
+    def _claim_omitted(self, item):
+        """An `Omitted(...)` item: claim the fields so nothing else renders them, and render nothing."""
+        for name in item.names:
+            self.claim(name, item)
+        return []
 
     def _resolve(self):
         self._contributed = self._collect_contributed()

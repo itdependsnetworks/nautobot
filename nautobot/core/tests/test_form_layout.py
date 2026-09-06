@@ -26,6 +26,7 @@ from nautobot.core.ui.object_form import (
     FormPanel,
     InlineFields,
     Not,
+    Omitted,
     resolve_dotted_path,
     TabbedGroups,
     When,
@@ -320,6 +321,27 @@ class FormLayoutResolutionTestCase(TestCase):
             FormPanel("x", attrs="id=x")
         with self.assertRaises(TypeError):
             FormPanel("x", items="name")
+
+    def test_omitted(self):
+        """`Omitted` claims a field so that it neither renders nor lands in the trailing panel."""
+        form = form_class_with_fieldsets((("Main", ("name", Omitted("description"))),))()
+        layout = form.layout
+        self.assertTrue(layout.is_claimed("description"))
+        self.assertIsNone(layout.claimed_component("description"))
+        for panel in layout.panels:
+            self.assertNotIn("description", panel.field_names)
+        self.assertEqual(layout.panels[-1].field_names, ("extra",))
+        self.assertNotIn('name="description"', layout.render(self.context()))
+        # The form still receives the field, empty, exactly as when a template left it out
+        bound = form_class_with_fieldsets((("Main", ("name", Omitted("description"))),))(data={"name": "Vendor"})
+        self.assertTrue(bound.is_valid(), bound.errors)
+        self.assertEqual(bound.cleaned_data["description"], "")
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            form_class_with_fieldsets((("Main", ("description", Omitted("description"))),))().layout  # pylint: disable=expression-not-assigned
+        with self.assertRaisesRegex(ValueError, "unknown field 'nope'"):
+            form_class_with_fieldsets((("Main", (Omitted("nope"),)),))().layout  # pylint: disable=expression-not-assigned
+        with self.assertRaises(TypeError):
+            Omitted()
 
     def test_invalid_shapes_raise(self):
         with self.assertRaises(TypeError):
