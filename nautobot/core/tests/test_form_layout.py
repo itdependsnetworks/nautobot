@@ -405,6 +405,17 @@ class FormLayoutResolutionTestCase(TestCase):
         layout = form_class_with_fieldsets((("Main", ("name", "cf_layout_test")),))().layout
         self.assertEqual(layout.panels[0].field_names, ("name", "cf_layout_test"))
 
+    def test_media_aggregation(self):
+        class ScriptedPanel(FormPanel):
+            class Media:
+                js = ["test/form_layout_panel.js"]
+
+        form = form_class_with_fieldsets((ScriptedPanel("Main", ("name",)),))()
+        self.assertIn("test/form_layout_panel.js", str(form.media))
+        # Widget media is still present alongside component media
+        self.assertIn("test/form_layout_panel.js", str(form.layout.media))
+        self.assertNotIn("test/form_layout_panel.js", str(ManufacturerLayoutForm().media))
+
 
 class FormLayoutRenderTestCase(TestCase):
     """Rendering of resolved layouts."""

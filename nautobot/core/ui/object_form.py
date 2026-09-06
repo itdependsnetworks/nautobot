@@ -21,6 +21,7 @@ import json
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.forms.utils import flatatt
+from django.forms.widgets import Media
 from django.template import Context
 from django.utils.html import format_html, format_html_join
 from django.utils.text import capfirst
@@ -453,6 +454,12 @@ class FormComponent(Component):
     def iter_components(self):
         """Yield this component and, recursively, any bound children."""
         yield self
+
+    @property
+    def media(self):
+        """Media declared on this component via an inner `class Media`."""
+        definition = getattr(self, "Media", None)
+        return Media(definition) if definition is not None else Media()
 
     # --- rendering --------------------------------------------------------------------------------------------
 
@@ -1175,6 +1182,14 @@ class FormLayout:
         for panel in self.panels:
             yield from panel.iter_components()
 
+    @property
+    def media(self):
+        """Aggregate `Media` declared on every component in the layout."""
+        media = Media()
+        for component in self.iter_components():
+            media += component.media
+        return media
+
     # --- rendering --------------------------------------------------------------------------------------------
 
     def render_hidden_fields(self):
@@ -1199,8 +1214,8 @@ class FormLayoutMixin:
     """
     Form mixin providing `Meta.fieldsets` support.
 
-    Exposes `layout` (the resolved `FormLayout`, computed on first access) and `has_declared_layout`
-    (whether this form class declares any fieldsets).
+    Exposes `layout` (the resolved `FormLayout`, computed on first access), `has_declared_layout` (whether this form
+    class declares any fieldsets), and extends `media` with the media declared by layout components.
 
     Mixins that add fields dynamically declare `form_panels`, a tuple of `ContributedFieldsPanel`; the tags panel is
     declared here because the `tags` field comes from the model rather than from a mixin.
@@ -1222,6 +1237,10 @@ class FormLayoutMixin:
     @cached_property
     def layout(self):
         return FormLayout(self)
+
+    @property
+    def media(self):
+        return super().media + self.layout.media
 
     # --- server-side enforcement of `visible_if` and inactive tab groups -------------------------------------------
 
