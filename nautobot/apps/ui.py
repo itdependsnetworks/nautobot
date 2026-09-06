@@ -72,6 +72,14 @@ from nautobot.core.ui.object_detail import (
     Tab,
     TextPanel,
 )
+from nautobot.core.ui.object_form import (
+    ContributedFieldsPanel,
+    FormComponent,
+    FormField,
+    FormLayout,
+    FormLayoutMixin,
+    FormPanel,
+)
 from nautobot.core.ui.titles import Titles
 from nautobot.core.ui.utils import (
     flatten_context,
@@ -100,6 +108,7 @@ __all__ = (
     "Component",
     "ConnectedEndpointsPanel",
     "ConnectionPanel",
+    "ContributedFieldsPanel",
     "DataTablePanel",
     "DistinctViewTab",
     "DropdownButton",
@@ -108,6 +117,11 @@ __all__ = (
     "EChartsThemeColors",
     "EChartsTypeChoices",
     "FormButton",
+    "FormComponent",
+    "FormField",
+    "FormLayout",
+    "FormLayoutMixin",
+    "FormPanel",
     "GroupedKeyValueTablePanel",
     "HomePageBase",
     "HomePageGroup",
