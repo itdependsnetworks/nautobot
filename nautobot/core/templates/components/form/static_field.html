@@ -1,0 +1,10 @@
+{% load helpers %}
+{% comment %}
+A read-only label/value row. There is no control to label, so the caption is a span styled like a form label.
+{% endcomment %}
+<div class="mb-10 d-md-flex justify-content-center">
+    <span class="col-md-3 col-form-label{% if required %} nb-required{% endif %}">{{ label }}</span>
+    <div class="col-md-9">
+        <p class="form-control-plaintext">{{ value|placeholder }}</p>
+    </div>
+</div>

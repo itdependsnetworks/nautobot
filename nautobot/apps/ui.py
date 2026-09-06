@@ -87,6 +87,7 @@ from nautobot.core.ui.object_form import (
     InlineFields,
     Not,
     Omitted,
+    StaticField,
     TabbedGroups,
     When,
 )
@@ -167,6 +168,7 @@ __all__ = (
     "PermissionsMixin",
     "PostButton",
     "SectionChoices",
+    "StaticField",
     "StatsPanel",
     "Tab",
     "TabbedGroups",

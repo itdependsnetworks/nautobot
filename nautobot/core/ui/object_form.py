@@ -19,12 +19,14 @@ from functools import cached_property
 import json
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import models
 from django.forms.utils import flatatt
 from django.template import Context
 from django.utils.html import format_html, format_html_join
 from django.utils.text import capfirst
 
 from nautobot.core.templatetags.form_helpers import get_render_field_context
+from nautobot.core.templatetags.helpers import hyperlinked_object
 from nautobot.core.ui.object_detail import Component
 from nautobot.core.ui.utils import render_component_template
 
@@ -43,6 +45,7 @@ __all__ = (
     "InlineFields",
     "Not",
     "Omitted",
+    "StaticField",
     "TabbedGroups",
     "When",
 )
@@ -568,6 +571,59 @@ class FormField(FormComponent):
             full_width=self.full_width,
         )
         return self._wrap(render_component_template("utilities/render_field.html", context, **extra))
+
+
+class StaticField(FormComponent):
+    """
+    A read-only label/value row that is not a form field at all.
+
+    Args:
+        label (str): The row label.
+
+    Keyword Args:
+        attribute (str, optional): Dotted attribute path resolved against the object being edited (the `obj` in
+            the render context, falling back to the form's `instance`). When that yields nothing and the form has a
+            field of the same name, the field's current value is shown instead, so a value the view passes as
+            `initial` (a hidden `term_side`, say) reads correctly on a create page. Model instances are hyperlinked.
+        value (optional): A literal value to display instead of resolving `attribute`.
+        template_path (str, optional): Custom template; receives `label`, `value` and `required`.
+        required (bool, optional): Style the label as required.
+    """
+
+    attribute = None
+    required = False
+    template_path = "components/form/static_field.html"
+    value = None
+
+    def __init__(self, label, **kwargs):
+        kwargs["label"] = label
+        super().__init__(**kwargs)
+
+    def get_value(self, context):
+        """Resolve the value to display."""
+        if self.attribute is None:
+            return self.value
+        target = context.get("obj")
+        if target is None and self.form is not None:
+            target = getattr(self.form, "instance", None)
+        value = resolve_dotted_path(self.attribute, target) if target is not None else None
+        if value in (None, "") and self.form is not None and self.attribute in self.form.fields:
+            # Not on the object (yet): a create page whose view passed the value as form `initial`.
+            value = self.form[self.attribute].value()
+        return value
+
+    def render(self, context):
+        context = _as_context(context)
+        if not self.should_render(context):
+            return ""
+        value = self.get_value(context)
+        if isinstance(value, models.Model):
+            value = hyperlinked_object(value)
+        return self._wrap(
+            render_component_template(
+                self.template_path, context, label=self.label, value=value, required=self.required
+            )
+        )
 
 
 class InlineFields(FormComponent):

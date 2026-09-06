@@ -28,6 +28,7 @@ from nautobot.core.ui.object_form import (
     Not,
     Omitted,
     resolve_dotted_path,
+    StaticField,
     TabbedGroups,
     When,
 )
@@ -498,6 +499,50 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIn('class="form-label" for="id_description"', html)
         self.assertIn('class="col-md-3 col-form-label nb-required" for="id_name"', html)
         self.assertEqual(form["name"].label, "Vendor")
+
+    def test_field_row_template_container_class_and_attrs(self):
+        fieldsets = (
+            (
+                "Main",
+                (
+                    FormField("name", template_path="components/form/static_field.html", attrs={"id": "row-name"}),
+                    FormField("description", container_class="nb-wide"),
+                ),
+            ),
+        )
+        html = form_class_with_fieldsets(fieldsets)().layout.render(self.context())
+        # The row template replaces the standard row and the component attrs wrap it
+        self.assertIn('<div id="row-name">', html)
+        self.assertIn("form-control-plaintext", html)
+        self.assertNotIn('for="id_name"', html)
+        self.assertIn("justify-content-center nb-wide", html)
+
+    def test_static_field(self):
+        fieldsets = (
+            (
+                "Main",
+                (
+                    "name",
+                    StaticField("Parent bay", attribute="parent_bay.name"),
+                    StaticField("Literal", value="a-literal-value-42"),
+                    StaticField("Linked", attribute="platform"),
+                    StaticField("Absent", attribute="parent_bay.device", render_if="obj.parent_bay.device"),
+                    # Not on the object: falls back to the form field of the same name (a create page's `initial`)
+                    StaticField("From form", attribute="description"),
+                ),
+            ),
+        )
+        form = form_class_with_fieldsets(fieldsets)(initial={"description": "from-initial"})
+        platform = Platform.objects.first()
+        obj = SimpleNamespace(parent_bay=SimpleNamespace(name="Bay 1", device=None), platform=platform, description="")
+        html = form.layout.render(self.context(obj=obj))
+        for label in ("Parent bay", "Literal", "Linked", "From form"):
+            self.assertIn(f'col-form-label">{label}</span>', html)
+        self.assertIn("Bay 1", html)
+        self.assertIn("a-literal-value-42", html)
+        self.assertIn(platform.get_absolute_url(), html)
+        self.assertIn("from-initial", html)
+        self.assertNotIn("Absent", html)
 
     def test_inline_fields(self):
         with self.assertRaises(ValueError):
