@@ -74,9 +74,11 @@ The base template for listing objects is `generic/object_list.html`, with the fo
 The base template for object addition or change is `generic/object_create.html`,
 with the following blocks:
 
-* `form`: is the block in which the form gets rendered. This can be overridden
-  to provide a custom UI or UX for form views beyond what `render_form`
-  provides.
+* `form`: is the block in which the form gets rendered. Forms that declare
+  `Meta.fieldsets` are rendered here through the
+  [Form Layout Framework](form-layout.md) via `render_form_layout`, which is the
+  preferred way to group fields into cards; overriding this block directly is
+  only necessary for a UI or UX beyond what the layout components provide.
 
 ## Object Import
 

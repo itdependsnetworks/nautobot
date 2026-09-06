@@ -645,6 +645,7 @@ nav:
               - Nautobot Generic Views: "development/apps/api/views/nautobot-generic-views.md"
               - URLs: "development/apps/api/views/urls.md"
               - Base Template: "development/apps/api/views/base-template.md"
+              - Form Layout: "development/apps/api/views/form-layout.md"
               - Help Documentation: "development/apps/api/views/help-documentation.md"
               - REST API: "development/apps/api/views/rest-api.md"
               - Advanced:
@@ -751,6 +752,7 @@ nav:
           - Playwright Testing: "development/core/playwright-testing.md"
           - User Preferences: "development/core/user-preferences.md"
           - UI Component Framework: "development/core/ui-component-framework.md"
+          - Form Layout Framework: "development/core/form-layout.md"
           - Release Checklist: "development/core/release-checklist.md"
   - Release Notes:
       - "release-notes/index.md"
