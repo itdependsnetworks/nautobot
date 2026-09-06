@@ -238,6 +238,9 @@ class FormField(FormComponent):
         full_width (bool, optional): Render the control across the full width of the panel instead of the standard
             3/9 label/control split. Useful for large editor-style widgets.
         container_class (str, optional): Extra CSS class for the field's container element.
+        template_path (str, optional): Render the row from this template instead of the standard one. The template
+            receives `field` (the bound field), `form` and `component`. For rows whose markup genuinely differs
+            (an input group with a dropdown, a tabbed editor around one field).
     """
 
     container_class = None
@@ -284,6 +287,12 @@ class FormField(FormComponent):
         if bound_field.is_hidden:
             # Hidden fields are emitted once by the layout itself, outside of any panel.
             return ""
+        if self.template_path:
+            return self._wrap(
+                render_component_template(
+                    self.template_path, context, field=bound_field, form=self.form, component=self
+                )
+            )
         extra = get_render_field_context(
             context.get("request"),
             bound_field,
