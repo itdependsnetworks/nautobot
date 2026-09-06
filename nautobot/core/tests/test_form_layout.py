@@ -727,6 +727,27 @@ class FormLayoutRenderTestCase(TestCase):
         with self.assertRaisesRegex(KeyError, "unknown field 'nope'"):
             form.layout.render(self.context())
 
+    def test_render_bare(self):
+        fieldsets = (
+            ("Main", ("name", FormField("description", visible_if=When("name", is_set=True)))),
+            FormPanel("Gated", ("extra",), render_if="editing"),
+        )
+        form = form_class_with_fieldsets(fieldsets)()
+        html = form.layout.render_bare(self.context(editing=False))
+        self.assertNotIn('class="card', html)
+        self.assertNotIn("<strong>Main</strong>", html)
+        self.assertIn('id="id_name"', html)
+        self.assertIn("data-nb-visible-if", html)  # item-level conditions survive
+        self.assertNotIn('id="id_extra"', html)  # panel-level render_if is honoured
+        self.assertIn('id="id_secret"', html)  # hidden fields still emitted
+        html = render_string(
+            "{% load form_helpers %}{% render_form_layout form bare=True %}",
+            {"form": form, "editing": True},
+            self.request,
+        )
+        self.assertIn('id="id_extra"', html)
+        self.assertNotIn('class="card', html)
+
     def test_software_image_panel_inserts_image_list(self):
         panel = SoftwareImagePanel("Software", ("platform", "software_version", "software_image_files"))
         kinds = [item if isinstance(item, str) else type(item).__name__ for item in panel.items]

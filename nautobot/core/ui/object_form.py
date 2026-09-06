@@ -1417,6 +1417,28 @@ class FormLayout:
             panels = format_html_join("", "{}", ((panel.render(context),) for panel in self.panels))
         return format_html("{}{}", self.render_hidden_fields(), panels)
 
+    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new. Lets a page that already draws its
+    # own card (the job run page's "Job Schedule Type" card) use `visible_if` rows without nesting cards.
+    def render_bare(self, context):
+        """
+        Render hidden fields followed by the *items* of every panel, in weight order, without the card chrome.
+
+        For pages that supply their own surrounding card. Panel-level `visible_if` and `attrs` are not emitted;
+        item-level ones are.
+        """
+        context = _as_context(context)
+        with context.update({"form": self.form}):
+            bodies = format_html_join(
+                "",
+                "{}",
+                (
+                    (panel.render_body_content(context),)
+                    for panel in self.panels
+                    if isinstance(panel, FormPanel) and panel.should_render(context)
+                ),
+            )
+        return format_html("{}{}", self.render_hidden_fields(), bodies)
+
     def render_panels(self, context, names):
         """Render only the named contributed panels. Used by the deprecated `extras_features_edit_form_fields.html`."""
         context = _as_context(context)

@@ -105,7 +105,7 @@ def render_field(context, field, bulk_nullable=False, container_class=None, full
 
 
 @register.simple_tag(takes_context=True)
-def render_form_layout(context, form, default_label=None):
+def render_form_layout(context, form, default_label=None, bare=False):
     """
     Render a form according to its resolved layout (`Meta.fieldsets` plus mixin-contributed panels).
 
@@ -116,9 +116,13 @@ def render_form_layout(context, form, default_label=None):
         form (FormLayoutMixin): A form exposing `layout`.
         default_label (str, optional): Header for the trailing panel when the form declares no panels of its own
             (defaults to the `obj_type` in the render context, then the model's verbose name).
+        bare (bool, optional): Render the panels' items only, without cards, for a template that draws its own card
+            around the form.
     """
     layout = form.layout
     layout.default_label = default_label
+    if bare:
+        return layout.render_bare(context)
     return layout.render(context)
 
 
