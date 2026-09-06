@@ -30,6 +30,7 @@ from nautobot.core.ui.object_form import (
     InlineFields,
     Not,
     Omitted,
+    RemoteFragment,
     resolve_dotted_path,
     StaticField,
     TabbedGroups,
@@ -681,6 +682,45 @@ class FormLayoutRenderTestCase(TestCase):
         html = form.layout.render(self.context(rows=formset))
         self.assertIn('data-nb-formset-add-label="Row"', html)
         self.assertIn('data-nb-formset-keep-field-values="input[type=&quot;number&quot;]"', html)
+
+    def test_remote_fragment(self):
+        with self.assertRaises(TypeError):
+            RemoteFragment(None, watch=("name",))
+        with self.assertRaises(TypeError):
+            RemoteFragment("/fragment/", watch="name")
+        with self.assertRaises(TypeError):
+            RemoteFragment("/fragment/", watch=())
+
+        fragment = RemoteFragment("/fragment/", watch=("name", "description"), include=("name",), attrs={"id": "frag"})
+        form = form_class_with_fieldsets((("Main", ("name", fragment, "description")),))()
+        html = form.layout.render(self.context())
+        self.assertIn('id="frag"', html)
+        self.assertIn('hx-get="/fragment/"', html)
+        # No initial template: the fragment loads itself, then refreshes on change of each watched field
+        self.assertIn('hx-trigger="load, change from:#id_name, change from:#id_description"', html)
+        self.assertIn('hx-include="#id_name"', html)
+        self.assertIn('hx-target="this"', html)
+        self.assertIn("jsify_form(this)", html)
+        # It claims no fields
+        self.assertEqual(form.layout.panels[0]._bound_items[1].field_names, ())
+        self.assertEqual(form.layout.panels[0].field_names, ("name", "description"))
+
+        # With an initial template the content is rendered server-side and there is no `load` trigger; `include`
+        # defaults to the watched fields
+        fragment = RemoteFragment("/fragment/", watch=("name",), template_path="components/form/static_field.html")
+        form = form_class_with_fieldsets((("Main", ("name", fragment)),))()
+        html = form.layout.render(self.context(label="Static", value="x"))
+        self.assertIn('hx-trigger="change from:#id_name"', html)
+        self.assertIn('hx-include="#id_name"', html)
+        self.assertIn("form-control-plaintext", html)
+        with self.assertRaises(TypeError):
+            RemoteFragment("/fragment/", watch=("name",), include="name")
+
+        # Unknown field names are reported
+        fragment = RemoteFragment("/fragment/", watch=("nope",))
+        form = form_class_with_fieldsets((("Main", ("name", fragment)),))()
+        with self.assertRaisesRegex(KeyError, "unknown field 'nope'"):
+            form.layout.render(self.context())
 
     def test_software_image_panel_inserts_image_list(self):
         panel = SoftwareImagePanel("Software", ("platform", "software_version", "software_image_files"))

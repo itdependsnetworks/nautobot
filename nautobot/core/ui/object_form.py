@@ -51,6 +51,7 @@ __all__ = (
     "InlineFields",
     "Not",
     "Omitted",
+    "RemoteFragment",
     "StaticField",
     "TabbedGroups",
     "When",
@@ -742,6 +743,92 @@ class IncludedTemplate(FormComponent):
         return self._wrap(render_component_template(self.template_path, context, form=self.form, component=self))
 
 
+# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new component. Replaces the hand-written
+# `hx-*` widget attributes plus per-page `select2 -> htmx.trigger` bridging that the Custom Field scope filter used;
+# the ObjectMetadata value widget, Secret parameters form and cable type editor are later candidates.
+class RemoteFragment(FormComponent):
+    """
+    A region of the form that the server re-renders, over HTMX, whenever the watched fields change.
+
+    Use it for the part of a form whose content depends on another field's value in a way the browser cannot work
+    out on its own: the scope filter of a Custom Field depends on the chosen content types, a Secret's parameter
+    form on its provider. The component renders a container carrying the HTMX attributes; the view supplies an
+    endpoint that returns the container's *inner* HTML for the current values, which arrive as query parameters
+    named after the included fields. After every swap, `jsify_form` runs on the container so Select2 and the other
+    widget behaviours attach to the new content.
+
+    Args:
+        url (str): Endpoint returning the fragment. May be lazy (`reverse_lazy`).
+
+    Keyword Args:
+        watch (tuple): Names of the form fields whose `change` triggers a refresh.
+        include (tuple, optional): Names of the form fields whose values are sent with the request. Defaults to
+            `watch`.
+        template_path (str, optional): Template for the initial content, rendered server-side with the page
+            context plus `form`. Without it the fragment fetches itself once the page has loaded.
+        attrs (dict, optional): Extra attributes for the container. Give it an `id` if a page script refers to it.
+
+    The fragment claims no fields. Whatever the endpoint renders is markup, never a data rule: constrain the values
+    in the form's `clean()` as well.
+    """
+
+    include = None
+    url = None
+    watch = ()
+
+    def __init__(self, url, *, watch, include=None, template_path=None, **kwargs):
+        # `is None` rather than a truth test: `reverse_lazy` objects resolve (and import the URL conf) when tested.
+        if url is None:
+            raise TypeError("RemoteFragment() requires a url")
+        if isinstance(watch, str) or not watch:
+            raise TypeError("RemoteFragment() requires watch: a tuple of at least one field name")
+        if isinstance(include, str):
+            raise TypeError("RemoteFragment() include must be a tuple of field names")
+        kwargs.update(
+            {
+                "url": url,
+                "watch": tuple(watch),
+                "include": tuple(include) if include is not None else None,
+                "template_path": template_path,
+            }
+        )
+        super().__init__(**kwargs)
+
+    def _selectors(self, names):
+        selectors = []
+        for name in names:
+            if name not in self.form.fields:
+                raise KeyError(f"RemoteFragment refers to unknown field {name!r} on {type(self.form).__name__}")
+            selectors.append(f"#{self.form[name].auto_id}")
+        return selectors
+
+    def wrapper_attrs(self):
+        attrs = super().wrapper_attrs()
+        triggers = [f"change from:{selector}" for selector in self._selectors(self.watch)]
+        if not self.template_path:
+            triggers.insert(0, "load")
+        attrs.update(
+            {
+                "hx-get": str(self.url),
+                "hx-trigger": ", ".join(triggers),
+                "hx-include": ", ".join(self._selectors(self.include if self.include is not None else self.watch)),
+                "hx-target": "this",
+                "hx-swap": "innerHTML",
+                "hx-on::after-settle": "if (window.jsify_form) jsify_form(this);",
+            }
+        )
+        return attrs
+
+    def render(self, context):
+        context = _as_context(context)
+        if not self.should_render(context):
+            return ""
+        body = ""
+        if self.template_path:
+            body = render_component_template(self.template_path, context, form=self.form, component=self)
+        return format_html("<div{}>{}</div>", flatatt(self.wrapper_attrs()), body)
+
+
 class TabbedGroups(FormComponent):
     """
     Two or more groups of fields under tabs, for mutually exclusive ways of filling in the same thing.
@@ -885,6 +972,9 @@ class FormPanel(FormComponent):
         css_class (str, optional): Bootstrap contextual class for the card border and header (e.g. `"warning"`).
         attrs (dict, optional): Extra HTML attributes for the card element; a `class` entry is merged into the
             card's classes.
+
+    A panel whose whole body is bespoke markup is simply a panel with one `IncludedTemplate` item; a panel the
+    server re-renders on demand holds a `RemoteFragment`.
     """
 
     # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): declared panels take slot weights
