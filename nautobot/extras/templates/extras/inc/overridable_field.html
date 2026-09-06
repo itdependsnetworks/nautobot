@@ -1,6 +1,19 @@
 {% load form_helpers %}
+{% comment %}
+One row of the Job edit form: a property control beside its "Override default value" checkbox. Rendered by
+`OverridableFormField` (nautobot.extras.forms), which also ships js/overridable_field.js: while the checkbox is
+clear the control is locked and shows the job class default (the JSON script below, present only when the class is
+installed and exposes the property). Receives `field`, `override_field`, `has_default`, `default_value`,
+`default_script_id`.
+{% endcomment %}
+{# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): data-nb-overridable-* and the default #}
+{# JSON script are new; they replace the page-level `job_class_properties` json_script in job_update.html. #}
 
-<div class="mb-10 d-lg-flex justify-content-center{% if field.errors %} has-error{% endif %}">
+<div class="mb-10 d-lg-flex justify-content-center{% if field.errors %} has-error{% endif %}"
+     data-nb-overridable
+     data-nb-overridable-field="{{ field.auto_id }}"
+     data-nb-overridable-override="{{ override_field.auto_id }}">
+    {% if has_default %}{{ default_value|json_script:default_script_id }}{% endif %}
     <label class="col-lg-3 col-form-label{% if field.field.required %} nb-required{% endif %}" for="{{ field.id_for_label }}">
         {{ field.label }}
     </label>

@@ -426,13 +426,14 @@ class BaseJob:
         """
         Return all relevant classproperties as a dict.
 
-        Used for convenient rendering into job_edit.html via the `json_script` template tag.
+        Used by `OverridableFormField` (the Job edit form) to render each property's default via `json_script`.
         """
         return {
             "name": cls.name,
             "grouping": cls.grouping,
             "console_log_default": cls.console_log_default,
             "description": cls.description,
+            "dryrun_default": cls.dryrun_default,
             "hidden": cls.hidden,
             "soft_time_limit": cls.soft_time_limit,
             "time_limit": cls.time_limit,

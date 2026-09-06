@@ -46,6 +46,7 @@ from nautobot.core.forms.forms import ConfirmationForm
 from nautobot.core.forms.widgets import ClearableFileInput
 from nautobot.core.ui.object_form import (
     AnyOf,
+    FormComponent,
     FormField,
     FormLayoutMixin,
     FormPanel,
@@ -53,6 +54,7 @@ from nautobot.core.ui.object_form import (
     RemoteFragment,
     When,
 )
+from nautobot.core.ui.utils import render_component_template
 from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, DeviceType, Location, Platform
 from nautobot.extras.choices import (
     ApprovalWorkflowStateChoices,
@@ -1528,6 +1530,73 @@ class JobForm(BootstrapMixin, forms.Form):
     """
 
     # 4.0 TODO: Rename JobForm to JobDataForm and JobEditForm to JobForm.
+
+
+class OverridableFormField(FormComponent):
+    """
+    A Job property paired with its `<name>_override` checkbox on one row (see `extras/inc/overridable_field.html`).
+
+    While the checkbox is clear, the property control is locked and shows the job class's own value (rendered into
+    the row as JSON when the class is installed); ticking it unlocks the control. That behaviour is driven by
+    `js/overridable_field.js`, shipped through this component's `Media`. `JobEditForm.clean()` enforces the same
+    rule on the server.
+
+    Args:
+        name (str): The property field; the override field is `f"{name}_override"`.
+    """
+
+    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the `Media` declaration and the
+    # per-row default value are new; the script used to live in job_update.html keyed on `[id$=_override]`.
+    name = None
+    template_path = "extras/inc/overridable_field.html"
+
+    class Media:
+        js = ["js/overridable_field.js"]
+
+    def __init__(self, name, **kwargs):
+        kwargs["name"] = name
+        super().__init__(**kwargs)
+
+    @property
+    def field_names(self):
+        return (self.name, f"{self.name}_override")
+
+    def bind(self, layout, weight=None):
+        bound = super().bind(layout, weight)
+        for name in self.field_names:
+            layout.claim(name, bound)
+        return bound
+
+    def get_default(self, context):
+        """
+        The job class's value for this property, as `(has_default, value)`.
+
+        `has_default` is False when the job class is not installed or does not expose the property (the browser then
+        falls back to the value the form was rendered with).
+        """
+        obj = context.get("obj")
+        job_class = getattr(obj, "job_class", None) if obj is not None else None
+        properties = job_class.properties_dict if job_class is not None else {}
+        return self.name in properties, properties.get(self.name)
+
+    def render(self, context):
+        if not self.should_render(context):
+            return ""
+        has_default, default_value = self.get_default(context)
+        field = self.form[self.name]
+        return self._wrap(
+            render_component_template(
+                self.template_path,
+                context,
+                field=field,
+                override_field=self.form[f"{self.name}_override"],
+                has_default=has_default,
+                default_value=default_value,
+                default_script_id=f"{field.auto_id}_default",
+                form=self.form,
+                component=self,
+            )
+        )
 
 
 class JobEditForm(NautobotModelForm):
