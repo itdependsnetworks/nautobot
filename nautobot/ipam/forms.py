@@ -20,7 +20,7 @@ from nautobot.core.forms import (
     TagFilterField,
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
-from nautobot.core.ui.object_form import Contributed
+from nautobot.core.ui.object_form import Contributed, FormPanel, TabbedGroups
 from nautobot.dcim.form_mixins import (
     LocatableModelBulkEditFormMixin,
     LocatableModelFilterFormMixin,
@@ -637,6 +637,23 @@ class IPAddressForm(IPAddressFormMixin, ReturnURLForm):
             "tenant",
             "tags",
         ]
+        fieldsets = (
+            ("IP Address", ("address", "namespace", "type", "status", "role", "dns_name", "description")),
+            Contributed("tenancy"),
+            FormPanel(
+                "NAT IP (Inside)",
+                (
+                    # Three mutually exclusive ways to narrow down the inside address. Only the active tab's
+                    # selectors feed `nat_inside`'s query narrowing (inactive tabs are disabled client-side).
+                    TabbedGroups(
+                        ("By Device", ("nat_location", "nat_rack", "nat_device")),
+                        ("By VM", ("nat_cluster", "nat_virtual_machine")),
+                        ("By IP", ("nat_vrf",)),
+                    ),
+                    "nat_inside",
+                ),
+            ),
+        )
 
     def _get_validation_exclusions(self):
         """

@@ -49,6 +49,8 @@ from nautobot.core.ui.object_form import (
     FormField,
     FormPanel,
     InlineFields,
+    Omitted,
+    TabbedGroups,
     When,
 )
 from nautobot.core.utils.config import get_settings_or_config
@@ -2765,6 +2767,36 @@ class ModuleForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
 
     class Meta:
         model = Module
+        fieldsets = (
+            (
+                "Module",
+                (
+                    "manufacturer",
+                    "module_family",
+                    "module_type",
+                    "serial",
+                    "asset_tag",
+                    "role",
+                    "status",
+                    "tenant_group",
+                    "tenant",
+                ),
+            ),
+            FormPanel(
+                "Installation",
+                (
+                    # A module is installed in a device's module bay, another module's module bay, or directly at a
+                    # location; `clean()` derives `parent_module_bay` from whichever tab was used.
+                    TabbedGroups(
+                        ("Device", ("parent_module_bay_device_filter", "parent_module_bay_device")),
+                        ("Module", ("parent_module_bay_module_filter", "parent_module_bay_module")),
+                        ("Location", ("location",)),
+                        clear_inactive=True,
+                    ),
+                    Omitted("parent_module_bay"),
+                ),
+            ),
+        )
         fields = [
             "manufacturer",
             "module_family",
@@ -6066,6 +6098,25 @@ class ControllerForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
 
     class Meta:
         model = Controller
+        fieldsets = (
+            ("Controller", ("name", "status", "role", "location", "platform", "capabilities", "description")),
+            FormPanel(
+                "Integration",
+                (
+                    "external_integration",
+                    # A controller runs on either a single device or a device redundancy group, never both.
+                    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the first tab
+                    # ("Controller Device") is now active by default; the old template opened on the redundancy
+                    # group tab.
+                    TabbedGroups(
+                        ("Controller Device", ("controller_device",)),
+                        ("Controller Device Redundancy Group", ("controller_device_redundancy_group",)),
+                        clear_inactive=True,
+                    ),
+                ),
+            ),
+            Contributed("tenancy"),
+        )
         fields = (
             "name",
             "status",

@@ -854,3 +854,24 @@ class VisibleIfEnforcementTestCase(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["description"], "")  # cleared, not dropped
         self.assertEqual(form.cleaned_data["extra"], "e")
+
+
+class IPAddressFormLayoutTestCase(TestCase):
+    """`IPAddressForm.Meta.fieldsets` renders the NAT selectors as tabbed groups feeding `nat_inside`."""
+
+    def test_add_page(self):
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.get(reverse("ipam:ipaddress_add"))
+        self.assertHttpStatus(response, 200)
+        content = response.content.decode(response.charset)
+        for label in ("IP Address", "Tenancy", "NAT IP (Inside)"):
+            self.assertIn(f"<strong>{label}</strong>", content)
+        self.assertLess(content.index("<strong>Tenancy</strong>"), content.index("<strong>NAT IP (Inside)</strong>"))
+        self.assertIn('class="nb-form-tabbed-groups"', content)
+        self.assertIn("data-nb-active-tab", content)
+        for tab in ("By Device", "By VM", "By IP"):
+            self.assertIn(f">{tab}<", content)
+        # `nat_inside` sits after the tabs, outside any pane
+        self.assertIn('id="id_nat_inside"', content)
+        self.assertLess(content.index('id="id_nat_vrf"'), content.index('id="id_nat_inside"'))

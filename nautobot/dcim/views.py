@@ -4297,25 +4297,10 @@ class ModuleUIViewSet(BulkComponentCreateUIViewSetMixin, NautobotUIViewSet):
             context["modulebay_count"] = instance.module_bays.count()
             populated_module_count = instance.module_bays.filter(installed_module__isnull=False).count()
             context["module_count"] = f"{populated_module_count}/{context['modulebay_count']}"
-        if self.action in ["create", "update"]:
-            context["active_parent_tab"] = self._get_edit_view_active_parent_tab(request)
+        # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `_get_edit_view_active_parent_tab`
+        # (which built a second ModuleForm per request to pick the open tab) was removed; `ModuleForm.Meta.fieldsets`
+        # TabbedGroups opens on the first tab whose field carries a value.
         return context
-
-    def _get_edit_view_active_parent_tab(self, request):
-        active_parent_tab = "device"
-        form_class = self.get_form_class()
-        form = form_class(
-            data=request.POST,
-            files=request.FILES,
-            initial=normalize_querydict(request.GET, form_class=form_class),
-            instance=self.get_object(),
-        )
-        if form["parent_module_bay_module"].initial:
-            active_parent_tab = "module"
-        elif form["location"].initial:
-            active_parent_tab = "location"
-
-        return active_parent_tab
 
     @action(
         detail=True,
