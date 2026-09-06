@@ -34,7 +34,7 @@ from nautobot.core.ui.object_form import (
     When,
 )
 from nautobot.dcim.forms import ManufacturerForm, SoftwareImagePanel, SoftwareVersionForm
-from nautobot.dcim.models import Manufacturer, Platform
+from nautobot.dcim.models import Device, Manufacturer, Platform
 from nautobot.extras.choices import CustomFieldTypeChoices, RelationshipTypeChoices
 from nautobot.extras.forms import NautobotModelForm
 from nautobot.extras.models import CustomField, Relationship
@@ -937,6 +937,55 @@ class VisibleIfEnforcementTestCase(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data["description"], "")  # cleared, not dropped
         self.assertEqual(form.cleaned_data["extra"], "e")
+
+
+class DeviceFormLayoutTestCase(TestCase):
+    """`DeviceForm.Meta.fieldsets` reproduces the former hand-written template, including its conditional parts."""
+
+    PANEL_LABELS = (
+        "Device",
+        "Location",
+        "Hardware",
+        "Software",
+        "VRF Assignment",
+        "Management",
+        "Topology",
+        "Virtualization",
+        "Tenancy",
+        "Local Config Context Data",
+        "Comments",
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+    def test_add_page(self):
+        response = self.client.get(reverse("dcim:device_add"))
+        self.assertHttpStatus(response, 200)
+        content = response.content.decode(response.charset)
+        positions = [content.index(f"<strong>{label}</strong>") for label in self.PANEL_LABELS]
+        self.assertEqual(positions, sorted(positions), "panels are not rendered in the declared order")
+        # The software image list and the script that drives it (shipped via the panel's Media)
+        self.assertIn("data-nb-software-image-picker", content)
+        self.assertIn("js/software_image_picker.js", content)
+        # On create: no primary IP fields, a hint instead; rack face/position shown (not a child device)
+        self.assertNotIn('id="id_primary_ip4"', content)
+        self.assertIn("A management IP address can be selected after creating this device", content)
+        self.assertIn('id="id_face"', content)
+        self.assertIn('id="id_position"', content)
+        self.assertNotIn("Parent bay", content)
+
+    def test_edit_page(self):
+        device = Device.objects.first()
+        response = self.client.get(reverse("dcim:device_edit", kwargs={"pk": device.pk}))
+        self.assertHttpStatus(response, 200)
+        content = response.content.decode(response.charset)
+        self.assertIn('id="id_primary_ip4"', content)
+        self.assertIn('id="id_primary_ip6"', content)
+        self.assertNotIn("A management IP address can be selected after creating this device", content)
+        self.assertIn("<strong>Notes</strong>", content)
 
 
 class IPAddressFormLayoutTestCase(TestCase):

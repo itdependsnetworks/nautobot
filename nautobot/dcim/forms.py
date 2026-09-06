@@ -5,7 +5,7 @@ import re
 from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models import Q
 from django.urls import reverse
 from django.utils.html import format_html
@@ -51,6 +51,7 @@ from nautobot.core.ui.object_form import (
     IncludedTemplate,
     InlineFields,
     Omitted,
+    StaticField,
     TabbedGroups,
     When,
 )
@@ -2311,6 +2312,23 @@ class SoftwareImagePanel(FormPanel):
         super().__init__(label, items, **kwargs)
 
 
+def _device_is_installed_child(context):
+    """`render_if` for the Device form: the device is a child device type sitting in a parent's device bay."""
+    obj = context.get("obj")
+    if obj is None:
+        return False
+    try:
+        parent_bay = obj.parent_bay  # reverse one-to-one: raises rather than returning None when absent
+    except ObjectDoesNotExist:
+        return False
+    device_type = getattr(obj, "device_type", None)
+    return bool(parent_bay and device_type is not None and device_type.is_child_device)
+
+
+def _device_is_not_installed_child(context):
+    return not _device_is_installed_child(context)
+
+
 class DeviceForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm, LocalContextModelForm):
     rack_group = DynamicModelChoiceField(
         queryset=RackGroup.objects.all(),
@@ -2417,6 +2435,46 @@ class DeviceForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm, LocalC
             "local_config_context_data",
             "local_config_context_schema",
         ]
+        fieldsets = (
+            ("Device", ("name", "role", "status", "secrets_group")),
+            FormPanel(
+                "Location",
+                (
+                    "location",
+                    "rack_group",
+                    "rack",
+                    # A child device installed in a device bay shows its parent instead of a rack face/position.
+                    StaticField("Parent device", attribute="parent_bay.device", render_if=_device_is_installed_child),
+                    StaticField(
+                        "Parent bay",
+                        template_path="dcim/inc/device_parent_bay_field.html",
+                        render_if=_device_is_installed_child,
+                    ),
+                    FormField("face", render_if=_device_is_not_installed_child),
+                    FormField("position", render_if=_device_is_not_installed_child),
+                ),
+            ),
+            ("Hardware", ("manufacturer", "device_type", "serial", "asset_tag")),
+            SoftwareImagePanel("Software", ("platform", "software_version", "software_image_files")),
+            ("VRF Assignment", ("vrfs",)),
+            FormPanel(
+                "Management",
+                (
+                    # Primary IPs can only be chosen once the device has interfaces with addresses assigned.
+                    FormField("primary_ip4", render_if="editing"),
+                    FormField("primary_ip6", render_if="editing"),
+                    IncludedTemplate("dcim/inc/device_primary_ip_hint.html", render_if="not editing"),
+                ),
+            ),
+            (
+                "Topology",
+                ("device_redundancy_group", "device_redundancy_group_priority", "controller_managed_device_group"),
+            ),
+            ("Virtualization", ("cluster_group", "clusters")),
+            Contributed("tenancy"),
+            ("Local Config Context Data", ("local_config_context_schema", "local_config_context_data")),
+            ("Comments", ("comments",)),
+        )
         help_texts = {
             "role": "The function this device serves",
             "serial": "Chassis serial number",
@@ -4509,6 +4567,24 @@ class InventoryItemForm(ComponentEditForm):
 
     class Meta:
         model = InventoryItem
+        fieldsets = (
+            SoftwareImagePanel(
+                "Inventory Item",
+                (
+                    "device",
+                    "parent",
+                    "name",
+                    "label",
+                    "manufacturer",
+                    "software_version",
+                    "software_image_files",
+                    "part_id",
+                    "serial",
+                    "asset_tag",
+                    "description",
+                ),
+            ),
+        )
         fields = [
             "device",
             "parent",

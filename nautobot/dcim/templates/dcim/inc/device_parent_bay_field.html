@@ -1,0 +1,20 @@
+{% comment %}
+Read-only "Parent bay" row on the Device form for a child device installed in a device bay, with a shortcut to
+remove it from the bay. Rendered by a `StaticField` in `DeviceForm.Meta.fieldsets`.
+{% endcomment %}
+<div class="mb-10 d-md-flex justify-content-center">
+    <span class="col-md-3 col-form-label">{{ label }}</span>
+    <div class="col-md-9">
+        <p class="form-control-plaintext">
+            {{ obj.parent_bay.name }}
+            {% if perms.dcim.change_devicebay %}
+                {# The `title` the old template put on the icon is dropped: the icon is aria-hidden, and the #}
+                {# button's own text is its accessible name. #}
+                <a href="{% url 'dcim:devicebay_depopulate' pk=obj.parent_bay.pk %}" class="btn btn-danger btn-sm">
+                    <span class="mdi mdi-close-thick me-4" aria-hidden="true"></span><!--
+                    -->Remove
+                </a>
+            {% endif %}
+        </p>
+    </div>
+</div>

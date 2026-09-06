@@ -25,7 +25,7 @@ from nautobot.dcim.form_mixins import (
     LocatableModelFilterFormMixin,
     LocatableModelFormMixin,
 )
-from nautobot.dcim.forms import INTERFACE_MODE_HELP_TEXT, InterfaceCommonForm
+from nautobot.dcim.forms import INTERFACE_MODE_HELP_TEXT, InterfaceCommonForm, SoftwareImagePanel
 from nautobot.dcim.models import Device, Platform, SoftwareImageFile, SoftwareVersion
 from nautobot.extras.forms import (
     CustomFieldModelBulkEditFormMixin,
@@ -228,6 +228,25 @@ class VirtualMachineForm(NautobotModelForm, TenancyForm, LocalContextModelForm):
 
     class Meta:
         model = VirtualMachine
+        fieldsets = (
+            ("Virtual Machine", ("name", "role", "status")),
+            ("Cluster", ("cluster_group", "cluster")),
+            ("VRF Assignment", ("vrfs",)),
+            SoftwareImagePanel(
+                "Management",
+                (
+                    "platform",
+                    "primary_ip4",
+                    "primary_ip6",
+                    "software_version",
+                    "software_image_files",
+                ),
+            ),
+            ("Resources", ("vcpus", "memory", "disk")),
+            Contributed("tenancy"),
+            ("Local Config Context Data", ("local_config_context_schema", "local_config_context_data")),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "name",
             "status",
