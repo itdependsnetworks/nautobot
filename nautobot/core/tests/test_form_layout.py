@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from django import forms
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.template import Context, engines
 from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
@@ -422,6 +423,29 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIn("<strong>Notes</strong>", html)
         self.assertIn('id="id_object_note"', html)
 
+    def test_visible_if_serializes_to_wrapper(self):
+        fieldsets = (
+            (
+                "Main",
+                (
+                    "name",
+                    FormField("description", visible_if=When("name", is_set=True), clear_on_hide=True),
+                ),
+            ),
+            FormPanel("Extras", ("extra",), visible_if=AnyOf(When("name", eq="a"), When("name", eq="b"))),
+        )
+        form = form_class_with_fieldsets(fieldsets)()
+        html = form.layout.render(self.context())
+        self.assertIn('data-nb-visible-if="{&quot;field&quot;:&quot;name&quot;,&quot;is_set&quot;:true}"', html)
+        self.assertIn('data-nb-clear-on-hide="true"', html)
+        self.assertIn("&quot;any&quot;", html)
+        # Conditions that are false for the form's current values render hidden from the start
+        self.assertEqual(html.count(" hidden>"), 2)
+        html = form_class_with_fieldsets(fieldsets)(initial={"name": "a"}).layout.render(self.context())
+        self.assertNotIn(" hidden>", html)
+        html = form_class_with_fieldsets(fieldsets)(data={"name": "c"}).layout.render(self.context())
+        self.assertEqual(html.count(" hidden>"), 1)  # `description` shows for any name; "Extras" only for a or b
+
     def test_field_label_help_text_and_full_width(self):
         fieldsets = (
             (
@@ -585,3 +609,135 @@ class ContributedFieldsPanelTestCase(TestCase):
 
         with self.assertRaises(TypeError):
             FormLayout(BadForm())
+
+
+class VisibleIfEnforcementTestCase(TestCase):
+    """`visible_if` and inactive tab groups are enforced on the server during validation, not only in the browser."""
+
+    def setUp(self):
+        super().setUp()
+        self.request = RequestFactory().get("/")
+        self.request.user = self.user
+
+    @staticmethod
+    def mode_form_class(panel_level=False):
+        detail = FormField("detail", visible_if=When("mode", eq="on"))
+        scratch = FormField("scratch", visible_if=When("mode", eq="on"), clear_on_hide=True)
+        if panel_level:
+            fieldsets = (
+                ("Main", ("name", "mode")),
+                FormPanel(
+                    "Details",
+                    (FormField("detail"), FormField("scratch", clear_on_hide=True)),
+                    visible_if=When("mode", eq="on"),
+                ),
+            )
+        else:
+            fieldsets = (("Main", ("name", "mode", detail, scratch)),)
+
+        class ModeForm(ManufacturerLayoutForm):
+            mode = forms.ChoiceField(choices=[("", "---------"), ("on", "On"), ("off", "Off")], required=False)
+            detail = forms.CharField(required=True)
+            scratch = forms.CharField(required=False)
+
+            class Meta(ManufacturerLayoutForm.Meta):
+                pass
+
+        ModeForm.Meta.fieldsets = fieldsets
+        return ModeForm
+
+    def test_hidden_required_field_does_not_block_submission(self):
+        form = self.mode_form_class()(data={"name": "Vendor", "mode": "off", "detail": "stale", "scratch": "stale"})
+        self.assertTrue(form.is_valid(), form.errors)
+        # `detail` was hidden: its submitted value is ignored
+        self.assertNotIn("detail", form.cleaned_data)
+        # `scratch` was hidden with clear_on_hide: it is cleared
+        self.assertEqual(form.cleaned_data["scratch"], "")
+        # `required` was lifted only for the cleaning run; the field is as declared afterwards
+        self.assertTrue(form.fields["detail"].required)
+
+    def test_hidden_field_errors_are_discarded(self):
+        class StrictField(forms.CharField):
+            """Rejects being cleared, to exercise the fallback when `clear(None)` fails."""
+
+            def clean(self, value):
+                if value is None:
+                    raise ValidationError("cannot be cleared")
+                return super().clean(value)
+
+        class CountForm(self.mode_form_class()):
+            count = forms.IntegerField(required=False)
+            strict = StrictField(required=False)
+
+            class Meta(self.mode_form_class().Meta):
+                fieldsets = (
+                    (
+                        "Main",
+                        (
+                            "name",
+                            "mode",
+                            FormField("detail", visible_if=When("mode", eq="on")),
+                            FormField("scratch", visible_if=When("mode", eq="on"), clear_on_hide=True),
+                            FormField("count", visible_if=When("mode", eq="on")),
+                            FormField("strict", visible_if=When("mode", eq="on"), clear_on_hide=True),
+                        ),
+                    ),
+                )
+
+        form = CountForm(data={"name": "Vendor", "mode": "off", "count": "not-a-number", "strict": "stale"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn("count", form.errors)
+        self.assertNotIn("count", form.cleaned_data)
+        # Clearing failed, so the value is dropped rather than left stale
+        self.assertNotIn("strict", form.cleaned_data)
+        # Visible, the same input is an error as usual
+        form = CountForm(data={"name": "Vendor", "mode": "on", "detail": "d", "count": "not-a-number"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("count", form.errors)
+
+    def test_panel_level_clear_on_hide(self):
+        form_class = self.mode_form_class(panel_level=True)
+        form_class.Meta.fieldsets[1].clear_on_hide = True
+        form = form_class(data={"name": "Vendor", "mode": "", "detail": "stale", "scratch": "stale"})
+        self.assertTrue(form.is_valid(), form.errors)
+        # Set on the panel, `clear_on_hide` applies to every field in it: `detail` is cleared, not merely dropped
+        self.assertEqual(form.cleaned_data["detail"], "")
+        self.assertEqual(form.cleaned_data["scratch"], "")
+
+    def test_disabled_field_initial_value_drives_conditions(self):
+        """A disabled field never submits; its initial value is what the browser showed, so that is what counts."""
+
+        class LockedModeForm(self.mode_form_class()):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.fields["mode"].disabled = True
+
+        form = LockedModeForm(data={"name": "Vendor"}, initial={"mode": "on"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("detail", form.errors)  # visible because the locked mode is "on", so still required
+        form = LockedModeForm(data={"name": "Vendor", "detail": "stale"}, initial={"mode": "off"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn("detail", form.cleaned_data)
+
+    def test_declaration_validation(self):
+        with self.assertRaises(TypeError):
+            FormPanel("x", visible_if="mode")
+        with self.assertRaises(TypeError):
+            FormField("name", visible_if=When("mode", eq="on"), clear_on_hide="yes")
+
+    def test_visible_field_is_validated_normally(self):
+        form = self.mode_form_class()(data={"name": "Vendor", "mode": "on"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("detail", form.errors)
+        form = self.mode_form_class()(data={"name": "Vendor", "mode": "on", "detail": "x", "scratch": "y"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["detail"], "x")
+        self.assertEqual(form.cleaned_data["scratch"], "y")
+
+    def test_panel_level_condition_hides_every_field_in_the_panel(self):
+        form = self.mode_form_class(panel_level=True)(
+            data={"name": "Vendor", "mode": "", "detail": "stale", "scratch": "stale"}
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn("detail", form.cleaned_data)
+        self.assertEqual(form.cleaned_data["scratch"], "")

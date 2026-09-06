@@ -18,7 +18,7 @@ import copy
 from functools import cached_property
 import json
 
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.forms.utils import flatatt
 from django.template import Context
 from django.utils.html import format_html, format_html_join
@@ -354,6 +354,9 @@ class FormComponent(Component):
     Keyword Args:
         render_if (str or callable, optional): Server-side gate. A dotted path resolved against the render context
             (optionally prefixed with `not `), or a callable taking the context. When false, nothing is emitted.
+        visible_if (Condition, optional): Client-side gate, also enforced on the server during validation. When
+            false, the component's wrapper is hidden and its controls are disabled.
+        clear_on_hide (bool, optional): When hidden by `visible_if`, also clear the controls' values.
         attrs (dict, optional): Extra HTML attributes for the component's wrapper element.
         weight (int, optional): Relative ordering among top-level panels. Items inside a panel are ordered
             positionally and ignore weight. Top-level panels without an explicit weight receive one from their
@@ -364,10 +367,12 @@ class FormComponent(Component):
     """
 
     attrs = None
+    clear_on_hide = False
     deferred_render = False
     label = None
     render_if = None
     template_path = None
+    visible_if = None
 
     def __init__(self, **kwargs):
         if kwargs.pop("deferred_render", False):
@@ -377,10 +382,14 @@ class FormComponent(Component):
             )
         kwargs.setdefault("weight", 0)
         super().__init__(**kwargs)
+        if self.visible_if is not None and not isinstance(self.visible_if, Condition):
+            raise TypeError("visible_if must be a Condition instance (When, AnyOf, AllOf, Not)")
         if self.render_if is not None and not (isinstance(self.render_if, str) or callable(self.render_if)):
             raise TypeError("render_if must be a dotted-path string or a callable")
         if self.attrs is not None and not isinstance(self.attrs, dict):
             raise TypeError("attrs must be a dict")
+        if not isinstance(self.clear_on_hide, bool):
+            raise TypeError("clear_on_hide must be a boolean")
         # Populated on bound copies only:
         self.form = None
         self.layout = None
@@ -417,9 +426,26 @@ class FormComponent(Component):
         return evaluate_render_if(self.render_if, context)
 
     def wrapper_attrs(self):
-        """HTML attributes for this component's wrapper element."""
+        """HTML attributes for this component's wrapper element, including the `visible_if` serialization."""
         attrs = dict(self.attrs or {})
+        if self.visible_if is not None:
+            attrs["data-nb-visible-if"] = self.visible_if.to_json()
+            if self._initially_hidden():
+                # Rendered hidden from the start, so nothing flashes before the client runtime runs and a stored
+                # value that no longer satisfies its condition is hidden rather than wiped on load.
+                attrs["hidden"] = True
+        if self.clear_on_hide:
+            # Emitted independently of `visible_if`: a field may ask to be cleared when an enclosing panel hides it.
+            attrs["data-nb-clear-on-hide"] = "true"
         return attrs
+
+    def _initially_hidden(self):
+        """Whether `visible_if` is false for the values the form currently shows (submitted data, else initial)."""
+        if self.visible_if is None or self.form is None:
+            return False
+        names = [name for name in self.visible_if.field_names() if name in self.form.fields]
+        values = {name: self.form[name].value() for name in names}
+        return not self.visible_if.matches(values)
 
     def _wrap(self, html):
         """Wrap rendered HTML in a `div` carrying `wrapper_attrs()`, or return it untouched when there are none."""
@@ -958,3 +984,72 @@ class FormLayoutMixin:
     @cached_property
     def layout(self):
         return FormLayout(self)
+
+    # --- server-side enforcement of `visible_if` and inactive tab groups -------------------------------------------
+
+    def _layout_raw_values(self):
+        """
+        Raw value of every field as the browser sees it: the submitted value (strings, lists, booleans for
+        checkboxes), or the initial value for a disabled field, which the browser shows but never submits.
+        """
+        return {name: self[name].value() for name in self.fields}
+
+    def _layout_hidden_fields(self):
+        """
+        Determine which fields the layout hides for the submitted data.
+
+        Returns:
+            (dict): Field name to a boolean: `True` if the value should be cleared (`clear_on_hide`), `False` if the
+                submitted value should merely be ignored.
+        """
+        if not self.is_bound:
+            return {}
+        hidden = {}
+        self._collect_fields_hidden_by_conditions(hidden)
+        return {name: clear for name, clear in hidden.items() if name in self.fields}
+
+    def _collect_fields_hidden_by_conditions(self, hidden):
+        """Add to `hidden` every field inside a component whose `visible_if` is false for the submitted values."""
+        raw_values = None
+        for component in self.layout.iter_components():
+            if component.visible_if is None:
+                continue
+            if raw_values is None:
+                raw_values = self._layout_raw_values()
+            if component.visible_if.matches(raw_values):
+                continue
+            # `clear_on_hide` may be set on the hidden component itself or on any field it contains.
+            for leaf in component.iter_components():
+                if isinstance(leaf, FormPanel):
+                    continue
+                for name in leaf.field_names:
+                    hidden[name] = hidden.get(name, False) or component.clear_on_hide or leaf.clear_on_hide
+
+    def _clean_fields(self):
+        """
+        Enforce the layout's `visible_if` conditions and inactive tab groups while cleaning fields.
+
+        A hidden field is never required, its submitted value is discarded (or replaced by the field's empty value
+        when `clear_on_hide` is set), and any validation error it produced is dropped. This mirrors what the browser
+        does when it disables the hidden controls, so that the client is never the sole enforcer of the rule.
+        """
+        hidden = self._layout_hidden_fields()
+        # Lift `required` only for this cleaning run (including the clearing below); the field definitions are left
+        # as declared afterwards.
+        required = {name: self.fields[name].required for name in hidden}
+        for name in hidden:
+            self.fields[name].required = False
+        try:
+            super()._clean_fields()
+            for name, clear in hidden.items():
+                self._errors.pop(name, None)
+                if clear:
+                    try:
+                        self.cleaned_data[name] = self.fields[name].clean(None)
+                    except ValidationError:
+                        self.cleaned_data.pop(name, None)
+                else:
+                    self.cleaned_data.pop(name, None)
+        finally:
+            for name, value in required.items():
+                self.fields[name].required = value
