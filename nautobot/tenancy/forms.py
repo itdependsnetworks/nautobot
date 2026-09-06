@@ -61,6 +61,10 @@ class TenantForm(NautobotModelForm):
 
     class Meta:
         model = Tenant
+        fieldsets = (
+            ("Tenant", ("name", "tenant_group", "description")),
+            ("Comments", ("comments",)),
+        )
         fields = (
             "name",
             "tenant_group",

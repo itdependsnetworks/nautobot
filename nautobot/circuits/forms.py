@@ -40,6 +40,11 @@ class ProviderForm(NautobotModelForm):
 
     class Meta:
         model = Provider
+        fieldsets = (
+            ("Provider", ("name", "asn")),
+            ("Support Info", ("account", "portal_url", "noc_contact", "admin_contact")),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "name",
             "asn",

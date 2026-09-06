@@ -106,6 +106,11 @@ class CloudNetworkForm(NautobotModelForm):
 
     class Meta:
         model = CloudNetwork
+        fieldsets = (
+            ("Cloud Network", ("name", "description", "cloud_resource_type", "cloud_account", "cloud_services")),
+            ("Prefixes", ("namespace", "prefixes")),
+            ("Advanced Configurations", ("parent", "extra_config")),
+        )
         fields = [
             "name",
             "description",
@@ -284,6 +289,10 @@ class CloudServiceForm(NautobotModelForm):
 
     class Meta:
         model = CloudService
+        fieldsets = (
+            ("Cloud Service", ("name", "description", "cloud_resource_type", "cloud_account", "cloud_networks")),
+            ("Advanced Configurations", ("extra_config",)),
+        )
         fields = [
             "name",
             "description",

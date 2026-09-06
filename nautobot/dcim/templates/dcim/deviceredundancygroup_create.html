@@ -1,22 +1,5 @@
 {% extends 'generic/object_create.html' %}
-{% load form_helpers %}
-
-{% block form %}
-    <div class="card">
-        <div class="card-header"><strong>Device Redundancy Group</strong></div>
-        <div class="card-body">
-            {% render_field form.name %}
-            {% render_field form.status %}
-            {% render_field form.description %}
-            {% render_field form.failover_strategy %}
-            {% render_field form.secrets_group %}
-        </div>
-    </div>
-    {% include 'inc/extras_features_edit_form_fields.html' %}
-    <div class="card">
-        <div class="card-header"><strong>Comments</strong></div>
-        <div class="card-body">
-            {% render_field form.comments %}
-        </div>
-    </div>
-{% endblock form %}
+{% comment %}
+The Device Redundancy Group form is laid out by `DeviceRedundancyGroupForm.Meta.fieldsets` (see nautobot/dcim/forms.py); this template intentionally
+adds nothing and remains only so that Apps extending it keep working.
+{% endcomment %}

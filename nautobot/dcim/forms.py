@@ -777,6 +777,10 @@ class RackReservationForm(NautobotModelForm, TenancyForm):
 
     class Meta:
         model = RackReservation
+        fieldsets = (
+            ("Rack Reservation", ("location", "rack_group", "rack", "units", "user", "description")),
+            ("Tenant Assignment", ("tenant_group", "tenant")),
+        )
         fields = [
             "rack",
             "units",
@@ -974,6 +978,23 @@ class DeviceTypeForm(NautobotModelForm):
 
     class Meta:
         model = DeviceType
+        fieldsets = (
+            (
+                "Device Type",
+                (
+                    "manufacturer",
+                    "device_family",
+                    "model",
+                    "part_number",
+                    "u_height",
+                    "is_full_depth",
+                    "subdevice_role",
+                    "software_image_files",
+                ),
+            ),
+            ("Rack Images", ("front_image", "rear_image")),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "manufacturer",
             "device_family",
@@ -5050,6 +5071,10 @@ class VirtualChassisCreateForm(NautobotModelForm):
 
     class Meta:
         model = VirtualChassis
+        fieldsets = (
+            ("Virtual Chassis", ("name", "domain")),
+            ("Member Devices", ("location", "rack", "members", "initial_position")),
+        )
         fields = [
             "name",
             "domain",
@@ -5312,6 +5337,15 @@ class PowerFeedForm(NautobotModelForm):
 
     class Meta:
         model = PowerFeed
+        fieldsets = (
+            ("Power Panel", ("location", "power_panel", "destination_panel")),
+            ("Power Feed", ("rack", "name", "status")),
+            # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): `power_path` is now on the page;
+            # the old template omitted it although the form had the field.
+            ("Characteristics", ("type", "power_path", "supply", "voltage", "amperage", "phase", "max_utilization")),
+            ("Circuit Breaker Configuration", ("breaker_position", "breaker_pole_count")),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "location",
             "power_panel",
@@ -5450,6 +5484,10 @@ class DeviceRedundancyGroupForm(NautobotModelForm):
 
     class Meta:
         model = DeviceRedundancyGroup
+        fieldsets = (
+            ("Device Redundancy Group", ("name", "status", "description", "failover_strategy", "secrets_group")),
+            ("Comments", ("comments",)),
+        )
         fields = "__all__"
         widgets = {"failover_strategy": StaticSelect2()}
 

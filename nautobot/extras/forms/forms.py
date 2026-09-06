@@ -669,6 +669,10 @@ class ConfigContextSchemaForm(NautobotModelForm):
 
     class Meta:
         model = ConfigContextSchema
+        fieldsets = (
+            ("Config Context Schema", ("name", "description")),
+            ("Data Schema", ("data_schema",)),
+        )
         fields = (
             "name",
             "description",
@@ -1226,6 +1230,10 @@ class ExportTemplateFilterForm(BootstrapMixin, forms.Form):
 class ExternalIntegrationForm(NautobotModelForm):
     class Meta:
         model = ExternalIntegration
+        fieldsets = (
+            ("External Integration", ("name", "remote_url", "verify_ssl", "secrets_group", "timeout")),
+            ("Advanced Configurations", ("headers", "http_method", "ca_file_path", "extra_config")),
+        )
         fields = "__all__"
 
         HEADERS_HELP_TEXT = """
@@ -2775,6 +2783,7 @@ class TagForm(NautobotModelForm):
 
     class Meta:
         model = Tag
+        fieldsets = (("Tag", ("name", "color", "description", "content_types")),)
         fields = ["name", "color", "description", "content_types"]
 
     def clean(self):

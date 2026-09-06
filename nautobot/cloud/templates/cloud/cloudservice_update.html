@@ -1,25 +1,5 @@
 {% extends 'generic/object_create.html' %}
-{% load static %}
-{% load form_helpers %}
-
-{% block form %}
-    <div class="card mb-10">
-        <div class="card-header"><strong>Cloud Service</strong></div>
-        <div class="card-body">
-            {% render_field form.name %}
-            {% render_field form.description %}
-            {% render_field form.cloud_resource_type %}
-            {% render_field form.cloud_account %}
-            {% render_field form.cloud_networks %}
-        </div>
-    </div>
-    <div class="card mb-10">
-        <div class="card-header"><strong>Advanced Configurations</strong></div>
-        <div class="card-body">
-            {% render_field form.extra_config %}
-        </div>
-    </div>
-
-    {% include 'inc/extras_features_edit_form_fields.html' %}
-
-{% endblock form %}
+{% comment %}
+The Cloud Service form is laid out by `CloudServiceForm.Meta.fieldsets` (see nautobot/cloud/forms.py); this template intentionally
+adds nothing and remains only so that Apps extending it keep working.
+{% endcomment %}
