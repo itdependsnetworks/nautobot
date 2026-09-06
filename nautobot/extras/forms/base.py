@@ -1,4 +1,5 @@
 from nautobot.core.forms import BootstrapMixin, EmbeddedActionsFormMixin
+from nautobot.core.ui.object_form import FormLayoutMixin
 from nautobot.data_validation.form_mixin import DataValidationModelFormMixin
 
 from .mixins import (
@@ -26,6 +27,9 @@ __all__ = (
 
 
 class NautobotModelForm(
+    # FormLayoutMixin adds no fields; it resolves `Meta.fieldsets` lazily (on first access of `form.layout`) and
+    # extends `media`, so it sits first in the MRO to see the fully-initialized form.
+    FormLayoutMixin,
     BootstrapMixin,
     # The below must be listed *after* BootstrapMixin so that BootstrapMixin applies to their dynamic form fields
     EmbeddedActionsFormMixin,
@@ -38,8 +42,10 @@ class NautobotModelForm(
 ):
     """
     This class exists to combine common functionality and is used to inherit from throughout the
-    codebase where all of BootstrapMixin, EmbeddedActionsFormMixin, CustomFieldModelFormMixin,
+    codebase where all of FormLayoutMixin, BootstrapMixin, EmbeddedActionsFormMixin, CustomFieldModelFormMixin,
     RelationshipModelFormMixin, and NoteModelFormMixin are needed.
+
+    Declare `Meta.fieldsets` to control how the form is laid out; see `nautobot.core.ui.object_form`.
     """
 
 

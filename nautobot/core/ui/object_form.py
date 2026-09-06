@@ -14,18 +14,23 @@ Two visibility mechanisms exist and are deliberately named to carry their differ
 """
 
 import copy
+from functools import cached_property
 
 from django.forms.utils import flatatt
 from django.template import Context
 from django.utils.html import format_html, format_html_join
+from django.utils.text import capfirst
 
 from nautobot.core.templatetags.form_helpers import get_render_field_context
 from nautobot.core.ui.object_detail import Component
 from nautobot.core.ui.utils import render_component_template
 
 __all__ = (
+    "ContributedFieldsPanel",
     "FormComponent",
     "FormField",
+    "FormLayout",
+    "FormLayoutMixin",
     "FormPanel",
 )
 
@@ -209,6 +214,8 @@ class FormPanel(FormComponent):
             card's classes.
     """
 
+    WEIGHT_TRAILING_PANEL = 9000
+
     css_class = None
     items = ()
     template_path = "components/form/panel.html"
@@ -273,3 +280,236 @@ class FormPanel(FormComponent):
             extra_class=extra_class,
             wrapper_attrs=flatatt(attrs) if attrs else "",
         )
+
+
+class ContributedFieldsPanel(FormPanel):
+    """
+    A panel whose fields are discovered from the form instance at resolution time.
+
+    Form mixins that add fields dynamically (custom fields, relationships, notes, tags, tenancy, ...) declare one of
+    these in a `form_panels` class attribute. The panel renders whichever of its fields the form actually has and
+    that have not already been claimed by an explicit entry in `Meta.fieldsets`; if none remain, it renders nothing.
+
+    Args:
+        name (str): The key by which `Contributed(name)` refers to this panel.
+        label (str): The card header.
+        fields (tuple or callable): Field names to look for on the form, or a callable taking the form and
+            returning them.
+        weight (int): Default position relative to other panels; `Contributed(name)` in `Meta.fieldsets`
+            overrides it.
+    """
+
+    fields = ()
+    name = None
+
+    def __init__(self, name, label, fields, weight, **kwargs):
+        if not isinstance(name, str) or not name:
+            raise TypeError("ContributedFieldsPanel() requires a name")
+        if not callable(fields) and isinstance(fields, str):
+            raise TypeError("ContributedFieldsPanel() fields must be a tuple of names or a callable")
+        kwargs.update({"name": name, "label": label, "fields": fields, "weight": weight})
+        super().__init__(**kwargs)
+
+    def __repr__(self):
+        return f"ContributedFieldsPanel({self.name!r})"
+
+    def discover_field_names(self, form):
+        """Return the names of this panel's fields that exist on `form`, in order."""
+        names = self.fields(form) if callable(self.fields) else self.fields
+        return [name for name in names if name in form.fields]
+
+    def _bind_children(self, layout):
+        names = [name for name in self.discover_field_names(layout.form) if not layout.is_claimed(name)]
+        self._bound_items = tuple(FormField(name).bind(layout) for name in names)
+
+
+class _TrailingPanel(ContributedFieldsPanel):
+    """Internal: collects every visible field not claimed by any other panel, so that nothing is silently dropped."""
+
+    def __init__(self):
+        super().__init__(
+            name="__trailing__",
+            label=None,
+            fields=lambda form: [name for name, field in form.fields.items() if not field.widget.is_hidden],
+            weight=FormPanel.WEIGHT_TRAILING_PANEL,
+        )
+
+    def get_label(self, context):
+        layout = self.layout
+        if layout.has_declared_panels:
+            return "Other"
+        if layout.default_label:
+            return capfirst(layout.default_label)
+        obj_type = context.get("obj_type")
+        if obj_type:
+            return capfirst(str(obj_type))
+        meta = getattr(self.form, "_meta", None)
+        model = getattr(meta, "model", None)
+        if model is not None:
+            return capfirst(model._meta.verbose_name)
+        return None
+
+
+#
+# Resolution
+#
+
+
+def _coerce_toplevel(entry):
+    """Apply top-level shorthand: `("Label", (...))` and the floor-plan `("Label", {"tabs": ...})` form."""
+    if isinstance(entry, FormPanel):
+        return entry
+    if isinstance(entry, (tuple, list)) and len(entry) == 2 and isinstance(entry[0], (str, type(None))):
+        label, spec = entry
+        if isinstance(spec, (tuple, list)):
+            return FormPanel(label, items=spec)
+    if isinstance(entry, FormComponent):
+        raise TypeError(
+            f"{entry!r} cannot appear at the top level of Meta.fieldsets; wrap it in a FormPanel or FormSetPanel"
+        )
+    raise TypeError(f"Unrecognized Meta.fieldsets entry {entry!r}")
+
+
+def _coerce_item(item):
+    """Apply item shorthand: a bare string is a `FormField`."""
+    if isinstance(item, str):
+        return FormField(item)
+    if isinstance(item, FormPanel):
+        raise TypeError(f"{item!r} cannot be nested inside another panel")
+    if isinstance(item, FormComponent):
+        return item
+    if isinstance(item, (tuple, list)):
+        raise TypeError(
+            f"Nested tuple {item!r} is not a valid item; use TabbedGroups for grouped fields within a panel"
+        )
+    raise TypeError(f"Unrecognized fieldset item {item!r}")
+
+
+class FormLayout:
+    """
+    The resolved layout of one form instance: an ordered list of bound top-level panels.
+
+    Resolution rules:
+
+    1. Shorthand is expanded (`_coerce_toplevel`, `_coerce_item`), including the floor-plan `{"tabs": ...}` form.
+    2. Panels in `Meta.fieldsets` receive implicit weights 100, 200, 300... unless they declare their own.
+       Mixin-contributed panels use their declared weights; `Contributed(name)` pins one to a slot.
+    3. Resolution runs lazily, on first access of `form.layout`, so that every mixin and every subclass `__init__`
+       has finished adding or removing fields.
+    4. Every visible field is claimed exactly once: a duplicate or unknown name raises `ValueError`.
+    5. Hidden fields are emitted once, outside all panels, ahead of them.
+    6. Unclaimed fields are collected into a trailing panel. When no panels were declared it is the form's main
+       card: it renders first and is labelled with the object type, matching the generic create/edit page. When
+       panels were declared it renders last and is labelled `"Other"`.
+    """
+
+    def __init__(self, form):
+        self.form = form
+        self.default_label = None
+        self._claims = {}
+        self._contributed = {}
+        self.panels = ()
+        self.has_declared_panels = False
+        self._resolve()
+
+    @staticmethod
+    def declared_fieldsets(form_class):
+        """Return the `Meta.fieldsets` declaration for a form class, or an empty tuple."""
+        meta = getattr(form_class, "Meta", None)
+        fieldsets = getattr(meta, "fieldsets", None) or ()
+        if isinstance(fieldsets, (str, dict)):
+            raise TypeError(f"{form_class.__name__}.Meta.fieldsets must be a tuple or list")
+        return tuple(fieldsets)
+
+    def claim(self, name, component):
+        """Record that `component` renders field `name`; raise if the name is unknown or already claimed."""
+        form_name = type(self.form).__name__
+        if name not in self.form.fields:
+            raise ValueError(f"{form_name}.Meta.fieldsets references unknown field {name!r}")
+        if name in self._claims:
+            raise ValueError(f"{form_name}.Meta.fieldsets lists field {name!r} more than once")
+        self._claims[name] = component
+
+    def is_claimed(self, name):
+        return name in self._claims
+
+    def claimed_component(self, name):
+        """The bound component rendering field `name`, or `None` if it is unclaimed or declared `Omitted`."""
+        component = self._claims.get(name)
+        return component if isinstance(component, FormComponent) else None
+
+    def bind_item(self, item):
+        """Resolve one item inside a panel into a list of bound components (a `Contributed` splice may expand)."""
+        item = _coerce_item(item)
+        return [item.bind(self)]
+
+    def _resolve(self):
+        bound, pinned = self._bind_declared_panels()
+        bound.extend(self._bind_contributed_panels(pinned))
+        bound.append(self._bind_trailing_panel())
+        self.panels = tuple(sorted(bound, key=lambda component: component.weight))
+
+    def _bind_declared_panels(self):
+        """
+        Bind the top-level entries of `Meta.fieldsets`.
+
+        Returns:
+            (tuple): The bound panels, and a mapping of contributed panel name to the slot weight a `Contributed`
+            pin claims for it.
+        """
+        bound = []
+        pinned = {}
+        for index, entry in enumerate(self.declared_fieldsets(type(self.form))):
+            slot_weight = (index + 1) * 100
+            entry = _coerce_toplevel(entry)
+            bound.append(entry.bind(self, weight=entry.weight or slot_weight))
+            self.has_declared_panels = True
+        return bound, pinned
+
+    def _bind_contributed_panels(self, pinned):
+        """Bind every mixin-contributed panel at its pinned slot weight, else its own default weight."""
+        return [
+            declaration.bind(self, weight=pinned.get(name, declaration.weight))
+            for name, declaration in self._contributed.items()
+        ]
+
+    def _bind_trailing_panel(self):
+        # With no declared panels the trailing panel *is* the form's main card and leads, exactly as the generic
+        # create/edit template has always rendered it; otherwise it collects the leftovers at the very end.
+        weight = FormPanel.WEIGHT_TRAILING_PANEL if self.has_declared_panels else 0
+        return _TrailingPanel().bind(self, weight=weight)
+
+    # --- queries ----------------------------------------------------------------------------------------------
+
+    def iter_components(self):
+        for panel in self.panels:
+            yield from panel.iter_components()
+
+    # --- rendering --------------------------------------------------------------------------------------------
+
+    def render_hidden_fields(self):
+        return format_html_join("", "{}", ((str(bound_field),) for bound_field in self.form.hidden_fields()))
+
+    def render(self, context):
+        """Render hidden fields followed by every panel, in weight order."""
+        context = _as_context(context)
+        with context.update({"form": self.form}):
+            panels = format_html_join("", "{}", ((panel.render(context),) for panel in self.panels))
+        return format_html("{}{}", self.render_hidden_fields(), panels)
+
+
+class FormLayoutMixin:
+    """
+    Form mixin providing `Meta.fieldsets` support.
+
+    Exposes `layout` (the resolved `FormLayout`, computed on first access) and `has_declared_layout`
+    (whether this form class declares any fieldsets).
+    """
+
+    @property
+    def has_declared_layout(self):
+        return bool(FormLayout.declared_fieldsets(type(self)))
+
+    @cached_property
+    def layout(self):
+        return FormLayout(self)
