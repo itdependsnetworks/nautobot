@@ -16,6 +16,7 @@ Two visibility mechanisms exist and are deliberately named to carry their differ
 from collections.abc import Mapping
 import copy
 from functools import cached_property
+import json
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.forms.utils import flatatt
@@ -28,6 +29,9 @@ from nautobot.core.ui.object_detail import Component
 from nautobot.core.ui.utils import render_component_template
 
 __all__ = (
+    "AllOf",
+    "AnyOf",
+    "Condition",
     "Contributed",
     "ContributedFieldsPanel",
     "FormComponent",
@@ -36,7 +40,212 @@ __all__ = (
     "FormLayoutMixin",
     "FormPanel",
     "InlineFields",
+    "Not",
+    "When",
 )
+
+_UNSET = object()
+
+# Values that the browser (and Select2 in particular) uses to mean "nothing selected".
+_EMPTY_VALUES = (None, "", "null")
+
+
+#
+# Conditions (`visible_if`)
+#
+
+
+def _normalize_value(value):
+    """Collapse the various ways an "empty" value can reach us into `None` (scalar) or `[]` (list)."""
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if item not in _EMPTY_VALUES]
+    if value in _EMPTY_VALUES:
+        return None
+    return value
+
+
+def _as_bool(value):
+    """Coerce a raw form value to a boolean the way a checkbox would be interpreted."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).lower() not in ("", "0", "false", "off", "no", "null", "none")
+
+
+def _equals(actual, expected):
+    """Compare a raw form value to an expected value, tolerating the str-typing of submitted data."""
+    if isinstance(expected, bool):
+        return _as_bool(actual) is expected
+    if actual is None or expected is None:
+        return actual is None and expected is None
+    return str(actual) == str(expected)
+
+
+class Condition:
+    """
+    Base class for `visible_if` conditions.
+
+    A condition must round-trip to JSON (for the client-side runtime) and be evaluable in Python against raw form
+    data (for server-side enforcement). Keep the grammar small: anything richer than what `When`, `AnyOf`, `AllOf`
+    and `Not` can express belongs in an HTMX round trip instead.
+    """
+
+    def to_dict(self):
+        """Return a JSON-serializable dict describing this condition."""
+        raise NotImplementedError
+
+    def to_json(self):
+        """Serialize this condition for the `data-nb-visible-if` attribute."""
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+
+    def matches(self, data):
+        """
+        Evaluate this condition against a mapping of raw form values.
+
+        Args:
+            data (Mapping): Field name to raw value, as produced by `Widget.value_from_datadict()`; strings, lists
+                of strings, or booleans (for checkboxes).
+        """
+        raise NotImplementedError
+
+    def field_names(self):
+        """Return the set of field names this condition depends on."""
+        raise NotImplementedError
+
+    @staticmethod
+    def from_dict(data):
+        """Reconstruct a condition from the output of `to_dict()`."""
+        if "any" in data:
+            return AnyOf(*(Condition.from_dict(item) for item in data["any"]))
+        if "all" in data:
+            return AllOf(*(Condition.from_dict(item) for item in data["all"]))
+        if "not" in data:
+            return Not(Condition.from_dict(data["not"]))
+        kwargs = {}
+        if "eq" in data:
+            kwargs["eq"] = data["eq"]
+        elif "in" in data:
+            kwargs["in_"] = data["in"]
+        elif "is_set" in data:
+            kwargs["is_set"] = data["is_set"]
+        return When(data["field"], **kwargs)
+
+    def __eq__(self, other):
+        return isinstance(other, Condition) and self.to_dict() == other.to_dict()
+
+    def __hash__(self):
+        return hash(self.to_json())
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.to_json()})"
+
+
+class When(Condition):
+    """
+    A condition on a single field's value.
+
+    Exactly one of the keyword arguments must be given:
+
+    Args:
+        field (str): Name of the form field to inspect.
+        eq (Any): The field's value must equal this value (compared as strings; booleans compare as a checkbox would).
+        in_ (list): The field's value must be one of these values.
+        is_set (bool): `True` requires a non-empty value; `False` requires an empty one.
+
+    For multi-valued fields, `eq` and `in_` match if *any* selected value matches.
+    """
+
+    def __init__(self, field, *, eq=_UNSET, in_=None, is_set=None):
+        given = sum([eq is not _UNSET, in_ is not None, is_set is not None])
+        if given != 1:
+            raise TypeError("When() requires exactly one of `eq=`, `in_=`, or `is_set=`")
+        if in_ is not None and isinstance(in_, (str, bytes)):
+            raise TypeError("When(in_=...) expects a list or tuple of values, not a single string")
+        self.field = field
+        self.eq = eq
+        self.in_ = list(in_) if in_ is not None else None
+        self.is_set = is_set
+
+    def to_dict(self):
+        data = {"field": self.field}
+        if self.eq is not _UNSET:
+            data["eq"] = self.eq
+        elif self.in_ is not None:
+            data["in"] = self.in_
+        else:
+            data["is_set"] = self.is_set
+        return data
+
+    def matches(self, data):
+        value = _normalize_value(data.get(self.field))
+        if self.is_set is not None:
+            present = value not in (None, [])
+            return present is self.is_set
+        values = value if isinstance(value, list) else [value]
+        if self.eq is not _UNSET:
+            return any(_equals(item, self.eq) for item in values)
+        return any(_equals(item, option) for item in values for option in self.in_)
+
+    def field_names(self):
+        return {self.field}
+
+
+class _Combinator(Condition):
+    key = None
+
+    def __init__(self, *conditions):
+        if not conditions:
+            raise TypeError(f"{self.__class__.__name__}() requires at least one condition")
+        for condition in conditions:
+            if not isinstance(condition, Condition):
+                raise TypeError(f"{self.__class__.__name__}() arguments must be Condition instances")
+        self.conditions = conditions
+
+    def to_dict(self):
+        return {self.key: [condition.to_dict() for condition in self.conditions]}
+
+    def field_names(self):
+        names = set()
+        for condition in self.conditions:
+            names |= condition.field_names()
+        return names
+
+
+class AnyOf(_Combinator):
+    """True if any of the given conditions is true."""
+
+    key = "any"
+
+    def matches(self, data):
+        return any(condition.matches(data) for condition in self.conditions)
+
+
+class AllOf(_Combinator):
+    """True only if all of the given conditions are true."""
+
+    key = "all"
+
+    def matches(self, data):
+        return all(condition.matches(data) for condition in self.conditions)
+
+
+class Not(Condition):
+    """Inverts a condition."""
+
+    def __init__(self, condition):
+        if not isinstance(condition, Condition):
+            raise TypeError("Not() argument must be a Condition instance")
+        self.condition = condition
+
+    def to_dict(self):
+        return {"not": self.condition.to_dict()}
+
+    def matches(self, data):
+        return not self.condition.matches(data)
+
+    def field_names(self):
+        return self.condition.field_names()
 
 
 #

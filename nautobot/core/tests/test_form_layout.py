@@ -1,5 +1,6 @@
 """Tests for `nautobot.core.ui.object_form`: declarative form layout via `Meta.fieldsets`."""
 
+import json
 import re
 from types import SimpleNamespace
 
@@ -12,6 +13,9 @@ from django.urls import reverse
 from nautobot.circuits.forms import ProviderNetworkForm
 from nautobot.core.testing import TestCase
 from nautobot.core.ui.object_form import (
+    AllOf,
+    AnyOf,
+    Condition,
     Contributed,
     ContributedFieldsPanel,
     evaluate_render_if,
@@ -19,7 +23,9 @@ from nautobot.core.ui.object_form import (
     FormLayout,
     FormPanel,
     InlineFields,
+    Not,
     resolve_dotted_path,
+    When,
 )
 from nautobot.dcim.forms import ManufacturerForm, SoftwareVersionForm
 from nautobot.dcim.models import Manufacturer, Platform
@@ -55,6 +61,100 @@ def form_class_with_fieldsets(fieldsets, base=ManufacturerLayoutForm, **attrs):
     """Build a subclass of `base` whose `Meta.fieldsets` is `fieldsets`."""
     meta = type("Meta", (base.Meta,), {"fieldsets": fieldsets})
     return type("LayoutTestForm", (base,), {"Meta": meta, **attrs})
+
+
+class ConditionTestCase(SimpleTestCase):
+    """`visible_if` condition objects: evaluation, validation, and JSON round trip. Pure Python; no database."""
+
+    def test_edge_values(self):
+        # `eq=None` means "empty", however the browser spells it
+        self.assertTrue(When("x", eq=None).matches({"x": ""}))
+        self.assertTrue(When("x", eq=None).matches({"x": "null"}))
+        self.assertFalse(When("x", eq=None).matches({"x": "a"}))
+        # Submitted values are strings; compare as strings
+        self.assertTrue(When("n", eq=0).matches({"n": "0"}))
+        self.assertFalse(When("n", eq=0).matches({"n": ""}))
+        # A multi-valued field matches `in_` if any value matches, and counts as set only with a real value
+        self.assertTrue(When("t", in_=["a"]).matches({"t": ["b", "a"]}))
+        self.assertFalse(When("m", is_set=True).matches({"m": ["", "null"]}))
+        with self.assertRaises(TypeError):
+            AnyOf("x")
+        with self.assertRaises(TypeError):
+            Not("x")
+
+    def test_when_eq(self):
+        condition = When("mode", eq="tagged")
+        self.assertTrue(condition.matches({"mode": "tagged"}))
+        self.assertFalse(condition.matches({"mode": "access"}))
+        self.assertFalse(condition.matches({"mode": ""}))
+        self.assertFalse(condition.matches({}))
+        # Multi-valued fields match if any value matches
+        self.assertTrue(condition.matches({"mode": ["access", "tagged"]}))
+
+    def test_when_eq_boolean(self):
+        condition = When("enabled", eq=True)
+        self.assertTrue(condition.matches({"enabled": True}))
+        self.assertTrue(condition.matches({"enabled": "on"}))
+        self.assertFalse(condition.matches({"enabled": False}))
+        self.assertFalse(condition.matches({"enabled": "false"}))
+        self.assertFalse(condition.matches({}))
+        self.assertTrue(When("enabled", eq=False).matches({}))
+
+    def test_when_in(self):
+        condition = When("type", in_=["select", "multi-select"])
+        self.assertTrue(condition.matches({"type": "select"}))
+        self.assertTrue(condition.matches({"type": "multi-select"}))
+        self.assertFalse(condition.matches({"type": "text"}))
+        self.assertFalse(condition.matches({"type": None}))
+
+    def test_when_is_set(self):
+        self.assertTrue(When("mode", is_set=True).matches({"mode": "access"}))
+        self.assertFalse(When("mode", is_set=True).matches({"mode": ""}))
+        self.assertFalse(When("mode", is_set=True).matches({"mode": None}))
+        self.assertFalse(When("mode", is_set=True).matches({"mode": "null"}))  # Select2's "nothing selected"
+        self.assertFalse(When("mode", is_set=True).matches({"mode": []}))
+        self.assertTrue(When("mode", is_set=False).matches({"mode": ""}))
+        self.assertTrue(When("mode", is_set=False).matches({}))
+
+    def test_when_validation(self):
+        with self.assertRaises(TypeError):
+            When("mode")
+        with self.assertRaises(TypeError):
+            When("mode", eq="a", is_set=True)
+        with self.assertRaises(TypeError):
+            When("mode", in_="not-a-list")
+
+    def test_combinators(self):
+        a = When("a", eq="1")
+        b = When("b", eq="2")
+        self.assertTrue(AnyOf(a, b).matches({"a": "1"}))
+        self.assertFalse(AnyOf(a, b).matches({"a": "x"}))
+        self.assertTrue(AllOf(a, b).matches({"a": "1", "b": "2"}))
+        self.assertFalse(AllOf(a, b).matches({"a": "1"}))
+        self.assertTrue(Not(a).matches({"a": "x"}))
+        self.assertFalse(Not(a).matches({"a": "1"}))
+        self.assertEqual(AllOf(a, Not(b)).field_names(), {"a", "b"})
+        with self.assertRaises(TypeError):
+            AnyOf()
+        with self.assertRaises(TypeError):
+            Not("a")
+
+    def test_json_round_trip(self):
+        conditions = [
+            When("mode", eq="tagged"),
+            When("enabled", eq=True),
+            When("type", in_=["select", "multi-select"]),
+            When("mode", is_set=True),
+            When("mode", is_set=False),
+            AnyOf(When("a", eq="1"), AllOf(When("b", is_set=True), Not(When("c", in_=["x"])))),
+        ]
+        for condition in conditions:
+            with self.subTest(condition=condition):
+                restored = Condition.from_dict(json.loads(condition.to_json()))
+                self.assertEqual(restored, condition)
+                # Both evaluate identically against a few data sets
+                for data in ({}, {"mode": "tagged", "enabled": "on", "type": "select", "a": "1", "b": "x"}):
+                    self.assertEqual(restored.matches(data), condition.matches(data))
 
 
 class RenderIfTestCase(SimpleTestCase):
