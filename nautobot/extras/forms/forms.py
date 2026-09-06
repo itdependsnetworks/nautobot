@@ -52,6 +52,7 @@ from nautobot.core.ui.object_form import (
     FormPanel,
     FormSetPanel,
     IncludedTemplate,
+    Not,
     RemoteFragment,
     When,
 )
@@ -2061,12 +2062,17 @@ class JobQueueForm(NautobotModelForm):
         fields = ("name", "queue_type", "description", "tenant", "tags")
 
 
-class JobScheduleForm(BootstrapMixin, forms.Form):
+class JobScheduleForm(FormLayoutMixin, BootstrapMixin, forms.Form):
     """
     This form is rendered alongside the JobForm but deals specifically with the fields needed to either
     execute the job immediately, or schedule it for later. Each field name is prefixed with an underscore
     because in the POST body, they share a namespace with the JobForm which includes fields defined by the
     job author, so the underscore prefix helps to avoid name collisions.
+
+    The schedule name, start time and crontab rows are shown only for the schedule types that use them
+    (`visible_if`), and are cleared to their empty values otherwise (`clear_on_hide`, so that the view still finds
+    `""` rather than a missing key in `cleaned_data`); job.html renders the layout bare, inside its own
+    "Job Schedule Type" card.
     """
 
     _schedule_type = forms.ChoiceField(
@@ -2089,6 +2095,33 @@ class JobScheduleForm(BootstrapMixin, forms.Form):
         label="Crontab",
         help_text="Custom crontab syntax (* * * * *)",
     )
+
+    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): `FormLayoutMixin` and `Meta.fieldsets`
+    # are new; job.html used to toggle these rows with `classList.toggle('d-none', ...)`.
+    class Meta:
+        fieldsets = (
+            FormPanel(
+                None,
+                (
+                    "_schedule_type",
+                    FormField(
+                        "_schedule_name",
+                        visible_if=Not(When("_schedule_type", eq=JobExecutionType.TYPE_IMMEDIATELY)),
+                        clear_on_hide=True,
+                    ),
+                    FormField(
+                        "_schedule_start_time",
+                        visible_if=Not(When("_schedule_type", eq=JobExecutionType.TYPE_IMMEDIATELY)),
+                        clear_on_hide=True,
+                    ),
+                    FormField(
+                        "_recurrence_custom_time",
+                        visible_if=When("_schedule_type", eq=JobExecutionType.TYPE_CUSTOM),
+                        clear_on_hide=True,
+                    ),
+                ),
+            ),
+        )
 
     def clean(self):
         """

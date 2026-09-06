@@ -43,8 +43,8 @@ from nautobot.core.ui.object_form import (
 )
 from nautobot.dcim.forms import ManufacturerForm, SoftwareImagePanel, SoftwareVersionForm
 from nautobot.dcim.models import Device, Manufacturer, Platform
-from nautobot.extras.choices import CustomFieldTypeChoices, RelationshipTypeChoices
-from nautobot.extras.forms import NautobotModelForm
+from nautobot.extras.choices import CustomFieldTypeChoices, JobExecutionType, RelationshipTypeChoices
+from nautobot.extras.forms import JobScheduleForm, NautobotModelForm
 from nautobot.extras.models import CustomField, Job as JobModel, Relationship
 
 
@@ -1087,6 +1087,30 @@ class JobPagesLayoutTestCase(TestCase):
         self.assertIn('data-nb-overridable-field="id_job_queues"', content)
         self.assertNotIn('id="id_job_queues_default"', content)
         self.assertNotIn("job_class_properties", content)
+
+    def test_run_page_schedule_rows(self):
+        job = JobModel.objects.filter(installed=True).first()
+        self.assertIsNotNone(job)
+        job.enabled = True
+        job.save()
+        response = self.client.get(reverse("extras:job_run", kwargs={"pk": job.pk}))
+        self.assertHttpStatus(response, 200)
+        content = response.content.decode(response.charset)
+        # Rendered bare inside the page's own card: rows carry conditions, but no nested card header
+        self.assertIn('id="id__schedule_name"', content)
+        self.assertIn("&quot;field&quot;:&quot;_schedule_type&quot;", content)
+        self.assertEqual(content.count("<strong>Job Schedule Type</strong>"), 1)
+
+    def test_schedule_form_server_side_enforcement(self):
+        form = JobScheduleForm(data={"_schedule_type": JobExecutionType.TYPE_IMMEDIATELY, "_schedule_name": "ignored"})
+        self.assertTrue(form.is_valid(), form.errors)
+        # Hidden rows are cleared, not dropped: the view reads these keys with `.get()` and stores `""` as crontab
+        self.assertEqual(form.cleaned_data["_schedule_name"], "")
+        self.assertEqual(form.cleaned_data["_recurrence_custom_time"], "")
+        self.assertIsNone(form.cleaned_data["_schedule_start_time"])
+        form = JobScheduleForm(data={"_schedule_type": JobExecutionType.TYPE_FUTURE})
+        self.assertFalse(form.is_valid())
+        self.assertIn("_schedule_name", form.errors)  # visible row: the form's own clean() still applies
 
 
 class DeviceFormLayoutTestCase(TestCase):

@@ -95,7 +95,9 @@
                         </div>
                         <div class="card-body job_execution">
                             {% block schedule_form %}
-                                {% render_form schedule_form %}
+                                {# NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): was `render_form`; #}
+                                {# the schedule rows now hide/show via `visible_if` declared on JobScheduleForm. #}
+                                {% render_form_layout schedule_form bare=True %}
                             {% endblock %}
                         </div>
                         {% if job_model.has_sensitive_variables %}
@@ -166,34 +168,22 @@
                     run.classList.toggle('btn-primary', immediately);
                     run.classList.toggle('btn-warning', !immediately);
 
-                    // Toggle schedule name and schedule time field rows.
-                    ['#id__schedule_name', '#id__schedule_start_time'].forEach((selector) => {
+                    // NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): showing and hiding the
+                    // schedule rows is now `visible_if` on JobScheduleForm (form_visibility.js); only the
+                    // "required" marking, which the layout does not express, is still toggled here.
+                    const markRequired = (selector, required) => {
                         const input = document.querySelector(selector);
-                        const row = input?.parentElement.parentElement;
-                        row.classList.toggle('d-none', immediately);
-                        const label = row.querySelector('label');
-
-                        label?.classList.toggle('nb-required', !immediately);
-                        if (immediately) {
-                            input.removeAttribute('required');
+                        const label = input?.parentElement.parentElement.querySelector('label');
+                        label?.classList.toggle('nb-required', required);
+                        if (required) {
+                            input?.setAttribute('required', '');
                         } else {
-                            input.setAttribute('required', '');
+                            input?.removeAttribute('required');
                         }
-                    });
-
-                    // Toggle custom crontab field row.
-                    input = document.querySelector('#id__recurrence_custom_time')
-                    const row = input.parentElement.parentElement;
-                    row.classList.toggle('d-none', !custom);
-                    const label = row.querySelector('label');
-
-                    label?.classList.toggle('nb-required', custom);
-                    if (!custom) {
-                        input.removeAttribute('required');
-                    } else {
-                        input.setAttribute('required', '');
-                    }
-
+                    };
+                    markRequired('#id__schedule_name', !immediately);
+                    markRequired('#id__schedule_start_time', !immediately);
+                    markRequired('#id__recurrence_custom_time', custom);
                 };
 
                 {% if job_model.has_sensitive_variables %}
