@@ -46,6 +46,7 @@ from nautobot.core.forms.forms import ConfirmationForm
 from nautobot.core.forms.widgets import ClearableFileInput
 from nautobot.core.ui.object_form import (
     FormField,
+    FormLayoutMixin,
 )
 from nautobot.dcim.models import Device, DeviceFamily, DeviceRedundancyGroup, DeviceType, Location, Platform
 from nautobot.extras.choices import (
@@ -557,7 +558,7 @@ class ComputedFieldFilterForm(BootstrapMixin, forms.Form):
 #
 
 
-class ConfigContextForm(BootstrapMixin, NoteModelFormMixin, forms.ModelForm):
+class ConfigContextForm(FormLayoutMixin, BootstrapMixin, NoteModelFormMixin, forms.ModelForm):
     locations = DynamicModelMultipleChoiceField(queryset=Location.objects.all(), required=False)
     roles = DynamicModelMultipleChoiceField(
         queryset=Role.objects.get_for_models([Device, VirtualMachine]),
@@ -589,6 +590,32 @@ class ConfigContextForm(BootstrapMixin, NoteModelFormMixin, forms.ModelForm):
 
     class Meta:
         model = ConfigContext
+        # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): the Notes card now comes from
+        # NoteModelFormMixin's contributed panel and is gated on `extras.add_note` like every other form; the old
+        # template rendered it unconditionally.
+        fieldsets = (
+            ("Config Context", ("name", "weight", "description", "config_context_schema", "is_active")),
+            (
+                "Assignment",
+                (
+                    "locations",
+                    "roles",
+                    "device_types",
+                    "device_families",
+                    "platforms",
+                    "cluster_groups",
+                    "clusters",
+                    "tenant_groups",
+                    "tenants",
+                    "device_redundancy_groups",
+                    # These are assignment filters, not the object's own tags/groups; claiming `tags` here also keeps
+                    # it out of the contributed Tags panel. `dynamic_groups` exists only when the setting enables it.
+                    "tags",
+                    FormField("dynamic_groups", optional=True),
+                ),
+            ),
+            ("Data", ("data",)),
+        )
         fields = (
             "name",
             "weight",
