@@ -1,11 +1,12 @@
 """Tests for `nautobot.core.ui.object_form`: declarative form layout via `Meta.fieldsets`."""
 
 import re
+from types import SimpleNamespace
 
 from django import forms
 from django.contrib.contenttypes.models import ContentType
 from django.template import Context, engines
-from django.test import RequestFactory
+from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
 
 from nautobot.circuits.forms import ProviderNetworkForm
@@ -13,9 +14,11 @@ from nautobot.core.testing import TestCase
 from nautobot.core.ui.object_form import (
     Contributed,
     ContributedFieldsPanel,
+    evaluate_render_if,
     FormField,
     FormLayout,
     FormPanel,
+    resolve_dotted_path,
 )
 from nautobot.dcim.forms import ManufacturerForm, SoftwareVersionForm
 from nautobot.dcim.models import Manufacturer, Platform
@@ -51,6 +54,58 @@ def form_class_with_fieldsets(fieldsets, base=ManufacturerLayoutForm, **attrs):
     """Build a subclass of `base` whose `Meta.fieldsets` is `fieldsets`."""
     meta = type("Meta", (base.Meta,), {"fieldsets": fieldsets})
     return type("LayoutTestForm", (base,), {"Meta": meta, **attrs})
+
+
+class RenderIfTestCase(SimpleTestCase):
+    """`render_if`: server-side gating by dotted path or callable. Pure Python; no database."""
+
+    def test_resolve_dotted_path_guards(self):
+        class Target:
+            attr = "value"
+            items = ["zero", "one"]
+            mapping = {"key": "mapped"}
+
+            def method(self):
+                return "called"
+
+            def dangerous(self):
+                return "never"
+
+            dangerous.alters_data = True
+
+            def untouchable(self):
+                return "never"
+
+            untouchable.do_not_call_in_templates = True
+
+        context = Context({"obj": Target()})
+        self.assertEqual(resolve_dotted_path("obj.attr", context), "value")
+        self.assertEqual(resolve_dotted_path("obj.items.1", context), "one")
+        self.assertEqual(resolve_dotted_path("obj.mapping.key", context), "mapped")
+        self.assertEqual(resolve_dotted_path("obj.method", context), "called")
+        self.assertIsNone(resolve_dotted_path("obj.dangerous", context))
+        self.assertTrue(callable(resolve_dotted_path("obj.untouchable", context)))
+        self.assertIsNone(resolve_dotted_path("obj.items.9", context))
+        self.assertIsNone(resolve_dotted_path("obj.missing.deeper", context))
+
+    def test_evaluate(self):
+        context = Context({"editing": True, "obj": SimpleNamespace(parent_bay=None, name="x")})
+        self.assertTrue(evaluate_render_if(None, context))
+        self.assertTrue(evaluate_render_if("editing", context))
+        self.assertFalse(evaluate_render_if("not editing", context))
+        self.assertFalse(evaluate_render_if("obj.parent_bay", context))
+        self.assertTrue(evaluate_render_if("not obj.parent_bay", context))
+        self.assertTrue(evaluate_render_if("obj.name", context))
+        # Missing variables are simply falsy
+        self.assertFalse(evaluate_render_if("does.not.exist", context))
+        self.assertTrue(evaluate_render_if("not does.not.exist", context))
+        self.assertTrue(evaluate_render_if(lambda ctx: ctx["editing"], context))
+        with self.assertRaises(TypeError):
+            evaluate_render_if(42, context)
+
+    def test_component_validation(self):
+        with self.assertRaises(TypeError):
+            FormPanel("x", render_if=42)
 
 
 class FormLayoutResolutionTestCase(TestCase):
@@ -240,6 +295,21 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertNotIn("<strong>Other</strong>", html)
         self.assertNotIn("<strong>Custom Fields</strong>", html)
 
+    def test_render_if_on_field_and_panel(self):
+        fieldsets = (
+            ("Main", (FormField("name", render_if="editing"), FormField("description", render_if="not editing"))),
+            FormPanel("Gated", ("extra",), render_if="obj.parent_bay"),
+        )
+        form = form_class_with_fieldsets(fieldsets)()
+        html = form.layout.render(self.context(editing=True, obj=SimpleNamespace(parent_bay=None)))
+        self.assertIn('id="id_name"', html)
+        self.assertNotIn('id="id_description"', html)
+        self.assertNotIn("<strong>Gated</strong>", html)
+        html = form.layout.render(self.context(editing=False, obj=SimpleNamespace(parent_bay="bay")))
+        self.assertNotIn('id="id_name"', html)
+        self.assertIn('id="id_description"', html)
+        self.assertIn("<strong>Gated</strong>", html)
+
     def test_required_permissions_gate_contributed_panels(self):
         form = form_class_with_fieldsets((("Main", ("name", "description", "extra")),))()
         html = form.layout.render(self.context())
@@ -269,6 +339,22 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIn('class="form-label" for="id_description"', html)
         self.assertIn('class="col-md-3 col-form-label nb-required" for="id_name"', html)
         self.assertEqual(form["name"].label, "Vendor")
+
+    def test_panel_markup_options(self):
+        fieldsets = (
+            FormPanel("Styled", ("name",), css_class="warning", attrs={"class": "extra-x", "id": "p1"}),
+            FormPanel(None, ("description",)),
+            FormPanel("Gone", (FormField("extra", render_if="editing"),)),
+        )
+        html = form_class_with_fieldsets(fieldsets)().layout.render(self.context(editing=False))
+        # A caller-supplied class is folded into the card's classes rather than repeating the attribute
+        self.assertIn('class="card border-warning extra-x" id="p1"', html)
+        self.assertIn('class="card-header bg-warning-subtle border-warning"', html)
+        self.assertEqual(html.count("<strong>Styled</strong>"), 1)
+        self.assertNotIn("<strong>None</strong>", html)  # the unlabelled panel has no header
+        # A panel whose every item is gated off renders no card at all
+        self.assertNotIn("Gone", html)
+        self.assertNotIn('id="id_extra"', html)
 
     def test_render_form_layout_tag_matches_legacy_generic_template(self):
         """

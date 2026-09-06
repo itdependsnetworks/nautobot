@@ -13,9 +13,11 @@ Two visibility mechanisms exist and are deliberately named to carry their differ
   cross-field query narrowing.
 """
 
+from collections.abc import Mapping
 import copy
 from functools import cached_property
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.forms.utils import flatatt
 from django.template import Context
 from django.utils.html import format_html, format_html_join
@@ -34,6 +36,65 @@ __all__ = (
     "FormLayoutMixin",
     "FormPanel",
 )
+
+
+#
+# `render_if` evaluation
+#
+
+
+def evaluate_render_if(render_if, context):
+    """
+    Evaluate a component's `render_if` against the render context.
+
+    Args:
+        render_if: `None` (always render), a dotted-path string resolved against the context and tested for
+            truthiness (optionally prefixed with `not `, e.g. `"not obj.parent_bay"`), or a callable taking the
+            context and returning a boolean.
+        context (Context or dict): The render context.
+    """
+    if render_if is None:
+        return True
+    if callable(render_if):
+        return bool(render_if(context))
+    if isinstance(render_if, str):
+        expression = render_if.strip()
+        negate = False
+        if expression.startswith("not "):
+            negate = True
+            expression = expression[4:].strip()
+        result = bool(resolve_dotted_path(expression, context))
+        return not result if negate else result
+    raise TypeError(f"render_if must be None, a string, or a callable; got {type(render_if)}")
+
+
+def resolve_dotted_path(expression, root):
+    """
+    Resolve a dotted path such as `"obj.parent_bay.device"` against `root`, the way a template variable would.
+
+    Each segment is tried as a mapping key, then an attribute, then a sequence index; a resulting callable is called
+    (unless it is marked `do_not_call_in_templates` or `alters_data`). Any lookup failure, including a missing related
+    object, yields `None` rather than an exception, so the result is safe to test for truthiness.
+    """
+    current = root
+    for bit in expression.split("."):
+        try:
+            if isinstance(current, (Context, Mapping)):
+                current = current[bit]
+            elif bit.isdigit() and isinstance(current, (list, tuple)):
+                current = current[int(bit)]
+            else:
+                current = getattr(current, bit)
+        except (KeyError, AttributeError, IndexError, TypeError, ObjectDoesNotExist):
+            return None
+        if callable(current) and not getattr(current, "do_not_call_in_templates", False):
+            if getattr(current, "alters_data", False):
+                return None
+            try:
+                current = current()
+            except (TypeError, ObjectDoesNotExist):
+                return None
+    return current
 
 
 def _as_context(context):
@@ -81,6 +142,8 @@ class FormComponent(Component):
     per-instance state.
 
     Keyword Args:
+        render_if (str or callable, optional): Server-side gate. A dotted path resolved against the render context
+            (optionally prefixed with `not `), or a callable taking the context. When false, nothing is emitted.
         attrs (dict, optional): Extra HTML attributes for the component's wrapper element.
         weight (int, optional): Relative ordering among top-level panels. Items inside a panel are ordered
             positionally and ignore weight. Top-level panels without an explicit weight receive one from their
@@ -93,6 +156,7 @@ class FormComponent(Component):
     attrs = None
     deferred_render = False
     label = None
+    render_if = None
     template_path = None
 
     def __init__(self, **kwargs):
@@ -103,6 +167,8 @@ class FormComponent(Component):
             )
         kwargs.setdefault("weight", 0)
         super().__init__(**kwargs)
+        if self.render_if is not None and not (isinstance(self.render_if, str) or callable(self.render_if)):
+            raise TypeError("render_if must be a dotted-path string or a callable")
         if self.attrs is not None and not isinstance(self.attrs, dict):
             raise TypeError("attrs must be a dict")
         # Populated on bound copies only:
@@ -134,6 +200,11 @@ class FormComponent(Component):
         yield self
 
     # --- rendering --------------------------------------------------------------------------------------------
+
+    def should_render(self, context):
+        if not super().should_render(context):
+            return False
+        return evaluate_render_if(self.render_if, context)
 
     def wrapper_attrs(self):
         """HTML attributes for this component's wrapper element."""
