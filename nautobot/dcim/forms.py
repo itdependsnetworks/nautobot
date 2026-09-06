@@ -47,6 +47,7 @@ from nautobot.core.forms.fields import LaxURLField
 from nautobot.core.ui.object_form import (
     Contributed,
     FormField,
+    InlineFields,
 )
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.extras.forms import (
@@ -609,6 +610,23 @@ class RackForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm):
 
     class Meta:
         model = Rack
+        fieldsets = (
+            ("Rack", ("location", "rack_group", "name", "facility_id", "status", "role", "serial", "asset_tag")),
+            Contributed("tenancy"),
+            (
+                "Dimensions",
+                (
+                    "type",
+                    "width",
+                    "u_height",
+                    InlineFields(
+                        "outer_width", "outer_depth", "outer_unit", label="Outer dimensions", widths=(3, 3, 2)
+                    ),
+                    "desc_units",
+                ),
+            ),
+            ("Comments", ("comments",)),
+        )
         fields = [
             "location",
             "rack_group",
