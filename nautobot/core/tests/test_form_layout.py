@@ -6,7 +6,9 @@ from django import forms
 from django.contrib.contenttypes.models import ContentType
 from django.template import Context, engines
 from django.test import RequestFactory
+from django.urls import reverse
 
+from nautobot.circuits.forms import ProviderNetworkForm
 from nautobot.core.testing import TestCase
 from nautobot.core.ui.object_form import (
     ContributedFieldsPanel,
@@ -14,6 +16,7 @@ from nautobot.core.ui.object_form import (
     FormLayout,
     FormPanel,
 )
+from nautobot.dcim.forms import ManufacturerForm, SoftwareVersionForm
 from nautobot.dcim.models import Manufacturer, Platform
 from nautobot.extras.choices import CustomFieldTypeChoices, RelationshipTypeChoices
 from nautobot.extras.forms import NautobotModelForm
@@ -240,6 +243,48 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIn('class="col-md-3 col-form-label nb-required" for="id_name"', html)
         self.assertEqual(form["name"].label, "Vendor")
 
+    def test_render_form_layout_tag_matches_legacy_generic_template(self):
+        """
+        For a form with no `Meta.fieldsets` (and no tenancy mixin), `{% render_form_layout %}` must produce the
+        same markup as the generic create/edit template and its `extras_features_edit_form_fields` include did.
+        """
+        self.user.is_superuser = True
+        self.user.save()
+        legacy = """{% load form_helpers %}
+<div class="card">
+    <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
+    <div class="card-body">
+        {% render_form form %}
+    </div>
+</div>
+{% if form.custom_fields %}
+    <div class="card"><div class="card-header"><strong>Custom Fields</strong></div><div class="card-body">{% render_custom_fields form %}</div></div>
+{% endif %}
+{% if form.relationships %}
+    <div class="card"><div class="card-header"><strong>Relationships</strong></div><div class="card-body">{% render_relationships form %}</div></div>
+{% endif %}
+{% if form.object_note and perms.extras.add_note %}
+    <div class="card"><div class="card-header"><strong>Notes</strong></div><div class="card-body">{% render_field form.object_note %}</div></div>
+{% endif %}
+{% if form.dynamic_groups and perms.extras.add_staticgroupassociation %}
+    <div class="card"><div class="card-header"><strong>Static Assignment to Dynamic Groups</strong></div><div class="card-body">{% render_field form.dynamic_groups %}</div></div>
+{% endif %}
+{% if form.tags %}
+    <div class="card"><div class="card-header"><strong>Tags</strong></div><div class="card-body">{% render_field form.tags %}</div></div>
+{% endif %}
+"""
+        new = "{% load form_helpers %}{% render_form_layout form %}"
+        # Both forms declare no fieldsets and are free of hidden fields; the legacy path emitted hidden fields inside
+        # the card, the layout emits them ahead of all panels (resolution rule 5), which is the one intentional
+        # difference. SoftwareVersionForm brings a `tags` field, exercising the contributed Tags panel.
+        for form in (SoftwareVersionForm(), ManufacturerForm()):
+            self.assertFalse(form.has_declared_layout)
+            with self.subTest(form=type(form).__name__):
+                context = {"form": form, "obj_type": form._meta.model._meta.verbose_name}
+                expected = normalize_html(render_string(legacy, context, self.request))
+                actual = normalize_html(render_string(new, context, self.request))
+                self.assertEqual(actual, expected)
+
     def test_render_form_layout_tag_default_label(self):
         html = render_string(
             '{% load form_helpers %}{% render_form_layout form "job data" %}',
@@ -261,6 +306,30 @@ class FormLayoutRenderTestCase(TestCase):
 
         html = render_string(template, {"form": PlainForm()}, self.request)
         self.assertEqual(normalize_html(html), "")
+
+
+class ProviderNetworkFieldsetsTestCase(TestCase):
+    """`ProviderNetworkForm` has declared `Meta.fieldsets` since 1.x; it now takes effect."""
+
+    def test_layout(self):
+        form = ProviderNetworkForm()
+        self.assertTrue(form.has_declared_layout)
+        panel = form.layout.panels[0]
+        self.assertEqual(panel.label, "Provider Network")
+        self.assertEqual(panel.field_names, ("provider", "name", "description", "comments", "tags"))
+        # `tags` is claimed explicitly, so the contributed Tags panel has nothing to render
+        self.assertFalse(form.layout.contributed_panels["tags"].has_content)
+
+    def test_add_view_renders_layout(self):
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.get(reverse("circuits:providernetwork_add"))
+        self.assertHttpStatus(response, 200)
+        content = response.content.decode(response.charset)
+        self.assertIn("<strong>Provider Network</strong>", content)
+        self.assertIn('id="id_tags"', content)
+        self.assertNotIn("<strong>Tags</strong>", content)
+        self.assertIn("<strong>Notes</strong>", content)
 
 
 class ContributedFieldsPanelTestCase(TestCase):

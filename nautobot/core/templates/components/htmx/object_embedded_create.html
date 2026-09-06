@@ -39,15 +39,20 @@
             {% endif %}
         {% endblock %}
         {% block form %}
-            <div class="card">
-                <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
-                <div class="card-body">
-                    {% block form_fields %}
-                        {% render_form form %}
-                    {% endblock %}
+            {% if form.has_declared_layout %}
+                {# The form declares `Meta.fieldsets`; render it through its resolved layout. #}
+                {% render_form_layout form %}
+            {% else %}
+                <div class="card">
+                    <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
+                    <div class="card-body">
+                        {% block form_fields %}
+                            {% render_form form %}
+                        {% endblock %}
+                    </div>
                 </div>
-            </div>
-            {% include 'inc/extras_features_edit_form_fields.html' %}
+                {% include 'inc/extras_features_edit_form_fields.html' %}
+            {% endif %}
         {% endblock %}
         <div class="nb-form-sticky-footer mb-0 mx-n16 rounded-bottom">
             {% block buttons %}
