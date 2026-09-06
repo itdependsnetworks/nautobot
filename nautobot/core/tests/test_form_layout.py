@@ -24,6 +24,7 @@ from nautobot.core.ui.object_form import (
     FormField,
     FormLayout,
     FormPanel,
+    IncludedTemplate,
     InlineFields,
     Not,
     Omitted,
@@ -612,6 +613,17 @@ class FormLayoutRenderTestCase(TestCase):
         # A panel whose every item is gated off renders no card at all
         self.assertNotIn("Gone", html)
         self.assertNotIn('id="id_extra"', html)
+
+    def test_included_template(self):
+        fieldsets = (("Main", ("name", IncludedTemplate("components/form/static_field.html", render_if="editing"))),)
+        form = form_class_with_fieldsets(fieldsets)()
+        self.assertIn("form-control-plaintext", form.layout.render(self.context(editing=True)))
+        self.assertNotIn("form-control-plaintext", form.layout.render(self.context(editing=False)))
+        # It claims nothing: the other fields are untouched and still land in the trailing panel
+        included = form.layout.panels[0]._bound_items[1]
+        self.assertIsInstance(included, IncludedTemplate)
+        self.assertEqual(included.field_names, ())
+        self.assertEqual(form.layout.panels[-1].field_names, ("description", "extra"))
 
     def test_render_form_layout_tag_matches_legacy_generic_template(self):
         """

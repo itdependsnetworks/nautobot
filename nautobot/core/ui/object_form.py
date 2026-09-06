@@ -43,6 +43,7 @@ __all__ = (
     "FormLayout",
     "FormLayoutMixin",
     "FormPanel",
+    "IncludedTemplate",
     "InlineFields",
     "Not",
     "Omitted",
@@ -694,6 +695,40 @@ class InlineFields(FormComponent):
                 errors=[error for bound_field in bound_fields for error in bound_field.errors],
             )
         )
+
+
+class IncludedTemplate(FormComponent):
+    """
+    A block of markup that is not a form field, rendered from a template at this position in the panel.
+
+    It is the `{% include %}` of a layout: use it for a hint, an alert, a container some script fills in, or a
+    hidden copy of a value. Anything that *is* a field has a better home — `FormField(name, template_path=...)`
+    for a field with unusual row markup, `StaticField` for a read-only value.
+
+    The template receives the page's render context (`obj`, `editing`, `request`, `perms`, ...) plus `form`.
+
+    It claims no fields. If the template renders a form field itself (`{{ form.x }}`), that field is still unclaimed
+    and will also be rendered in the trailing panel; name the field in a `FormField` instead, or `Omitted` if the
+    template's copy is the only one wanted.
+
+    Markup or JavaScript rendered here may never be the sole enforcer of a data rule; if a value must be
+    constrained, do it in the form's `clean()` as well.
+
+    Args:
+        template_path (str): Path to the template to render.
+    """
+
+    def __init__(self, template_path, **kwargs):
+        if not isinstance(template_path, str) or not template_path:
+            raise TypeError("IncludedTemplate() requires a template path")
+        kwargs["template_path"] = template_path
+        super().__init__(**kwargs)
+
+    def render(self, context):
+        context = _as_context(context)
+        if not self.should_render(context):
+            return ""
+        return self._wrap(render_component_template(self.template_path, context, form=self.form, component=self))
 
 
 class TabbedGroups(FormComponent):
