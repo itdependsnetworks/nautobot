@@ -48,6 +48,7 @@ from nautobot.core.ui.object_form import (
     Contributed,
     FormField,
     FormPanel,
+    IncludedTemplate,
     InlineFields,
     Omitted,
     TabbedGroups,
@@ -2278,6 +2279,36 @@ class PlatformFilterForm(NautobotFilterForm):
 #
 # Devices
 #
+
+
+class SoftwareImagePanel(FormPanel):
+    """
+    Form panel for selecting a software version and software image files.
+
+    Beneath the `software_version` item it inserts the live list of image files matching the selected version (and
+    device type, when the form has one), and ships the script that fills it. Declare the panel like any other, with
+    `"software_version"` among its items; the list container is added for you.
+    """
+
+    # NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): the panel now inserts its own
+    # `IncludedTemplate` for the image list; the three forms using it no longer name it.
+    image_list_template_path = "dcim/inc/software_image_list.html"
+
+    class Media:
+        js = ["js/software_image_picker.js"]
+
+    def __init__(self, label=None, items=(), **kwargs):
+        items = list(items)
+        already_present = any(
+            isinstance(item, IncludedTemplate) and item.template_path == self.image_list_template_path for item in items
+        )
+        if not already_present:
+            for index, item in enumerate(items):
+                name = item if isinstance(item, str) else getattr(item, "name", None)
+                if name == "software_version":
+                    items.insert(index + 1, IncludedTemplate(self.image_list_template_path))
+                    break
+        super().__init__(label, items, **kwargs)
 
 
 class DeviceForm(LocatableModelFormMixin, NautobotModelForm, TenancyForm, LocalContextModelForm):

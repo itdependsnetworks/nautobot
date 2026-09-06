@@ -33,7 +33,7 @@ from nautobot.core.ui.object_form import (
     TabbedGroups,
     When,
 )
-from nautobot.dcim.forms import ManufacturerForm, SoftwareVersionForm
+from nautobot.dcim.forms import ManufacturerForm, SoftwareImagePanel, SoftwareVersionForm
 from nautobot.dcim.models import Manufacturer, Platform
 from nautobot.extras.choices import CustomFieldTypeChoices, RelationshipTypeChoices
 from nautobot.extras.forms import NautobotModelForm
@@ -624,6 +624,21 @@ class FormLayoutRenderTestCase(TestCase):
         self.assertIsInstance(included, IncludedTemplate)
         self.assertEqual(included.field_names, ())
         self.assertEqual(form.layout.panels[-1].field_names, ("description", "extra"))
+
+    def test_software_image_panel_inserts_image_list(self):
+        panel = SoftwareImagePanel("Software", ("platform", "software_version", "software_image_files"))
+        kinds = [item if isinstance(item, str) else type(item).__name__ for item in panel.items]
+        self.assertEqual(kinds, ["platform", "software_version", "IncludedTemplate", "software_image_files"])
+        self.assertEqual(panel.items[2].template_path, SoftwareImagePanel.image_list_template_path)
+        # Declaring it explicitly does not duplicate it
+        explicit = SoftwareImagePanel(
+            "Software",
+            ("software_version", IncludedTemplate(SoftwareImagePanel.image_list_template_path)),
+        )
+        self.assertEqual(len(explicit.items), 2)
+        # Without a software_version item there is nothing to attach to
+        self.assertEqual(SoftwareImagePanel("Software", ("platform",)).items, ("platform",))
+        self.assertIn("js/software_image_picker.js", str(panel.media))
 
     def test_render_form_layout_tag_matches_legacy_generic_template(self):
         """

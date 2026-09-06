@@ -1,0 +1,25 @@
+{% load static %}
+{% comment %}
+Live list of software image files for the selected software version; driven by js/software_image_picker.js, which
+is shipped by `SoftwareImagePanel` (nautobot.dcim.forms) via its Media declaration. The panel inserts this row
+after the `software_version` field. Starts hidden (`d-none`); the script swaps in `d-flex` once there is something
+to show, and the description is a status region so its updates are announced.
+{% endcomment %}
+<div class="mb-10 d-none justify-content-center"
+     data-nb-software-image-picker
+     data-nb-software-image-url="{% url 'dcim-api:softwareimagefile-list' %}"
+     data-nb-loader-src="{% static 'img/ajax-loader.gif' %}"
+     data-nb-form-auto-id="{{ form.auto_id }}"
+     data-nb-device-type-field="{% if form.fields.device_type %}device_type{% endif %}">
+    <div class="col-lg-3"></div>
+    <div class="col-lg-9">
+        <span class="form-text">
+            <span data-nb-software-image-description role="status">
+                <img alt="Loading software images" src="{% static 'img/ajax-loader.gif' %}">
+            </span>
+            <ul data-nb-software-image-list>
+                <li>Software images for the selected software version will appear here</li>
+            </ul>
+        </span>
+    </div>
+</div>
