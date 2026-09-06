@@ -103,6 +103,33 @@ const initializeSelect2 = (context, selector, options) =>
       selection.setAttribute('aria-labelledby', labelIds.join(' '));
       selection.querySelector('.select2-selection__rendered')?.setAttribute('aria-labelledby', labelIds.join(' '));
     }
+
+    /*
+     * NB-FIELDSETS-REVIEW[js-media] (temporary marker, delete before merge): new behaviour. Select2 reports every
+     * selection change through jQuery only (`$(el).trigger('change')`), which native listeners, HTMX `hx-trigger`
+     * and `form_visibility.js` never see. Each page used to bridge this by hand (`htmx.trigger(...)`, a
+     * `select2:select` handler, ...). Bridge it once here instead: a jQuery-triggered `change` with no
+     * `originalEvent` is re-dispatched as one native, bubbling `change`. Several jQuery triggers in the same tick
+     * (a clear of a multi-select) collapse into one native event.
+     */
+    if (element.dataset.nbNativeChangeBridged !== 'true') {
+      /*
+       * Bound once per element: pages re-initialize Select2 on swapped-in content, and a second bridge would mean a
+       * second native event (and a second HTMX request) per selection.
+       */
+      element.dataset.nbNativeChangeBridged = 'true';
+      let nativeChangePending = false;
+      $(element).on('change', (event) => {
+        if (event.originalEvent || nativeChangePending) {
+          return;
+        }
+        nativeChangePending = true;
+        queueMicrotask(() => {
+          nativeChangePending = false;
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+      });
+    }
   });
 
 const initializeColorPicker = (context, dropdownParent = null) => {
@@ -192,9 +219,13 @@ const initializeDynamicChoiceSelection = (context, dropdownParent = null) => {
               const ref_field_value = ref_field
                 ? (() => {
                     const field_value = getValue(ref_field);
-                    const style = window.getComputedStyle(ref_field);
 
-                    if (field_value && style.opacity !== '0' && style.visibility !== 'hidden') {
+                    /*
+                     * A disabled reference field is excluded from submission and, by the same token, from
+                     * narrowing: this is how fields hidden by `visible_if` and fields in inactive tab panes
+                     * (see form_visibility.js) drop out of the query chain.
+                     */
+                    if (field_value && !ref_field.disabled) {
                       return field_value;
                     }
 

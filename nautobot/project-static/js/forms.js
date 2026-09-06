@@ -184,6 +184,10 @@ function initializeVLANModeSelection(context) {
         // Anchor to the nearest form (preferred) or a local container as fallback
         const $root = $mode.closest("form").length ? $mode.closest("form") : $mode.closest(".card, .card-body");
 
+        // Forms laid out declaratively express this with `visible_if` and are handled by form_visibility.js; this
+        // legacy handler remains for the bulk-edit and filter forms, which are not yet declarative.
+        if ($root.find("[data-nb-visible-if]").length) return;
+
         const $untagged = $root.find("#id_untagged_vlan");
         const $tagged = $root.find("#id_tagged_vlans");
         const $add_tagged = $root.find("#id_add_tagged_vlans");
@@ -328,6 +332,11 @@ function initializeInputs(context) {
     initializeDateTimePicker(this_context)
     initializeVLANModeSelection(this_context)
     initializeImagePreview(this_context)
+    // Declarative `visible_if` / tabbed-group visibility (form_visibility.js); runs before Select2 initializes so
+    // that hidden controls are already disabled when the widgets attach.
+    if (window.initializeFormVisibility) {
+        window.initializeFormVisibility(this_context)
+    }
 
     window.nb.checkbox.initializeCheckboxes()
     window.nb.select2.initializeSelect2Fields(this_context)
@@ -392,4 +401,7 @@ $(document).ready((e) => {
 
 htmx.onLoad((content) => {
     window.nb.checkbox.initializeCheckboxes();
+    if (window.initializeFormVisibility) {
+        window.initializeFormVisibility(content);
+    }
 });
