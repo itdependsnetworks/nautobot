@@ -11,6 +11,7 @@ from nautobot.core.forms import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
 )
+from nautobot.core.ui.object_form import ContributedFieldsPanel, FormPanel
 from nautobot.extras.choices import (
     DynamicGroupTypeChoices,
     RelationshipSideChoices,
@@ -101,6 +102,15 @@ class CustomFieldModelFilterFormMixin(forms.Form):
 
 
 class CustomFieldModelFormMixin(forms.ModelForm):
+    form_panels = (
+        ContributedFieldsPanel(
+            name="custom_fields",
+            label="Custom Fields",
+            fields=lambda form: getattr(form, "custom_fields", ()),
+            weight=FormPanel.WEIGHT_CUSTOM_FIELDS_PANEL,
+        ),
+    )
+
     def __init__(self, *args, **kwargs):
         self.obj_type = ContentType.objects.get_for_model(self._meta.model)
         self.custom_fields = []
@@ -167,6 +177,16 @@ class DynamicGroupModelFormMixin(forms.ModelForm):
     Mixin to add `dynamic_groups` field to model create/edit forms where applicable.
     """
 
+    form_panels = (
+        ContributedFieldsPanel(
+            name="dynamic_groups",
+            label="Static Assignment to Dynamic Groups",
+            fields=("dynamic_groups",),
+            weight=FormPanel.WEIGHT_DYNAMIC_GROUPS_PANEL,
+            required_permissions=["extras.add_staticgroupassociation"],
+        ),
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if getattr(self._meta.model, "is_dynamic_group_associable_model", False):
@@ -223,6 +243,16 @@ class NoteModelBulkEditFormMixin(BulkEditForm, NoteFormBase):
 
 
 class NoteModelFormMixin(forms.ModelForm, NoteFormBase):
+    form_panels = (
+        ContributedFieldsPanel(
+            name="notes",
+            label="Notes",
+            fields=("object_note",),
+            weight=FormPanel.WEIGHT_NOTES_PANEL,
+            required_permissions=["extras.add_note"],
+        ),
+    )
+
     def __init__(self, *args, **kwargs):
         self.obj_type = ContentType.objects.get_for_model(self._meta.model)
 
@@ -500,6 +530,15 @@ class RelationshipModelBulkEditFormMixin(BulkEditForm):
 
 
 class RelationshipModelFormMixin(forms.ModelForm):
+    form_panels = (
+        ContributedFieldsPanel(
+            name="relationships",
+            label="Relationships",
+            fields=lambda form: getattr(form, "relationships", ()),
+            weight=FormPanel.WEIGHT_RELATIONSHIPS_PANEL,
+        ),
+    )
+
     def __init__(self, *args, **kwargs):
         self.obj_type = ContentType.objects.get_for_model(self._meta.model)
         self.relationships = []

@@ -214,6 +214,16 @@ class FormPanel(FormComponent):
             card's classes.
     """
 
+    # NB-FIELDSETS-REVIEW[behaviour] (temporary marker, delete before merge): declared panels take slot weights
+    # 100, 200, ...; contributed panels sit at 5100+. On the eleven migrated forms whose old template placed the
+    # Custom Fields / Relationships / Notes / Tags cards *before* a trailing "Comments" card, Comments now comes
+    # first. Pinning with `Contributed(...)` would restore the old order per form.
+    WEIGHT_TENANCY_PANEL = 5100
+    WEIGHT_CUSTOM_FIELDS_PANEL = 5200
+    WEIGHT_RELATIONSHIPS_PANEL = 5300
+    WEIGHT_NOTES_PANEL = 5400
+    WEIGHT_DYNAMIC_GROUPS_PANEL = 5500
+    WEIGHT_TAGS_PANEL = 5600
     WEIGHT_TRAILING_PANEL = 9000
 
     css_class = None
@@ -421,6 +431,16 @@ class FormLayout:
             raise TypeError(f"{form_class.__name__}.Meta.fieldsets must be a tuple or list")
         return tuple(fieldsets)
 
+    def _collect_contributed(self):
+        """Gather `form_panels` from every class in the form's MRO, base classes first so subclasses can override."""
+        panels = {}
+        for klass in reversed(type(self.form).__mro__):
+            for panel in klass.__dict__.get("form_panels", ()):
+                if not isinstance(panel, ContributedFieldsPanel):
+                    raise TypeError(f"{klass.__name__}.form_panels entries must be ContributedFieldsPanel instances")
+                panels[panel.name] = panel
+        return panels
+
     def claim(self, name, component):
         """Record that `component` renders field `name`; raise if the name is unknown or already claimed."""
         form_name = type(self.form).__name__
@@ -443,7 +463,18 @@ class FormLayout:
         item = _coerce_item(item)
         return [item.bind(self)]
 
+    def _contributed_declaration(self, name):
+        """The `ContributedFieldsPanel` registered under `name`, or raise naming the ones available."""
+        declaration = self._contributed.get(name)
+        if declaration is None:
+            raise ValueError(
+                f"{type(self.form).__name__}.Meta.fieldsets references unknown contributed panel {name!r}; "
+                f"available: {sorted(self._contributed)}"
+            )
+        return declaration
+
     def _resolve(self):
+        self._contributed = self._collect_contributed()
         bound, pinned = self._bind_declared_panels()
         bound.extend(self._bind_contributed_panels(pinned))
         bound.append(self._bind_trailing_panel())
@@ -481,6 +512,11 @@ class FormLayout:
 
     # --- queries ----------------------------------------------------------------------------------------------
 
+    @property
+    def contributed_panels(self):
+        """The bound mixin-contributed panels, by name."""
+        return {panel.name: panel for panel in self.panels if isinstance(panel, ContributedFieldsPanel)}
+
     def iter_components(self):
         for panel in self.panels:
             yield from panel.iter_components()
@@ -504,7 +540,19 @@ class FormLayoutMixin:
 
     Exposes `layout` (the resolved `FormLayout`, computed on first access) and `has_declared_layout`
     (whether this form class declares any fieldsets).
+
+    Mixins that add fields dynamically declare `form_panels`, a tuple of `ContributedFieldsPanel`; the tags panel is
+    declared here because the `tags` field comes from the model rather than from a mixin.
     """
+
+    form_panels = (
+        ContributedFieldsPanel(
+            name="tags",
+            label="Tags",
+            fields=("tags",),
+            weight=FormPanel.WEIGHT_TAGS_PANEL,
+        ),
+    )
 
     @property
     def has_declared_layout(self):
