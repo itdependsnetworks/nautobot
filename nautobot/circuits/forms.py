@@ -12,7 +12,7 @@ from nautobot.core.forms import (
 )
 from nautobot.core.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from nautobot.core.forms.widgets import NumberWithSelect, StaticSelect2
-from nautobot.core.ui.object_form import Contributed
+from nautobot.core.ui.object_form import Contributed, FormPanel, StaticField, TabbedGroups
 from nautobot.dcim.form_mixins import (
     LocatableModelBulkEditFormMixin,
     LocatableModelFilterFormMixin,
@@ -313,6 +313,27 @@ class CircuitTerminationForm(LocatableModelFormMixin, NautobotModelForm):
 
     class Meta:
         model = CircuitTermination
+        fieldsets = (
+            FormPanel(
+                "Termination",
+                (
+                    StaticField("Provider", attribute="circuit.provider"),
+                    StaticField("Circuit", attribute="circuit.cid"),
+                    StaticField("Termination", attribute="term_side"),
+                    # A termination attaches to exactly one of these.
+                    TabbedGroups(
+                        ("Location", ("location",)),
+                        ("Provider Network", ("provider_network",)),
+                        ("Cloud Network", ("cloud_network",)),
+                        clear_inactive=True,
+                    ),
+                ),
+            ),
+            (
+                "Termination Details",
+                ("port_speed", "upstream_speed", "xconnect_id", "pp_info", "description"),
+            ),
+        )
         fields = [
             "term_side",
             "location",
@@ -331,6 +352,8 @@ class CircuitTerminationForm(LocatableModelFormMixin, NautobotModelForm):
             "pp_info": "Patch panel ID and port number(s)",
         }
         widgets = {
+            "port_speed": NumberWithSelect(choices=CircuitSpeedChoices),
+            "upstream_speed": NumberWithSelect(choices=CircuitSpeedChoices),
             "term_side": forms.HiddenInput(),
         }
 
