@@ -1337,8 +1337,12 @@ class DynamicGroupMixinModelTest(DynamicGroupTestBase):
         )
 
 
-class DynamicGroupFilterTest(DynamicGroupTestBase, FilterTestCases.FilterTestCase):
+class DynamicGroupFilterTest(
+    DynamicGroupTestBase, FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin
+):
     """DynamicGroup instance filterset tests."""
+
+    tenancy_related_name = "managed_dynamic_groups"
 
     queryset = DynamicGroup.objects.all()
     filterset = DynamicGroupFilterSet
@@ -1347,7 +1351,12 @@ class DynamicGroupFilterTest(DynamicGroupTestBase, FilterTestCases.FilterTestCas
         ["description"],
         ["group_type"],
         ["tenant", "tenant__name"],
+        ("member_id", "static_group_associations__associated_object_id"),
     )
+    untested_filters = [
+        "ancestors",
+        "descendants",
+    ]
 
     def test_content_type(self):
         params = {"content_type": ["dcim.device", "virtualization.virtualmachine"]}
@@ -1394,6 +1403,10 @@ class DynamicGroupMembershipFilterTest(DynamicGroupTestBase, FilterTestCases.Fil
         # ["parent_group", "parent_group__id"],  # would work but we only have 2 valid parent groups
         # ["parent_group", "parent_group__name"],  # would work but we only have 2 valid parent groups
     )
+    untested_filters = [
+        "created",
+        "last_updated",
+    ]
     exclude_q_filter_predicates = ["operator"]
 
     def test_parent_group(self):

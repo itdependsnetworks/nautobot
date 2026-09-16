@@ -430,7 +430,11 @@ class ApprovalWorkflowDefinitionFilterTestCase(ApprovalWorkflowTestMixin, Filter
         ("last_updated",),
         ("name",),
         # ("model_content_type",), # TODO we only have two values so far
+        ("weight",),
     )
+    untested_filters = [
+        "model_constraints",
+    ]
 
     def test_model_content_type(self):
         params = {"model_content_type": ["extras.scheduledjob"]}
@@ -456,6 +460,9 @@ class ApprovalWorkflowStageDefinitionFilterTestCase(ApprovalWorkflowTestMixin, F
         ("denial_message",),
         ("approver_group",),
     )
+    untested_filters = [
+        "approval_workflow",
+    ]
 
 
 class ApprovalWorkflowFilterTestCase(ApprovalWorkflowTestMixin, FilterTestCases.FilterTestCase):
@@ -472,6 +479,11 @@ class ApprovalWorkflowFilterTestCase(ApprovalWorkflowTestMixin, FilterTestCases.
         ("object_under_review_object_id",),
         ("current_state",),
     )
+    untested_filters = [
+        "decision_date",
+        "user",
+        "user_name",
+    ]
 
     def test_object_under_review_content_type(self):
         params = {"object_under_review_content_type": ["extras.scheduledjob"]}
@@ -502,6 +514,9 @@ class ApprovalWorkflowStageFilterTestCase(ApprovalWorkflowTestMixin, FilterTestC
         ("state",),
         ("decision_date",),
     )
+    untested_filters = [
+        "decision_date_day",
+    ]
 
     def setUp(self):
         super().setUp()
@@ -560,6 +575,9 @@ class ComputedFieldTestCase(FilterTestCases.FilterTestCase):
         ("template",),
         ("weight",),
     )
+    untested_filters = [
+        "grouping",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -630,7 +648,15 @@ class ConfigContextTestCase(FilterTestCases.FilterTestCase):
         ("tenant_group", "tenant_groups__id"),
         ("tenant_group", "tenant_groups__name"),
         ("tenant_group_id", "tenant_groups__id"),
+        ("location_id", "locations__id"),
     )
+    untested_filters = [
+        "device_redundancy_group",
+        "owner_content_type",
+        "owner_object_id",
+        "schema",
+        "tag",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -742,6 +768,10 @@ class ContentTypeFilterSetTestCase(FilterTestCases.FilterTestCase):
         ("app_label",),
         ("model",),
     )
+    untested_filters = [
+        "feature",
+        "has_serializer",
+    ]
     user_permissions = [
         "dcim.add_location",
         "extras.change_status",
@@ -929,6 +959,8 @@ class ContactFilterSetTestCase(ContactAndTeamFilterSetTestCaseMixin, FilterTestC
         ["email"],
         ["address"],
         ["comments"],
+        ["teams", "teams__id"],
+        ["teams", "teams__name"],
     )
 
 
@@ -945,6 +977,7 @@ class ContactAssociationFilterSetTestCase(FilterTestCases.FilterTestCase):
         ["team", "team__name"],
         ["role", "role__id"],
         ["role", "role__name"],
+        ("associated_object_id",),
     )
 
     @classmethod
@@ -1011,6 +1044,12 @@ class CustomLinkTestCase(FilterTestCases.FilterTestCase):
         ("text",),
         ("weight",),
     )
+    untested_filters = [
+        "button_class",
+        "content_type",
+        "group_name",
+        "new_window",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1074,6 +1113,10 @@ class ExportTemplateTestCase(FilterTestCases.FilterTestCase):
     queryset = ExportTemplate.objects.all()
     filterset = ExportTemplateFilterSet
     generic_filter_tests = (("name",),)
+    untested_filters = [
+        "owner_content_type",
+        "owner_object_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1140,7 +1183,12 @@ class ExternalIntegrationTestCase(FilterTestCases.FilterTestCase):
         ["secrets_group", "secrets_group__id"],
         ["secrets_group", "secrets_group__name"],
         ["http_method"],
+        ("ca_file_path",),
     )
+    untested_filters = [
+        "extra_config",
+        "headers",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1269,7 +1317,13 @@ class GraphQLTestCase(FilterTestCases.FilterTestCase):
 class ImageAttachmentTestCase(FilterTestCases.FilterTestCase):
     queryset = ImageAttachment.objects.all()
     filterset = ImageAttachmentFilterSet
-    generic_filter_tests = (("name",),)
+    generic_filter_tests = [
+        ("name",),
+        ("object_id",),
+    ]
+    untested_filters = [
+        "content_type_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1341,7 +1395,25 @@ class JobFilterSetTestCase(FilterTestCases.FilterTestCase):
         ("job_queues", "job_queues__name"),
         ("module_name",),
         ("name",),
+        ("soft_time_limit",),
+        ("time_limit",),
     )
+    untested_filters = [
+        "console_log_default",
+        "console_log_default_override",
+        "description_override",
+        "dryrun_default_override",
+        "grouping_override",
+        "has_sensitive_variables",
+        "has_sensitive_variables_override",
+        "hidden_override",
+        "is_job_button_receiver",
+        "is_singleton",
+        "is_singleton_override",
+        "name_override",
+        "soft_time_limit_override",
+        "time_limit_override",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1383,6 +1455,8 @@ class JobQueueFilterSetTestCase(FilterTestCases.FilterTestCase, FilterTestCases.
     tenancy_related_name = "job_queues"
     generic_filter_tests = [
         ["name"],
+        ("description",),
+        ("jobs",),
     ]
 
     @classmethod
@@ -1440,7 +1514,12 @@ class JobResultFilterSetTestCase(FilterTestCases.FilterTestCase):
         ("job_model_id", "job_model__id"),
         ("name",),
         ("status",),
+        ("user",),
     )
+    untested_filters = [
+        "canceled_by",
+        "date_canceled",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1630,6 +1709,13 @@ class JobButtonFilterTestCase(FilterTestCases.FilterTestCase):
         ("text",),
         ("weight",),
     )
+    untested_filters = [
+        "button_class",
+        "confirmation",
+        "content_types",
+        "enabled",
+        "group_name",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1681,6 +1767,9 @@ class JobLogEntryTestCase(FilterTestCases.FilterTestCase):
         ("grouping",),
         ("log_level",),
         ("message",),
+        ("absolute_url",),
+        ("job_result",),
+        ("log_object",),
     )
 
     @classmethod
@@ -1841,6 +1930,13 @@ class ObjectChangeTestCase(FilterTestCases.FilterTestCase):
         ("user", "user__username"),
         ("user_id", "user__id"),
         ("user_name",),
+        ("action",),
+        ("change_context",),
+        ("change_context_detail",),
+        ("changed_object_id",),
+        ("object_repr",),
+        ("request_id",),
+        ("time",),
     )
 
     @classmethod
@@ -1952,7 +2048,12 @@ class ObjectMetadataTestCase(FilterTestCases.FilterTestCase):
         ["team", "team__id"],
         ["metadata_type", "metadata_type__name"],
         ["metadata_type", "metadata_type__id"],
+        ("assigned_object_id",),
     )
+    untested_filters = [
+        "scoped_fields",
+        "value",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -2402,6 +2503,9 @@ class SecretsGroupTestCase(FilterTestCases.FilterTestCase):
         ("last_updated",),
         ("name",),
     )
+    untested_filters = [
+        "secrets",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -2506,11 +2610,22 @@ class StaticGroupAssociationTestCase(FilterTestCases.FilterTestCase):
         )
 
 
-class DynamicGroupFilterSetTestCase(FilterTestCases.FilterTestCase):
+class DynamicGroupFilterSetTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
+    tenancy_related_name = "managed_dynamic_groups"
     queryset = DynamicGroup.objects.all()
     filterset = DynamicGroupFilterSet
 
-    generic_filter_tests = [("name",), ("description",), ("group_type",)]
+    generic_filter_tests = [
+        ("name",),
+        ("description",),
+        ("group_type",),
+        ("member_id", "static_group_associations__associated_object_id"),
+    ]
+    untested_filters = [
+        "ancestors",
+        "content_type",
+        "descendants",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -2639,6 +2754,8 @@ class TeamFilterSetTestCase(ContactAndTeamFilterSetTestCaseMixin, FilterTestCase
         ["email"],
         ["address"],
         ["comments"],
+        ["contacts", "contacts__id"],
+        # Not `contacts__name`: Contact names aren't unique, so a name may match several contacts.
     )
 
 
@@ -2649,6 +2766,12 @@ class WebhookTestCase(FilterTestCases.FilterTestCase):
         ("name",),
         ("payload_url",),
     )
+    untested_filters = [
+        "content_types",
+        "type_create",
+        "type_delete",
+        "type_update",
+    ]
 
     @classmethod
     def setUpTestData(cls):

@@ -7,8 +7,10 @@ from nautobot.extras.models import Status
 from nautobot.vpn import choices, factory as vpn_factory, filters, models
 
 
-class VPNProfileFilterTestCase(FilterTestCases.FilterTestCase):
+class VPNProfileFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
     """VPNProfileFilterSet Test Case."""
+
+    tenancy_related_name = "vpn_profiles"
 
     queryset = models.VPNProfile.objects.all()
     filterset = filters.VPNProfileFilterSet
@@ -21,11 +23,20 @@ class VPNProfileFilterTestCase(FilterTestCases.FilterTestCase):
         ("vpn_phase2_policies", "vpn_phase2_policies__name"),
         ("keepalive_interval",),
         ("keepalive_retries",),
+        ("role",),
     )
+    untested_filters = [
+        "extra_options",
+        "keepalive_enabled",
+        "nat_traversal",
+        "secrets_group",
+    ]
 
 
-class VPNPhase1PolicyFilterTestCase(FilterTestCases.FilterTestCase):
+class VPNPhase1PolicyFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
     """VPNPhase1PolicyFilterSet Test Case."""
+
+    tenancy_related_name = "vpn_phase_1_policies"
 
     queryset = models.VPNPhase1Policy.objects.all()
     filterset = filters.VPNPhase1PolicyFilterSet
@@ -35,7 +46,12 @@ class VPNPhase1PolicyFilterTestCase(FilterTestCases.FilterTestCase):
         ("lifetime_seconds",),
         ("lifetime_kb",),
         ("authentication_method",),
+        ("vpn_profiles",),
     )
+    untested_filters = [
+        "aggressive_mode",
+        "ike_version",
+    ]
 
     def test_encryption_algorithm(self):
         self.assertQuerySetEqualAndNotEmpty(
@@ -59,8 +75,10 @@ class VPNPhase1PolicyFilterTestCase(FilterTestCases.FilterTestCase):
         )
 
 
-class VPNPhase2PolicyFilterTestCase(FilterTestCases.FilterTestCase):
+class VPNPhase2PolicyFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
     """VPNPhase2PolicyFilterSet Test Case."""
+
+    tenancy_related_name = "vpn_phase_2_policies"
 
     queryset = models.VPNPhase2Policy.objects.all()
     filterset = filters.VPNPhase2PolicyFilterSet
@@ -68,6 +86,7 @@ class VPNPhase2PolicyFilterTestCase(FilterTestCases.FilterTestCase):
         ("name",),
         ("description",),
         ("lifetime",),
+        ("vpn_profiles",),
     )
 
     def test_encryption_algorithm(self):
@@ -92,8 +111,10 @@ class VPNPhase2PolicyFilterTestCase(FilterTestCases.FilterTestCase):
         )
 
 
-class VPNFilterTestCase(FilterTestCases.FilterTestCase):
+class VPNFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
     """VPNFilterSet Test Case."""
+
+    tenancy_related_name = "vpns"
 
     queryset = models.VPN.objects.all()
     filterset = filters.VPNFilterSet
@@ -104,7 +125,12 @@ class VPNFilterTestCase(FilterTestCases.FilterTestCase):
         ("description",),
         ("vpn_id",),
         ("service_type",),
+        ("role",),
+        ("status",),
     )
+    untested_filters = [
+        "extra_attributes",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -127,8 +153,10 @@ class VPNFilterTestCase(FilterTestCases.FilterTestCase):
             )
 
 
-class VPNTunnelFilterTestCase(FilterTestCases.FilterTestCase):
+class VPNTunnelFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
     """VPNTunnelFilterSet Test Case."""
+
+    tenancy_related_name = "vpn_tunnels"
 
     queryset = models.VPNTunnel.objects.all()
     filterset = filters.VPNTunnelFilterSet
@@ -142,11 +170,20 @@ class VPNTunnelFilterTestCase(FilterTestCases.FilterTestCase):
         ("description",),
         ("tunnel_id",),
         ("encapsulation",),
+        ("endpoint_a",),
+        ("endpoint_z",),
+        ("role",),
+        ("status",),
     )
+    untested_filters = [
+        "secrets_group",
+    ]
 
 
-class VPNTunnelEndpointFilterTestCase(FilterTestCases.FilterTestCase):
+class VPNTunnelEndpointFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
     """VPNTunnelEndpointFilterSet Test Case."""
+
+    tenancy_related_name = "vpn_tunnel_endpoints"
 
     queryset = models.VPNTunnelEndpoint.objects.all()
     filterset = filters.VPNTunnelEndpointFilterSet
@@ -160,7 +197,16 @@ class VPNTunnelEndpointFilterTestCase(FilterTestCases.FilterTestCase):
         ("endpoint_a_vpn_tunnels", "endpoint_a_vpn_tunnels__name"),
         ("endpoint_z_vpn_tunnels", "endpoint_z_vpn_tunnels__id"),
         ("endpoint_z_vpn_tunnels", "endpoint_z_vpn_tunnels__name"),
+        ("name",),
+        ("protected_prefixes",),
+        ("role",),
+        ("vpn_profile",),
     )
+    untested_filters = [
+        "protected_prefixes_dg",
+        "source_ipaddress",
+        "tunnel_interface",
+    ]
 
 
 class VPNTerminationFilterTestCase(FilterTestCases.FilterTestCase):
@@ -212,6 +258,9 @@ class VPNProfilePhase1PolicyAssignmentFilterTestCase(FilterTestCases.FilterTestC
         ("vpn_phase1_policy", "vpn_phase1_policy__id"),
         ("vpn_phase1_policy", "vpn_phase1_policy__name"),
     )
+    untested_filters = [
+        "weight",
+    ]
 
 
 class VPNProfilePhase2PolicyAssignmentFilterTestCase(FilterTestCases.FilterTestCase):
@@ -225,3 +274,6 @@ class VPNProfilePhase2PolicyAssignmentFilterTestCase(FilterTestCases.FilterTestC
         ("vpn_phase2_policy", "vpn_phase2_policy__id"),
         ("vpn_phase2_policy", "vpn_phase2_policy__name"),
     )
+    untested_filters = [
+        "weight",
+    ]

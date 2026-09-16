@@ -1,6 +1,119 @@
 from unittest import TestCase as UnitTestTestCase
 
-from nautobot.core.testing import AssertNoRepeatedQueries
+from nautobot.core.testing import AssertNoRepeatedQueries, FilterTestCases
+from nautobot.tenancy.filters import TenantFilterSet
+from nautobot.tenancy.models import Tenant
+
+
+def _make_filter_test_case(**attrs):
+    """Build a throwaway `FilterTestCase` subclass for `TenantFilterSet` with the given class attributes.
+
+    Built inside a function (rather than at module level) so that the test loader doesn't discover and run it.
+    """
+    attrs.setdefault("queryset", Tenant.objects.all())
+    attrs.setdefault("filterset", TenantFilterSet)
+    attrs.setdefault("generic_filter_tests", ())
+    return type("SyntheticTenantFilterTestCase", (FilterTestCases.FilterTestCase,), attrs)
+
+
+class FilterCoverageTestCase(UnitTestTestCase):
+    """Tests for `FilterTestCases.FilterTestCase.test_filters_coverage`."""
+
+    def _run_coverage_test(self, test_case_class):
+        """Call `test_filters_coverage` directly; outside of a test runner, `subTest` assertion failures raise."""
+        test_case_class("test_filters_coverage").test_filters_coverage()
+
+    def _get_uncovered(self):
+        """Filters that a `FilterTestCase` for `TenantFilterSet` with no tests of its own leaves uncovered."""
+        coverage = _make_filter_test_case()("test_filters_coverage")._get_filter_coverage()
+        return coverage["requiring_coverage"] - coverage["covered"]
+
+    def test_generated_lookups_and_framework_filters_do_not_require_coverage(self):
+        coverage = _make_filter_test_case()("test_filters_coverage")._get_filter_coverage()
+        filter_names = coverage["filter_names"]
+        requiring = coverage["requiring_coverage"]
+
+        # Declared filters require coverage
+        self.assertIn("name", requiring)
+        self.assertIn("tenant_group", requiring)
+        self.assertIn("has_circuits", requiring)
+        # The `<filter>__<lookup>` variants generated from them do not
+        for generated in ("name__ic", "name__n", "name__isw", "tenant_group__n", "id__n"):
+            self.assertIn(generated, filter_names)
+            self.assertNotIn(generated, requiring)
+        # Filters that Nautobot adds to every FilterSet require coverage, but the base class provides it
+        for framework in ("id", "q", "tags", "created", "last_updated", "contacts", "teams", "dynamic_groups"):
+            if framework in filter_names:
+                self.assertIn(framework, requiring)
+                self.assertIn(framework, coverage["covered"])
+        # Filters added by an App FilterExtension (example_app extends TenantFilterSet) do not
+        if "example_app_description" in filter_names:
+            self.assertNotIn("example_app_description", requiring)
+
+    def test_framework_tested_filters_are_covered(self):
+        """`tags`, `q` and `dynamic_groups` are tested by FilterTestCase methods that don't follow the naming rule."""
+        coverage = _make_filter_test_case()("test_filters_coverage")._get_filter_coverage()
+        for name in ("tags", "q", "dynamic_groups"):
+            if name in coverage["filter_names"]:
+                self.assertIn(name, coverage["covered"])
+
+    def test_related_membership_boolean_filters_are_covered_automatically(self):
+        coverage = _make_filter_test_case()("test_filters_coverage")._get_filter_coverage()
+        self.assertIn("has_circuits", coverage["covered"])
+        self.assertIn("has_clusters", coverage["covered"])
+        self.assertNotIn("name", coverage["covered"])
+
+    def test_untested_filter_fails(self):
+        with self.assertRaises(AssertionError) as context:
+            self._run_coverage_test(_make_filter_test_case())
+        self.assertIn("'name'", str(context.exception))
+        self.assertIn("not exercised by any test", str(context.exception))
+
+    def test_generic_filter_tests_entry_covers_filter(self):
+        test_case_class = _make_filter_test_case(
+            generic_filter_tests=[("name",)],
+            untested_filters=sorted(self._get_uncovered() - {"name"}),
+        )
+        self._run_coverage_test(test_case_class)  # does not raise
+
+    def test_method_named_after_filter_covers_filter(self):
+        test_case_class = _make_filter_test_case(
+            test_name=lambda self: None,
+            untested_filters=sorted(self._get_uncovered() - {"name"}),
+        )
+        self._run_coverage_test(test_case_class)  # does not raise
+
+    def test_stale_untested_filters_entry_fails(self):
+        others = sorted(self._get_uncovered() - {"name"})
+
+        with self.subTest("Entry that isn't a filter"):
+            test_case_class = _make_filter_test_case(
+                generic_filter_tests=[("name",)],
+                untested_filters=[*others, "no_such_filter"],
+            )
+            with self.assertRaises(AssertionError) as context:
+                self._run_coverage_test(test_case_class)
+            self.assertIn("'no_such_filter'", str(context.exception))
+            self.assertIn("don't name a filter", str(context.exception))
+
+        with self.subTest("Entry for a filter that is now tested"):
+            test_case_class = _make_filter_test_case(
+                generic_filter_tests=[("name",)],
+                untested_filters=[*others, "name"],
+            )
+            with self.assertRaises(AssertionError) as context:
+                self._run_coverage_test(test_case_class)
+            self.assertIn("'name'", str(context.exception))
+            self.assertIn("now have a test", str(context.exception))
+
+        with self.subTest("Entry for a framework-provided filter"):
+            test_case_class = _make_filter_test_case(
+                generic_filter_tests=[("name",)],
+                untested_filters=[*others, "created"],
+            )
+            with self.assertRaises(AssertionError) as context:
+                self._run_coverage_test(test_case_class)
+            self.assertIn("'created'", str(context.exception))
 
 
 class NormalizeSQLTestCase(UnitTestTestCase):

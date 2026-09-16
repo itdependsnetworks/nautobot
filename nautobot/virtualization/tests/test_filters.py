@@ -101,6 +101,9 @@ class ClusterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFil
         # ("virtual_machines", "virtual_machines__id"),  # TODO: not enough distinct VMs at present
         # ("virtual_machines", "virtual_machines__name"),  # TODO: not enough distinct VMs at present
     )
+    untested_filters = [
+        "devices",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -237,6 +240,10 @@ class VirtualMachineTestCase(FilterTestCases.FilterTestCase, FilterTestCases.Ten
         ("status", "status__name"),
         ("vcpus",),
     )
+    untested_filters = [
+        "local_config_context_schema",
+        "local_config_context_schema_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -563,7 +570,12 @@ class VMInterfaceTestCase(FilterTestCases.FilterTestCase):
         ["untagged_vlan", "untagged_vlan__vid"],
         ["virtual_machine", "virtual_machine__name"],
         ["virtual_machine_id", "virtual_machine__id"],
+        ("status",),
     )
+    untested_filters = [
+        "enabled",
+        "vlan_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):

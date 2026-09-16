@@ -24,6 +24,14 @@ class RadioProfileTestCase(FilterTestCases.FilterTestCase):
         ("controller_managed_device_groups", "controller_managed_device_groups__name"),
         ("frequency",),
         ("regulatory_domain",),
+        ("controller_managed_device_groups__devices",),
+        ("rx_power_min",),
+        ("supported_data_rates",),
+        ("tx_power_max",),
+        ("tx_power_min",),
+    ]
+    untested_filters = [
+        "allowed_channel_list",
     ]
 
     def test_channel_width(self):
@@ -33,7 +41,8 @@ class RadioProfileTestCase(FilterTestCases.FilterTestCase):
         )
 
 
-class WirelessNetworkTestCase(FilterTestCases.FilterTestCase):
+class WirelessNetworkTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
+    tenancy_related_name = "wireless_networks"
     queryset = models.WirelessNetwork.objects.all()
     filterset = filters.WirelessNetworkFilterSet
     generic_filter_tests = [
@@ -46,6 +55,12 @@ class WirelessNetworkTestCase(FilterTestCases.FilterTestCase):
         ("secrets_group", "secrets_group__id"),
         ("secrets_group", "secrets_group__name"),
         ("ssid",),
+        ("controller_managed_device_groups__controller",),
+        ("controller_managed_device_groups__devices",),
+    ]
+    untested_filters = [
+        "enabled",
+        "hidden",
     ]
 
     @classmethod
@@ -68,6 +83,7 @@ class ControllerManagedDeviceGroupWirelessNetworkAssignmentTestCase(FilterTestCa
         ("controller_managed_device_group", "controller_managed_device_group__name"),
         ("wireless_network", "wireless_network__id"),
         ("wireless_network", "wireless_network__name"),
+        ("vlan",),
     ]
 
 

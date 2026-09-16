@@ -64,7 +64,13 @@ class NamespaceTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyF
     queryset = Namespace.objects.all()
     filterset = NamespaceFilterSet
     tenancy_related_name = "namespaces"
-    generic_filter_tests = (("name",),)
+    generic_filter_tests = [
+        ("name",),
+        ("description",),
+    ]
+    untested_filters = [
+        "location",
+    ]
 
 
 class VRFTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
@@ -97,7 +103,14 @@ class VRFTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterT
         ("rd",),
         # ("virtual_machines", "virtual_machines__id"),
         # ("virtual_machines", "virtual_machines__name"),
+        ("description",),
+        ("status",),
+        ("virtual_device_contexts",),
     )
+    untested_filters = [
+        "device",
+        "virtual_machines",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -123,6 +136,10 @@ class VRFPrefixAssignmentTestCase(FilterTestCases.FilterTestCase):
         ("vrf", "vrf__id"),
         ("vrf", "vrf__name"),
     )
+    untested_filters = [
+        "created",
+        "last_updated",
+    ]
 
     def test_prefix_filter_by_string(self):
         """Test filtering by prefix strings as an alternative to pk."""
@@ -191,7 +208,22 @@ class PrefixTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilt
         ["status", "status__name"],
         ["type"],
         ["vpn_tunnel_endpoints", "vpn_tunnel_endpoints__id"],
+        ("namespace",),
+        ("parent",),
+        ("vlan_id",),
+        ("vlan_vid", "vlan__vid"),
+        ("vrfs",),
     )
+    untested_filters = [
+        "contains",
+        "location",
+        "locations",
+        "present_in_vrf",
+        "present_in_vrf_id",
+        "vpn_tunnel_endpoints_name_contains",
+        "within",
+        "within_include",
+    ]
 
     def test_filters_generic(self):
         # We usually have type container and network prefixes present
@@ -303,7 +335,12 @@ class PrefixLocationAssignmentTestCase(FilterTestCases.FilterTestCase):
     queryset = PrefixLocationAssignment.objects.all()
     filterset = PrefixLocationAssignmentFilterSet
     # NOTE: No generic logic in place yet to test TreeNodeMultipleChoiceFilter
-    generic_filter_tests = ()
+    generic_filter_tests = []
+    untested_filters = [
+        "created",
+        "last_updated",
+        "location",
+    ]
     # generic_filter_tests = (
     #     ["location", "location__name"],
     #     ["location", "location__id"],
@@ -591,7 +628,16 @@ class IPAddressTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyF
         ["nat_inside", "nat_inside__id"],
         ["services", "services__id"],
         ["services", "services__name"],
+        ("description",),
+        ("namespace", "parent__namespace"),
     )
+    untested_filters = [
+        "address",
+        "device_id",
+        "present_in_vrf_id",
+        "type",
+        "virtual_machine_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1092,6 +1138,17 @@ class IPAddressToInterfaceTestCase(FilterTestCases.FilterTestCase):
         ["vm_interface", "vm_interface__id"],
         ["vm_interface", "vm_interface__name"],
     )
+    untested_filters = [
+        "created",
+        "is_default",
+        "is_destination",
+        "is_preferred",
+        "is_primary",
+        "is_secondary",
+        "is_source",
+        "is_standby",
+        "last_updated",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1463,6 +1520,10 @@ class VRFDeviceAssignmentTestCase(FilterTestCases.FilterTestCase):
         ["name"],
         ["rd"],
     )
+    untested_filters = [
+        "created",
+        "last_updated",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1519,6 +1580,9 @@ class VLANGroupTestCase(FilterTestCases.FilterTestCase):
         # ("location", "location__name"),
         ("name",),
     )
+    untested_filters = [
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1770,6 +1834,11 @@ class VLANLocationAssignmentTestCase(FilterTestCases.FilterTestCase):
         # ["location", "location__name"],
         # ["location", "location__id"],
     )
+    untested_filters = [
+        "created",
+        "last_updated",
+        "location",
+    ]
 
     def test_q_filter_vlan__vid_predicate(self):
         vlan = VLAN.objects.first()

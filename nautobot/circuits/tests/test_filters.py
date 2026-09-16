@@ -136,7 +136,12 @@ class CircuitTerminationTestCase(FilterTestCases.FilterTestCase):
         ["provider_network", "provider_network__id"],
         ["upstream_speed"],
         ["xconnect_id"],
+        ("cable", "cable_termination__cable"),
     )
+    untested_filters = [
+        "available_for_cable",
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):

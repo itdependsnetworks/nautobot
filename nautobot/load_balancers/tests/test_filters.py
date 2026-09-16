@@ -35,6 +35,10 @@ class VirtualServerFilterTestCase(
         ("health_check_monitor", "health_check_monitor__name"),
         ("certificate_profiles",),
     )
+    untested_filters = [
+        "enabled",
+        "ssl_offload",
+    ]
     tenancy_related_name = "virtual_servers"
 
 
@@ -80,6 +84,10 @@ class LoadBalancerPoolMemberFilterTestCase(
         ("health_check_monitor", "health_check_monitor__id"),
         ("health_check_monitor", "health_check_monitor__name"),
     )
+    untested_filters = [
+        "ssl_offload",
+        "status",
+    ]
     tenancy_related_name = "load_balancer_pool_members"
 
 

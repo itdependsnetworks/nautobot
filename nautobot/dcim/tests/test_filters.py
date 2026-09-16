@@ -1068,6 +1068,9 @@ class LocationTypeFilterSetTestCase(
         ("parent", "parent__id"),
         ("parent", "parent__name"),
     ]
+    untested_filters = [
+        "nestable",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1200,6 +1203,9 @@ class RackGroupTestCase(FilterTestCases.FilterTestCase, CustomFieldsFilters.Cust
         ("power_panels", "power_panels__name"),
         ("racks", "racks__id"),
     ]
+    untested_filters = [
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1308,6 +1314,9 @@ class RackTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilter
         ("u_height",),
         ("width",),
     ]
+    untested_filters = [
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1395,6 +1404,9 @@ class RackReservationTestCase(FilterTestCases.FilterTestCase, FilterTestCases.Te
         ("user", "user__id"),
         ("user", "user__username"),
     ]
+    untested_filters = [
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1469,6 +1481,16 @@ class DeviceTypeTestCase(FilterTestCases.FilterTestCase, CustomFieldsFilters.Cus
         ("software_image_files", "software_image_files__id"),
         ("software_image_files", "software_image_files__image_file_name"),
         ("u_height",),
+        ("subdevice_role",),
+    ]
+    untested_filters = [
+        "console_ports",
+        "console_server_ports",
+        "device_bays",
+        "interfaces",
+        "is_full_depth",
+        "power_outlets",
+        "power_ports",
     ]
 
     @classmethod
@@ -1619,11 +1641,19 @@ class DeviceTypeTestCase(FilterTestCases.FilterTestCase, CustomFieldsFilters.Cus
 class ConsolePortTemplateTestCase(ModularComponentTemplateTestMixin, FilterTestCases.FilterTestCase):
     queryset = ConsolePortTemplate.objects.all()
     filterset = ConsolePortTemplateFilterSet
+    generic_filter_tests = [
+        *ModularComponentTemplateTestMixin.generic_filter_tests,
+        ("type",),
+    ]
 
 
 class ConsoleServerPortTemplateTestCase(ModularComponentTemplateTestMixin, FilterTestCases.FilterTestCase):
     queryset = ConsoleServerPortTemplate.objects.all()
     filterset = ConsoleServerPortTemplateFilterSet
+    generic_filter_tests = [
+        *ModularComponentTemplateTestMixin.generic_filter_tests,
+        ("type",),
+    ]
 
 
 class PowerPortTemplateTestCase(ModularComponentTemplateTestMixin, FilterTestCases.FilterTestCase):
@@ -1635,6 +1665,7 @@ class PowerPortTemplateTestCase(ModularComponentTemplateTestMixin, FilterTestCas
         ("maximum_draw",),
         ("power_outlet_templates", "power_outlet_templates__id"),
         ("power_outlet_templates", "power_outlet_templates__name"),
+        ("type",),
     ]
 
     @classmethod
@@ -1660,6 +1691,7 @@ class PowerOutletTemplateTestCase(ModularComponentTemplateTestMixin, FilterTestC
         ("feed_leg",),
         ("power_port_template", "power_port_template__id"),
         ("power_port_template", "power_port_template__name"),
+        ("type",),
     ]
 
     @classmethod
@@ -1871,6 +1903,17 @@ class DeviceTestCase(
         ("vrfs", "vrfs__rd"),
         ("wireless_networks", "controller_managed_device_group__wireless_networks__id"),
         ("wireless_networks", "controller_managed_device_group__wireless_networks__name"),
+        ("face",),
+        ("serial",),
+    ]
+    untested_filters = [
+        "controller",
+        "has_primary_ip",
+        "is_full_depth",
+        "local_config_context_data",
+        "local_config_context_schema",
+        "local_config_context_schema_id",
+        "location",
     ]
 
     @classmethod
@@ -2086,6 +2129,11 @@ class ConsolePortTestCase(PathEndpointModelTestMixin, ModularDeviceComponentTest
     generic_filter_tests = [
         *ModularDeviceComponentTestMixin.generic_filter_tests,
         ("cable", "cable_termination__cable__id"),
+        ("type",),
+    ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
     ]
 
     @classmethod
@@ -2134,6 +2182,11 @@ class ConsoleServerPortTestCase(
     generic_filter_tests = [
         *ModularDeviceComponentTestMixin.generic_filter_tests,
         ("cable", "cable_termination__cable__id"),
+        ("type",),
+    ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
     ]
 
     @classmethod
@@ -2184,6 +2237,11 @@ class PowerPortTestCase(PathEndpointModelTestMixin, ModularDeviceComponentTestMi
         ("maximum_draw",),
         ("power_outlets", "power_outlets__id"),
         ("power_outlets", "power_outlets__name"),
+        ("type",),
+    ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
     ]
 
     @classmethod
@@ -2234,6 +2292,11 @@ class PowerOutletTestCase(PathEndpointModelTestMixin, ModularDeviceComponentTest
         ("cable", "cable_termination__cable__id"),
         ("feed_leg",),
         ("power_port", "power_port__id"),
+        ("type",),
+    ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
     ]
 
     @classmethod
@@ -2317,6 +2380,11 @@ class InterfaceTestCase(PathEndpointModelTestMixin, ModularDeviceComponentTestMi
         ("untagged_vlan", "untagged_vlan__vid"),
         ("virtual_device_contexts", "virtual_device_contexts__id"),
         ("virtual_device_contexts", "virtual_device_contexts__name"),
+        ("device_id",),
+    ]
+    untested_filters = [
+        "interface_redundancy_groups",
+        "location",
     ]
 
     @classmethod
@@ -2921,6 +2989,10 @@ class FrontPortTestCase(ModularDeviceComponentTestMixin, FilterTestCases.FilterT
         ("rear_port_position",),
         ("type",),
     ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -3071,6 +3143,10 @@ class RearPortTestCase(ModularDeviceComponentTestMixin, FilterTestCases.FilterTe
         ("positions",),
         ("type",),
     ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -3126,6 +3202,9 @@ class DeviceBayTestCase(DeviceComponentTestMixin, FilterTestCases.FilterTestCase
         *DeviceComponentTestMixin.generic_filter_tests,
         ("installed_device", "installed_device__id"),
         ("installed_device", "installed_device__name"),
+    ]
+    untested_filters = [
+        "location",
     ]
 
     @classmethod
@@ -3199,6 +3278,9 @@ class InventoryItemTestCase(DeviceComponentTestMixin, FilterTestCases.FilterTest
         ("software_image_files", "software_image_files__image_file_name"),
         ("software_version", "software_version__id"),
         ("software_version", "software_version__version"),
+    ]
+    untested_filters = [
+        "location",
     ]
 
     @classmethod
@@ -3290,6 +3372,12 @@ class VirtualChassisTestCase(FilterTestCases.FilterTestCase):
         ("master", "master__name"),
         ("members", "members__id"),
         ("name",),
+        ("location", "master__location__id"),
+        ("location", "master__location__name"),
+    ]
+    untested_filters = [
+        "tenant",
+        "tenant_group",
     ]
 
     @classmethod
@@ -3427,6 +3515,18 @@ class CableTestCase(FilterTestCases.FilterTestCase):
         ("status", "status__id"),
         ("status", "status__name"),
         ("type",),
+    ]
+    untested_filters = [
+        "cable_type",
+        "device_id",
+        "location_id",
+        "rack_id",
+        "tenant_id",
+        "termination_a_id",
+        "termination_a_type",
+        "termination_b_id",
+        "termination_b_type",
+        "termination_id",
     ]
 
     @classmethod
@@ -3927,6 +4027,12 @@ class PowerPanelTestCase(FilterTestCases.FilterTestCase):
         ("rack_group", "rack_group__id"),
         ("rack_group", "rack_group__name"),
     ]
+    untested_filters = [
+        "breaker_position_count",
+        "location",
+        "panel_type",
+        "power_path",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -3954,6 +4060,10 @@ class PowerFeedTestCase(PathEndpointModelTestMixin, FilterTestCases.FilterTestCa
         ("status", "status__id"),
         ("status", "status__name"),
         ("voltage",),
+    ]
+    untested_filters = [
+        "available_for_cable",
+        "location",
     ]
 
     @classmethod
@@ -4089,6 +4199,7 @@ class DeviceRedundancyGroupTestCase(FilterTestCases.FilterTestCase):
         ("name",),
         ("secrets_group", "secrets_group__id"),
         ("secrets_group", "secrets_group__name"),
+        ("status",),
     ]
 
     @classmethod
@@ -4135,7 +4246,12 @@ class InterfaceRedundancyGroupTestCase(FilterTestCases.FilterTestCase):
         ["secrets_group", "secrets_group__name"],
         ["protocol"],
         ["protocol_group_id"],
+        ("status",),
     )
+    untested_filters = [
+        "description",
+        "interfaces",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4292,6 +4408,7 @@ class SoftwareImageFileFilterSetTestCase(FilterTestCases.FilterTestCase):
         ["status", "status__name"],
         ["external_integration", "external_integration__id"],
         ["external_integration", "external_integration__name"],
+        ("download_url",),
     )
 
     @classmethod
@@ -4336,6 +4453,9 @@ class SoftwareVersionFilterSetTestCase(FilterTestCases.FilterTestCase):
         ["status", "status__id"],
         ["status", "status__name"],
         ["version"],
+        ("device_types", "software_image_files__device_types"),
+        ("inventory_items",),
+        ("virtual_machines",),
     )
 
     @classmethod
@@ -4397,7 +4517,8 @@ class DeviceTypeToSoftwareImageFileFilterSetTestCase(FilterTestCases.FilterTestC
     )
 
 
-class ControllerFilterSetTestCase(FilterTestCases.FilterTestCase):
+class ControllerFilterSetTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
+    tenancy_related_name = "controllers"
     queryset = Controller.objects.all()
     filterset = ControllerFilterSet
     generic_filter_tests = (
@@ -4413,7 +4534,13 @@ class ControllerFilterSetTestCase(FilterTestCases.FilterTestCase):
         ("controller_device_redundancy_group", "controller_device_redundancy_group__name"),
         ("wireless_networks", "controller_managed_device_groups__wireless_networks__id"),
         ("wireless_networks", "controller_managed_device_groups__wireless_networks__name"),
+        ("role",),
+        ("status",),
     )
+    untested_filters = [
+        "capabilities",
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4434,7 +4561,17 @@ class ControllerManagedDeviceGroupFilterSetTestCase(FilterTestCases.FilterTestCa
         ("parent", "parent__name"),
         ("virtual_device_contexts", "virtual_device_contexts__id"),
         ("virtual_device_contexts", "virtual_device_contexts__name"),
+        ("radio_profiles",),
+        ("wireless_networks",),
     )
+    untested_filters = [
+        "capabilities",
+        "description",
+        "subtree",
+        "tenant",
+        "tenant_group",
+        "tenant_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4490,6 +4627,11 @@ class ModuleTestCase(
         ("serial",),
         ("status", "status__id"),
         ("status", "status__name"),
+        ("module_family", "module_type__module_family"),
+    ]
+    untested_filters = [
+        "device",
+        "location",
     ]
 
     @classmethod
@@ -4607,6 +4749,10 @@ class ModuleBayTestCase(FilterTestCases.FilterTestCase):
         ("installed_module", "installed_module__id"),
         ("name",),
         ("position",),
+        ("module_family",),
+    ]
+    untested_filters = [
+        "requires_first_party_modules",
     ]
 
     @classmethod
@@ -4617,7 +4763,8 @@ class ModuleBayTestCase(FilterTestCases.FilterTestCase):
         module_bays[1].tags.set(Tag.objects.get_for_model(ModuleBay)[:3])
 
 
-class VirtualDeviceContextTestCase(FilterTestCases.FilterTestCase, FilterTestCases):
+class VirtualDeviceContextTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilterTestCaseMixin):
+    tenancy_related_name = "virtual_device_contexts"
     queryset = VirtualDeviceContext.objects.all()
     filterset = VirtualDeviceContextFilterSet
     generic_filter_tests = [
@@ -4635,6 +4782,7 @@ class VirtualDeviceContextTestCase(FilterTestCases.FilterTestCase, FilterTestCas
         ("status", "status__id"),
         ("controller_managed_device_group", "controller_managed_device_group__id"),
         ("controller_managed_device_group", "controller_managed_device_group__name"),
+        ("identifier",),
     ]
 
     @classmethod
@@ -4718,6 +4866,10 @@ class InterfaceVDCAssignmentTestCase(FilterTestCases.FilterTestCase):
         ("device", "interface__device__id"),
         ("device", "interface__device__name"),
     ]
+    untested_filters = [
+        "created",
+        "last_updated",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4774,6 +4926,9 @@ class ModuleFamilyTestCase(FilterTestCases.FilterTestCase):
         ("module_types", "module_types__id"),
         ("module_types", "module_types__model"),
     ]
+    untested_filters = [
+        "module_bay_id",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4807,6 +4962,10 @@ class DeviceClusterAssignmentTestCase(FilterTestCases.FilterTestCase):
         ("device", "device__name"),
         ("cluster", "cluster__id"),
         ("cluster", "cluster__name"),
+    ]
+    untested_filters = [
+        "created",
+        "last_updated",
     ]
 
     @classmethod
@@ -4876,7 +5035,14 @@ class ConsoleConnectionFilterSetTestCase(_ConnectionFilterSetTestMixin, FilterTe
     """Exercise ConsoleConnectionFilterSet (search + device/location filters)."""
 
     filterset = ConsoleConnectionFilterSet
-    generic_filter_tests = ()
+    generic_filter_tests = [
+        ("device", "device__name"),
+        ("device_id",),
+        ("name",),
+    ]
+    untested_filters = [
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4912,7 +5078,14 @@ class PowerConnectionFilterSetTestCase(_ConnectionFilterSetTestMixin, FilterTest
     """Exercise PowerConnectionFilterSet (search + device/location filters)."""
 
     filterset = PowerConnectionFilterSet
-    generic_filter_tests = ()
+    generic_filter_tests = [
+        ("device", "device__name"),
+        ("device_id",),
+        ("name",),
+    ]
+    untested_filters = [
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4950,6 +5123,11 @@ class InterfaceConnectionFilterSetTestCase(_ConnectionFilterSetTestMixin, Filter
 
     filterset = InterfaceConnectionFilterSet
     generic_filter_tests = ()
+    untested_filters = [
+        "device",
+        "device_id",
+        "location",
+    ]
 
     @classmethod
     def setUpTestData(cls):

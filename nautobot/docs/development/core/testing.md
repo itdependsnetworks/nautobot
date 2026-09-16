@@ -69,7 +69,7 @@ When using `FilterTestCase`, all filters that are instances of `nautobot.core.fi
 
 ### Generic Multiple Choice Filter Tests
 
-A `generic_filter_tests` attribute with a list of filters can be defined on the test class to run generic tests against multiple choice filters. The `generic_filter_tests` attribute should be in the following format:
+A `generic_filter_tests` attribute with a list of filters can be defined on the test class to run generic tests against multiple choice filters. The `id`, `created` and `last_updated` filters, and the `contacts` and `teams` filters of contact-associable models, are tested automatically and don't need to be listed. The `generic_filter_tests` attribute should be in the following format:
 
 ```python
 generic_filter_tests = (
@@ -85,6 +85,46 @@ generic_filter_tests = (
 ### Tags Filter Test
 
 If the model being tested is a `PrimaryModel`, the `tags` filter will be automatically tested by passing at least two values to the filter and verifying that the result matches the equivalent queryset filter.
+
+### Filter Coverage Test
+
++++ 3.3.0
+
+Line coverage can't tell you that a filter was declared but never exercised, because a filter's logic mostly lives in django-filter and in Nautobot's shared filter classes, not in the FilterSet itself. `FilterTestCase.test_filters_coverage` closes that gap: it fails if any filter on the FilterSet under test is not named by at least one test in the test case. A filter counts as tested when any of the following is true:
+
+- It is the first item of an entry in `generic_filter_tests`.
+- It is a `RelatedMembershipBooleanFilter` without a custom `method`, which `test_boolean_filters_generic` exercises automatically.
+- The test case has a test method named `test_<filter_name>`.
+
+The naming rule is the whole mechanism for custom tests: name every filter test after the filter it exercises, so that what a test covers can be read from its name and checked mechanically. A test that exercises several filters should be split, or the remaining filters listed in `untested_filters` until it is.
+
+```python
+class LocationFilterSetTestCase(FilterTestCases.FilterTestCase):
+    ...
+
+    def test_subtree(self):
+        params = {"subtree": [self.loc1.name, self.nested_loc.pk]}
+        ...
+```
+
+The filters that Nautobot adds to every FilterSet are tested by `FilterTestCase` itself, so they never need an entry: `id`, `created`, `last_updated`, `contacts`, `teams` (all via `test_filters_generic`), `tags` (`test_tags_filter`), `q` (`test_q_filter_valid`) and `dynamic_groups` (`test_dynamic_groups_filter`). Custom field (`cf_*`) and relationship (`cr_*`) filters, and filters added by an App's `FilterExtension`, are generated at runtime and tested centrally, so they are not checked. The `<filter>__<lookup>` variants (such as `name__ic` or `status__n`) that `BaseFilterSet` generates from each base filter are covered by testing the base filter.
+
+If a filter genuinely has no test yet, list it in the `untested_filters` attribute of the test case to acknowledge the gap. This list is intended as a to-do list, not a permanent exemption: the test also fails if an entry in `untested_filters` doesn't name a filter on the FilterSet, or names a filter that has since gained a test, so the list can only ever shrink truthfully.
+
+```python
+class VPNTunnelEndpointFilterTestCase(FilterTestCases.FilterTestCase):
+    queryset = VPNTunnelEndpoint.objects.all()
+    filterset = VPNTunnelEndpointFilterSet
+    generic_filter_tests = [
+        ...
+    ]
+    untested_filters = [
+        "source_ipaddress",
+    ]
+```
+
+!!! note
+    At present `test_filters_coverage` only runs for test cases in Nautobot core (test modules under the `nautobot.` namespace) and is skipped for Apps. Apps can nonetheless follow the `test_<filter_name>` convention and use `untested_filters` today in preparation for it being enabled for Apps in a future release.
 
 ## Integration Tests
 

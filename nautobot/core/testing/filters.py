@@ -1,8 +1,11 @@
+import inspect
 import random
 import string
 from typing import ClassVar, Iterable, Optional
 
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count, Q, QuerySet
 from django.db.models.fields import CharField, TextField
 from django.db.models.fields.related import ManyToManyField
@@ -11,7 +14,12 @@ from django.test import tag
 import django_filters
 from django_filters import FilterSet
 
-from nautobot.core.constants import CHARFIELD_MAX_LENGTH
+from nautobot.core.constants import (
+    CHARFIELD_MAX_LENGTH,
+    FILTER_CHAR_BASED_LOOKUP_MAP,
+    FILTER_NEGATION_LOOKUP_MAP,
+    FILTER_NUMERIC_BASED_LOOKUP_MAP,
+)
 from nautobot.core.filters import (
     ContentTypeChoiceFilter,
     ContentTypeFilter,
@@ -24,8 +32,47 @@ from nautobot.core.filters import (
 )
 from nautobot.core.models.generics import PrimaryModel
 from nautobot.core.testing import views
-from nautobot.extras.models import Contact, ContactAssociation, Role, Status, Tag, Team
+from nautobot.extras.choices import DynamicGroupTypeChoices
+from nautobot.extras.models import Contact, ContactAssociation, DynamicGroup, Role, Status, Tag, Team
 from nautobot.tenancy import models
+
+# Suffixes of the `<filter>__<lookup>` filters that `BaseFilterSet` generates automatically from a base filter.
+# Testing the base filter is considered to cover its generated lookups, as they share all of their logic.
+_GENERATED_LOOKUP_SUFFIXES = frozenset(
+    {
+        *FILTER_CHAR_BASED_LOOKUP_MAP,
+        *FILTER_NUMERIC_BASED_LOOKUP_MAP,
+        *FILTER_NEGATION_LOOKUP_MAP,
+        "isnull",
+    }
+)
+
+# Filters that are present on (nearly) every FilterSet and that `test_filters_generic` adds to `generic_filter_tests`
+# automatically when the FilterSet has them, so no test case needs to list them itself.
+_AUTOMATIC_GENERIC_FILTER_TESTS = (
+    ["created"],  # BaseModel field, auto-generated MultiValueDateTimeFilter
+    ["last_updated"],  # BaseModel field, auto-generated MultiValueDateTimeFilter
+    # Added by BaseFilterSet.get_filters() for contact-associable models:
+    ["contacts", "associated_contacts__contact__name"],
+    ["contacts", "associated_contacts__contact__id"],
+    ["teams", "associated_contacts__team__name"],
+    ["teams", "associated_contacts__team__id"],
+)
+
+# Prefixes of filters that are generated at runtime from database content rather than declared in code. They are
+# tested centrally by the tests for the code that generates them, so `test_filters_coverage` doesn't require a test.
+_FRAMEWORK_PROVIDED_FILTER_PREFIXES = (
+    "cf_",  # CustomFieldModelFilterSetMixin, one filter per CustomField
+    "cr_",  # RelationshipModelFilterSetMixin, one filter per Relationship side
+)
+
+# Filters that `FilterTestCase` tests itself, via a test method whose name doesn't follow the `test_<filter_name>`
+# convention. `test_filters_coverage` treats them as covered whenever the test case has the named method.
+_FRAMEWORK_TESTED_FILTERS = {
+    "tags": "test_tags_filter",
+    "q": "test_q_filter_valid",
+    "dynamic_groups": "test_dynamic_groups_filter",
+}
 
 
 @tag("unit")
@@ -89,6 +136,12 @@ class FilterTestCases:
         #       ["filter2", "field2__name"],
         #   ]
         generic_filter_tests: ClassVar[Iterable] = ()
+
+        # Filters that are known to have no test yet. `test_filters_coverage` fails on any filter that is neither
+        # tested nor listed here, and also fails if an entry here is stale (no such filter, or the filter has since
+        # gained a test), so this list can only ever shrink truthfully. Treat it as a to-do list, not a permanent
+        # exemption. Prefer any of the alternatives listed in `test_filters_coverage` over adding an entry here.
+        untested_filters: ClassVar[Iterable[str]] = ()
 
         def setUp(self):
             for attr in ["queryset", "filterset", "generic_filter_tests"]:
@@ -192,6 +245,138 @@ class FilterTestCases:
                 "cost at scale.\n" + self._DISTINCT_REMEDIATION.format(distinct_value="False"),
             )
 
+        @staticmethod
+        def _is_generated_lookup_filter(filter_name, filter_names):
+            """Whether `filter_name` is a `<filter>__<lookup>` variant that `BaseFilterSet` generated from a base filter."""
+            if "__" not in filter_name:
+                return False
+            base_name, lookup = filter_name.rsplit("__", 1)
+            return lookup in _GENERATED_LOOKUP_SUFFIXES and base_name in filter_names
+
+        def _get_app_extension_filter_names(self):
+            """Names of filters added to the FilterSet under test by an installed App's `FilterExtension`."""
+            model_label = self.queryset.model._meta.label_lower
+            names = set()
+            for app_config in apps.get_app_configs():
+                features = getattr(app_config, "features", None) or {}
+                for entry in features.get("filter_extensions", {}).get("filterset_fields", []):
+                    # Entries are recorded by NautobotAppConfig.ready() as "<app_label>.<model> -> <filter_name>"
+                    model, _, filter_name = entry.partition(" -> ")
+                    if model.lower() == model_label:
+                        names.add(filter_name)
+            return names
+
+        def _get_filter_coverage(self):
+            """Compute which filters on `self.filterset` are and aren't exercised by this test case.
+
+            Returns:
+                (dict): With keys:
+                    `filter_names` (set): every filter on the FilterSet.
+                    `requiring_coverage` (set): the filters this test case is responsible for testing.
+                    `covered` (set): the filters that have a test.
+            """
+            self.assertIsNotNone(self.filterset)
+            filterset = self.filterset()  # pylint: disable=not-callable  # see assertion above
+            filter_names = set(filterset.filters)
+            extension_names = self._get_app_extension_filter_names()
+            requiring_coverage = {
+                name
+                for name in filter_names
+                if not self._is_generated_lookup_filter(name, filter_names)
+                and not name.startswith(_FRAMEWORK_PROVIDED_FILTER_PREFIXES)
+                and name not in extension_names
+            }
+
+            covered = {test[0] for test in self.generic_filter_tests}
+            covered |= {test[0] for test in self._get_automatic_generic_filter_tests()}
+            # `test_boolean_filters_generic` exercises every RelatedMembershipBooleanFilter without a custom method
+            covered |= {
+                name
+                for name in requiring_coverage
+                if isinstance(filterset.filters[name], RelatedMembershipBooleanFilter)
+                and filterset.filters[name].method is None
+            }
+
+            # A method named `test_<filter_name>` exercises that filter
+            test_method_names = {
+                method_name
+                for method_name, _ in inspect.getmembers(type(self), predicate=inspect.isfunction)
+                if method_name.startswith("test_")
+            }
+            covered |= {method_name[len("test_") :] for method_name in test_method_names}
+            covered |= {
+                name for name, method_name in _FRAMEWORK_TESTED_FILTERS.items() if method_name in test_method_names
+            }
+            if isinstance(self, FilterTestCases.TenancyFilterTestCaseMixin):
+                # Its `test_tenant` exercises both `tenant` and `tenant_id`; `test_tenant_group` is covered by name
+                covered.add("tenant_id")
+
+            return {
+                "filter_names": filter_names,
+                "requiring_coverage": requiring_coverage,
+                "covered": covered,
+            }
+
+        def test_filters_coverage(self):
+            """Verify that every filter on the FilterSet has a test, or is explicitly acknowledged in `untested_filters`.
+
+            Line coverage can't tell that a filter was never exercised, as a filter's logic mostly lives in
+            django-filter and in Nautobot's shared filter classes. This test instead checks that every filter the
+            FilterSet declares is named by at least one test. A filter counts as tested if any of these is true:
+
+            - It is the first item of an entry in `generic_filter_tests`.
+            - It is a `RelatedMembershipBooleanFilter` without a custom `method`, which
+              `test_boolean_filters_generic` exercises automatically.
+            - This test case has a test method named `test_<filter_name>`. This is the convention for every custom
+              filter test, so that what each test covers can be read from its name.
+
+            The filters that `FilterTestCase` tests itself never need a test in a subclass: `id`, `created`,
+            `last_updated`, `contacts`, `teams` (via `test_filters_generic`), `tags`, `q` and `dynamic_groups`.
+            Not checked at all, as they are generated at runtime and tested centrally: custom field (`cf_*`) and
+            relationship (`cr_*`) filters, filters added by an App's `FilterExtension`, and the `<filter>__<lookup>`
+            variants that `BaseFilterSet` generates from each base filter.
+
+            Any other filter without a test must be listed in `untested_filters`. That list is checked for staleness
+            too: an entry that doesn't name a filter, or names a filter that now has a test, fails this test.
+            """
+            if not self.__class__.__module__.startswith("nautobot."):
+                # TODO: Enable this once we have fixed any issues with apps that would fail this test.
+                # For now, we want to be able to run this test in core without it being a problem to apps.
+                self.skipTest("Skipping: currently only runs in nautobot core test suite.")
+
+            coverage = self._get_filter_coverage()
+            untested = set(self.untested_filters)
+
+            with self.subTest("Every filter is exercised by a test"):
+                missing = sorted(coverage["requiring_coverage"] - coverage["covered"] - untested)
+                self.assertEqual(
+                    missing,
+                    [],
+                    f"The above {self.filterset.__name__} filters are not exercised by any test in "
+                    f"{type(self).__name__}. To fix each of them, do one of the following:\n"
+                    "  1. Add a `generic_filter_tests` entry for the filter, if it's a multiple-choice filter whose "
+                    "results match a `queryset.filter(<field>__in=...)` call.\n"
+                    "  2. Write a test method named `test_<filter_name>`, or rename the existing test that "
+                    "exercises the filter to follow that convention.\n"
+                    "  3. As a last resort, add the filter name to `untested_filters` on this test case to record "
+                    "that it still needs a test.",
+                )
+
+            with self.subTest("`untested_filters` names only filters that exist and are untested"):
+                not_a_filter = sorted(untested - coverage["requiring_coverage"])
+                self.assertEqual(
+                    not_a_filter,
+                    [],
+                    f"The above `untested_filters` entries on {type(self).__name__} don't name a filter on "
+                    f"{self.filterset.__name__} that requires a test (see `test_filters_coverage`); remove them.",
+                )
+                now_covered = sorted(untested & coverage["covered"])
+                self.assertEqual(
+                    now_covered,
+                    [],
+                    f"The above `untested_filters` entries on {type(self).__name__} now have a test; remove them.",
+                )
+
         def test_id(self):
             """Verify that the filterset supports filtering by id with only lookup `__n`."""
             self.assertIsNotNone(self.filterset)
@@ -222,8 +407,34 @@ class FilterTestCases:
             self.assertIsNotNone(self.filterset)
             self.assertFalse(self.filterset(params, self.queryset).is_valid())  # pylint: disable=not-callable
 
+        def _get_automatic_generic_filter_tests(self):
+            """Entries from `_AUTOMATIC_GENERIC_FILTER_TESTS` that apply to `self.filterset` and aren't already listed.
+
+            An entry only applies if the FilterSet has the filter and the model has the field it filters on. (Some
+            FilterSets for `BaseModel`-only through models declare `created`/`last_updated` filters via
+            `CreatedUpdatedModelFilterSetMixin` although their model lacks those fields; such filters can't be tested.)
+            """
+            declared = {test[0] for test in self.generic_filter_tests}
+            model = self.queryset.model
+            applicable = []
+            for test in _AUTOMATIC_GENERIC_FILTER_TESTS:
+                if test[0] not in self.filterset.base_filters or test[0] in declared:
+                    continue
+                if test[0] in ("contacts", "teams") and not getattr(model, "is_contact_associable_model", False):
+                    # Contact and Team themselves declare `contacts`/`teams` filters with different semantics
+                    continue
+                try:
+                    model._meta.get_field(test[-1].split("__", 1)[0])
+                except FieldDoesNotExist:
+                    continue
+                applicable.append(test)
+            return applicable
+
         def test_filters_generic(self):
             """Test all multiple choice filters declared in `self.generic_filter_tests`.
+
+            The `created` and `last_updated` filters that every model has, and the `contacts` and `teams` filters of
+            contact-associable models, are tested automatically without needing to be listed.
 
             This test uses `get_filterset_test_values()` to retrieve a valid set of test data and asserts
             that the filterset filter output matches the corresponding queryset filter.
@@ -248,20 +459,9 @@ class FilterTestCases:
             if not any(test[0] == "id" for test in self.generic_filter_tests):
                 self.generic_filter_tests = (["id"], *self.generic_filter_tests)
 
-            if getattr(self.queryset.model, "is_contact_associable_model", False):
-                if not any(test[0] == "contacts" for test in self.generic_filter_tests):
-                    self.generic_filter_tests = (
-                        *self.generic_filter_tests,
-                        ["contacts", "associated_contacts__contact__name"],
-                        ["contacts", "associated_contacts__contact__id"],
-                    )
-                if not any(test[0] == "teams" for test in self.generic_filter_tests):
-                    self.generic_filter_tests = (
-                        *self.generic_filter_tests,
-                        ["teams", "associated_contacts__team__name"],
-                        ["teams", "associated_contacts__team__id"],
-                    )
+            self.generic_filter_tests = (*self.generic_filter_tests, *self._get_automatic_generic_filter_tests())
 
+            if getattr(self.queryset.model, "is_contact_associable_model", False):
                 # Make sure we have at least 3 contacts and 3 teams in the database
                 if Contact.objects.count() < 3:
                     Contact.objects.create(name="Generic Filter Test Contact 1")
@@ -347,6 +547,36 @@ class FilterTestCases:
                     filterset_result = self.filterset({filter_name: False}, self.queryset).qs  # pylint: disable=not-callable
                     qs_result = self.queryset.exclude(**{f"{field_name}__isnull": filter_object.exclude}).distinct()
                     self.assertQuerySetEqualAndNotEmpty(filterset_result, qs_result)
+
+        def test_dynamic_groups_filter(self):
+            """Test the `dynamic_groups` filter that `BaseFilterSet` adds for every dynamic-group-associable model."""
+            self.assertIsNotNone(self.filterset)
+            if "dynamic_groups" not in self.filterset.base_filters:
+                self.skipTest("Not a dynamic-group-associable model")
+
+            model = self.queryset.model
+            content_type = ContentType.objects.get_for_model(model)
+            # test_id already requires at least 3 instances, so that filtering to 2 of them is a proper subset
+            instances = list(self.queryset[:2])
+            self.assertEqual(len(instances), 2)
+            groups = []
+            for instance in instances:
+                group = DynamicGroup.objects.create(
+                    name=f"Filter test static group {len(groups)} for {model._meta.label_lower}",
+                    content_type=content_type,
+                    group_type=DynamicGroupTypeChoices.TYPE_STATIC,
+                )
+                group.add_members([instance])
+                groups.append(group)
+
+            params = {"dynamic_groups": [groups[0].name, groups[1].pk]}
+            filterset = self.filterset(params, self.queryset)  # pylint: disable=not-callable  # see assertion above
+            self.assertTrue(filterset.is_valid(), filterset.errors)
+            self.assertQuerySetEqualAndNotEmpty(
+                filterset.qs,
+                self.queryset.filter(pk__in=[instance.pk for instance in instances]),
+                ordered=False,
+            )
 
         def test_tags_filter(self):
             """Test the `tags` filter which should be present on all PrimaryModel filtersets."""
