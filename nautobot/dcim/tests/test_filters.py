@@ -1165,7 +1165,9 @@ class LocationFilterSetTestCase(
         params = {"subtree": [self.loc1.name, self.nested_loc.pk]}
         expected = Location.objects.get(name=self.loc1.name).descendants(include_self=True)
         expected |= Location.objects.get(name=self.nested_loc.name).descendants(include_self=True)
-        self.assertQuerySetEqualAndNotEmpty(self.filterset(params, self.queryset).qs, expected.distinct())
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset(params, self.queryset).qs, expected.distinct(), ordered=False
+        )
 
     def test_child_location_type(self):
         params = {"child_location_type": ["Room", LocationType.objects.get(name="Floor").pk]}
@@ -4553,7 +4555,6 @@ class ControllerManagedDeviceGroupFilterSetTestCase(FilterTestCases.FilterTestCa
     untested_filters = [
         "capabilities",
         "description",
-        "subtree",
         "tenant",
         "tenant_group",
         "tenant_id",
@@ -4575,6 +4576,17 @@ class ControllerManagedDeviceGroupFilterSetTestCase(FilterTestCases.FilterTestCa
                 status=vdc_status,
                 controller_managed_device_group=cls.controller_managed_device_groups[idx],
             )
+
+    def test_subtree(self):
+        parent, child, _ = self.controller_managed_device_groups
+        params = {"subtree": [child.name]}
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset(params, self.queryset).qs, child.descendants(include_self=True)
+        )
+        params = {"subtree": [parent.pk]}
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset(params, self.queryset).qs, parent.descendants(include_self=True)
+        )
 
 
 class ModuleTestCase(

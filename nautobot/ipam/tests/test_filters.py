@@ -209,6 +209,7 @@ class PrefixTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilt
         ("vlan_id",),
         ("vlan_vid", "vlan__vid"),
         ("vrfs",),
+        ("vpn_tunnel_endpoints_name_contains", "vpn_tunnel_endpoints__name"),
     )
     untested_filters = [
         "contains",
@@ -216,7 +217,6 @@ class PrefixTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyFilt
         "locations",
         "present_in_vrf",
         "present_in_vrf_id",
-        "vpn_tunnel_endpoints_name_contains",
         "within",
         "within_include",
     ]
@@ -624,13 +624,13 @@ class IPAddressTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyF
         ["services", "services__name"],
         ("description",),
         ("namespace", "parent__namespace"),
+        ("virtual_machine_id", "vm_interfaces__virtual_machine__id"),
     )
     untested_filters = [
         "address",
         "device_id",
         "present_in_vrf_id",
         "type",
-        "virtual_machine_id",
     ]
 
     @classmethod

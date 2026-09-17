@@ -459,10 +459,8 @@ class ApprovalWorkflowStageDefinitionFilterTestCase(ApprovalWorkflowTestMixin, F
         ("min_approvers",),
         ("denial_message",),
         ("approver_group",),
+        ("approval_workflow", "approval_workflow_definition__approval_workflows__id"),
     )
-    untested_filters = [
-        "approval_workflow",
-    ]
 
 
 class ApprovalWorkflowFilterTestCase(ApprovalWorkflowTestMixin, FilterTestCases.FilterTestCase):
@@ -2029,10 +2027,8 @@ class ObjectMetadataTestCase(FilterTestCases.FilterTestCase):
         ["metadata_type", "metadata_type__id"],
         ("assigned_object_id",),
         ("scoped_fields",),
+        ("value", "_value"),
     )
-    untested_filters = [
-        "value",
-    ]
 
     @classmethod
     def setUpTestData(cls):

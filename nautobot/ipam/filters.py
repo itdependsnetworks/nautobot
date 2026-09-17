@@ -321,8 +321,9 @@ class PrefixFilterSet(
         to_field_name="pk",
         label="VPN Tunnel Endpoint ID",
     )
-    vpn_tunnel_endpoints_name_contains = django_filters.CharFilter(
-        method="filter_vpntunnelendpoint_name_contains",
+    vpn_tunnel_endpoints_name_contains = MultiValueCharFilter(
+        field_name="vpn_tunnel_endpoints__name",
+        lookup_expr="contains",
         label="VPN Tunnel Endpoint Name Contains",
     )
 
@@ -430,9 +431,6 @@ class PrefixFilterSet(
         params = self.generate_query_filter_present_in_vrf(value)
         return queryset.filter(params).distinct()
 
-    def filter_vpntunnelendpoint_name_contains(self, queryset, name, value):
-        return queryset.filter(vpn_tunnel_endpoints__name__contains=value)
-
 
 class PrefixLocationAssignmentFilterSet(NautobotFilterSet):
     q = SearchFilter(
@@ -510,14 +508,15 @@ class IPAddressFilterSet(
         field_name="pk",
         label="Device (ID)",
     )
-    virtual_machine = MultiValueCharFilter(
-        method="filter_virtual_machine",
-        field_name="name",
-        label="Virtual machine (name)",
+    virtual_machine = NaturalKeyOrPKMultipleChoiceFilter(
+        field_name="vm_interfaces__virtual_machine",
+        queryset=VirtualMachine.objects.all(),
+        to_field_name="name",
+        label="Virtual machine (name or ID)",
     )
-    virtual_machine_id = MultiValueUUIDFilter(
-        method="filter_virtual_machine",
-        field_name="pk",
+    virtual_machine_id = ModelMultipleChoiceFilter(
+        field_name="vm_interfaces__virtual_machine",
+        queryset=VirtualMachine.objects.all(),
         label="Virtual machine (ID)",
     )
     interfaces = NaturalKeyOrPKMultipleChoiceFilter(
@@ -640,15 +639,6 @@ class IPAddressFilterSet(
         for device in devices:
             interface_ids.extend(device.vc_interfaces.values_list("id", flat=True))
         return queryset.filter(interfaces__in=interface_ids)
-
-    def filter_virtual_machine(self, queryset, name, value):
-        virtual_machines = VirtualMachine.objects.filter(**{f"{name}__in": value})
-        if not virtual_machines.exists():
-            return queryset.none()
-        interface_ids = []
-        for vm in virtual_machines:
-            interface_ids.extend(vm.interfaces.values_list("id", flat=True))
-        return queryset.filter(vm_interfaces__in=interface_ids)
 
 
 class IPAddressToInterfaceFilterSet(NautobotFilterSet):

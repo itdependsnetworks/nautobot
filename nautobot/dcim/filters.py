@@ -224,12 +224,12 @@ class LocationFilterSet(NautobotFilterSet, StatusModelFilterSetMixin, TenancyMod
         to_field_name="name",
         label="Parent location (name or ID)",
     )
-    subtree = NaturalKeyOrPKMultipleChoiceFilter(
+    subtree = TreeNodeMultipleChoiceFilter(
+        field_name="id",
         prefers_id=True,
         queryset=Location.objects.all(),
         to_field_name="name",
         label="Location(s) and descendants thereof (name or ID)",
-        method="_subtree",
     )
     child_location_type = NaturalKeyOrPKMultipleChoiceFilter(
         queryset=LocationType.objects.all(),
@@ -363,26 +363,6 @@ class LocationFilterSet(NautobotFilterSet, StatusModelFilterSetMixin, TenancyMod
         """FilterSet method for getting Locations that can have a child of the given LocationType(s)."""
         params = self.generate_query__child_location_type(value)
         return queryset.filter(params)
-
-    def generate_query__subtree(self, value):
-        """Helper method used by DynamicGroups and by _subtree() method."""
-        if value:
-            max_depth = Location.objects.with_tree_fields().extra(order_by=["-__tree.tree_depth"]).first().tree_depth
-            params = Q(pk__in=[v.pk for v in value])
-            filter_name = "in"
-            for _i in range(max_depth):
-                filter_name = f"parent__{filter_name}"
-                params |= Q(**{filter_name: value})
-            return params
-        return Q()
-
-    @extend_schema_field({"type": "string"})
-    def _subtree(self, queryset, name, value):
-        """FilterSet method for getting Locations that are or are descended from a given Location(s)."""
-        if value:
-            params = self.generate_query__subtree(value)
-            return queryset.with_tree_fields().filter(params)
-        return queryset
 
 
 class RackGroupFilterSet(LocatableModelFilterSetMixin, NautobotFilterSet, NameSearchFilterSet):
@@ -1765,11 +1745,6 @@ class CableFilterSet(NautobotFilterSet, StatusModelFilterSetMixin):
 
 
 class ConnectionFilterSetMixin:
-    def filter_location(self, queryset, name, value):
-        if not value.strip():
-            return queryset
-        return queryset.filter(device__location__name=value)
-
     def filter_device(self, queryset, name, value):
         if not value:
             return queryset
@@ -1784,7 +1759,7 @@ class ConsoleConnectionFilterSet(ConnectionFilterSetMixin, BaseFilterSet):
         },
     )
     location = django_filters.CharFilter(
-        method="filter_location",
+        field_name="device__location__name",
         label="Location (name)",
     )
     device_id = MultiValueUUIDFilter(method="filter_device", label="Device (ID)")
@@ -1803,7 +1778,7 @@ class PowerConnectionFilterSet(ConnectionFilterSetMixin, BaseFilterSet):
         },
     )
     location = django_filters.CharFilter(
-        method="filter_location",
+        field_name="device__location__name",
         label="Location (name)",
     )
     device_id = MultiValueUUIDFilter(method="filter_device", label="Device (ID)")
@@ -2212,11 +2187,11 @@ class ControllerManagedDeviceGroupFilterSet(
         to_field_name="name",
         label="Parent group (name or ID)",
     )
-    subtree = NaturalKeyOrPKMultipleChoiceFilter(
+    subtree = TreeNodeMultipleChoiceFilter(
+        field_name="id",
         queryset=ControllerManagedDeviceGroup.objects.all(),
         to_field_name="name",
         label="Controlled device groups and descendants thereof (name or ID)",
-        method="_subtree",
     )
     radio_profiles = NaturalKeyOrPKMultipleChoiceFilter(
         queryset=RadioProfile.objects.all(),
@@ -2254,23 +2229,6 @@ class ControllerManagedDeviceGroupFilterSet(
     class Meta:
         model = ControllerManagedDeviceGroup
         fields = "__all__"
-
-    def generate_query__subtree(self, value):
-        """Helper method used by DynamicGroups and by _subtree() method."""
-        if value:
-            params = Q(pk__in=[v.pk for v in value])
-            filter_name = "in"
-            for _ in range(ControllerManagedDeviceGroup.objects.max_depth + 1):
-                filter_name = f"parent__{filter_name}"
-                params |= Q(**{filter_name: value})
-            return params
-        return Q()
-
-    @extend_schema_field({"type": "string"})
-    def _subtree(self, queryset, name, value):
-        """FilterSet method for getting Groups that are or are descended from a given ControllerManagedDeviceGroup(s)."""
-        params = self.generate_query__subtree(value)
-        return queryset.filter(params)
 
 
 class ModuleFilterSet(

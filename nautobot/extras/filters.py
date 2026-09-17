@@ -207,30 +207,11 @@ class ApprovalWorkflowStageDefinitionFilterSet(BaseFilterSet):
         to_field_name="name",
     )
     approval_workflow = NaturalKeyOrPKMultipleChoiceFilter(
+        field_name="approval_workflow_definition__approval_workflows",
         queryset=ApprovalWorkflow.objects.all(),
         to_field_name="pk",
-        method="_approval_workflow",
         label="Filter approval workflow stages by approval workflow",
     )
-
-    def generate_query__approval_workflow(self, queryset, approval_workflows):
-        """Helper method used by _approval_workflow() method."""
-        query_params = Q()
-        for approval_workflow in approval_workflows:
-            approval_workflow_definition = approval_workflow.approval_workflow_definition
-            query_params |= Q(approval_workflow_definition=approval_workflow_definition)
-        return query_params
-
-    @extend_schema_field({"type": "string"})
-    def _approval_workflow(self, queryset, name, value):
-        """FilterSet method for getting approval workflow stages belong to an approval workflow instance"""
-        if value:
-            params = self.generate_query__approval_workflow(queryset, value)
-            if len(params) > 0:
-                return queryset.filter(params)
-            else:
-                return queryset.none()
-        return queryset
 
     class Meta:
         """Meta attributes for filter."""
@@ -1403,18 +1384,11 @@ class ObjectMetadataFilterSet(NautobotFilterSet):
     assigned_object_type = ContentTypeMultipleChoiceFilter(
         choices=FeatureQuery("metadata").get_choices,
     )
-    value = django_filters.Filter(field_name="_value", method="filter_value")
+    value = MultiValueCharFilter(field_name="_value", lookup_expr="icontains", label="Value (contains)")
 
     class Meta:
         model = ObjectMetadata
         fields = "__all__"
-
-    def filter_value(self, queryset, name, value):
-        value = value.strip()
-        query = Q(_value__icontains=value)
-        if not value:
-            return queryset
-        return queryset.filter(query)
 
 
 #
