@@ -585,12 +585,16 @@ class DynamicGroupModelTest(DynamicGroupTestBase):  # TODO: BaseModelTestCase mi
         Test that method filters are skipped in `DynamicGroup._map_filter_fields` when the filterset
         for the group's content type has a method named `generate_query_{filter_method}`.
         """
-        group = self.groups[0]
+        # `LocationFilterSet.max_depth` is a method filter with a `generate_query_filter_max_depth` companion that
+        # also appears on the FilterForm. (Device's `has_primary_ip` used to be the example here, but it is no longer
+        # a method filter.)
+        group = DynamicGroup.objects.create(
+            name="Location method filter group",
+            content_type=ContentType.objects.get_for_model(Location),
+        )
         filterset = group.filterset_class()
         fields = group._map_filter_fields
-
-        # We know that `has_primary_ip` fits this bill, so let's test that.
-        field_name = "has_primary_ip"
+        field_name = "max_depth"
         filter_field = filterset.filters[field_name]
 
         # Make some field presence assertions

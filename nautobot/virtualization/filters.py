@@ -1,9 +1,8 @@
-from django.db.models import Q
-import django_filters
-
 from nautobot.core.filters import (
     BaseFilterSet,
     ModelMultipleChoiceFilter,
+    MultiFieldRelatedMembershipBooleanFilter,
+    MultiFieldUUIDFilter,
     MultiValueCharFilter,
     MultiValueMACAddressFilter,
     NameSearchFilterSet,
@@ -174,8 +173,8 @@ class VirtualMachineFilterSet(
         field_name="interfaces__mac_address",
         label="MAC address",
     )
-    has_primary_ip = django_filters.BooleanFilter(
-        method="_has_primary_ip",
+    has_primary_ip = MultiFieldRelatedMembershipBooleanFilter(
+        field_names=["primary_ip4", "primary_ip6"],
         label="Has a primary IP",
     )
     primary_ip4 = MultiValueCharFilter(
@@ -252,16 +251,6 @@ class VirtualMachineFilterSet(
             "software_version",
             "tags",
         ]
-
-    def generate_query__has_primary_ip(self, value):
-        query = Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False)
-        if not value:
-            return ~query
-        return query
-
-    def _has_primary_ip(self, queryset, name, value):
-        params = self.generate_query__has_primary_ip(value)
-        return queryset.filter(params)
 
     # 2.0 TODO(jathan): Eliminate these methods.
     def filter_primary_ip4(self, queryset, name, value):
@@ -344,7 +333,9 @@ class VMInterfaceFilterSet(
         to_field_name="vid",
         queryset=VLAN.objects.all(),
     )
-    vlan_id = django_filters.CharFilter(method="filter_vlan_id", label="Any assigned VLAN (tagged or untagged)")
+    vlan_id = MultiFieldUUIDFilter(
+        field_names=["untagged_vlan", "tagged_vlans"], label="Any assigned VLAN (tagged or untagged)"
+    )
     ip_addresses = MultiValueCharFilter(
         method="filter_ip_addresses",
         label="IP addresses (address or ID)",
@@ -358,12 +349,6 @@ class VMInterfaceFilterSet(
 
         ip_queryset = IPAddress.objects.filter_address_or_pk_in(addresses, pk_values)
         return queryset.filter(ip_addresses__in=ip_queryset).distinct()
-
-    def filter_vlan_id(self, queryset, name, value):
-        value = value.strip()
-        if not value:
-            return queryset
-        return queryset.filter(Q(untagged_vlan_id=value) | Q(tagged_vlans=value))
 
     class Meta:
         model = VMInterface

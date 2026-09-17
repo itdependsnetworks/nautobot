@@ -768,6 +768,134 @@ class TreeNodeMultipleChoiceFilter(NaturalKeyOrPKMultipleChoiceFilter):
         return result
 
 
+class MultiFieldFilterMixin:
+    """
+    Mixin for filters that apply one lookup to several field paths and match when *any* of those paths matches.
+
+    This replaces the common `method=` pattern of `queryset.filter(Q(a=value) | Q(b=value))` while keeping the filter
+    introspectable: `field_names` records which paths are searched and `lookup_expr` how, `distinct` is derived from
+    the paths automatically, and Dynamic Groups can use the filter through `generate_query()` without a
+    `generate_query_<method>` companion method.
+
+    Args:
+        field_names (list[str]): The ORM paths to apply the lookup to, for example `["primary_ip4", "primary_ip6"]`.
+        extra_predicates (dict): Optional constant conditions ANDed with each path's clause, for example
+            `{"terminations__cable_end": "A"}`. Keys are ORM lookups relative to the FilterSet's model.
+
+    `field_name` defaults to the first entry of `field_names`, so code that inspects a single `field_name` still sees
+    a valid path.
+
+    Example:
+
+        has_primary_ip = MultiFieldRelatedMembershipBooleanFilter(
+            field_names=["primary_ip4", "primary_ip6"],
+            label="Has a primary IP",
+        )
+        vlan_id = MultiFieldUUIDFilter(field_names=["untagged_vlan", "tagged_vlans"], label="Assigned VLAN")
+    """
+
+    def __init__(self, *args, field_names=None, extra_predicates=None, **kwargs):
+        if not field_names:
+            raise ValueError(f"{type(self).__name__} requires a non-empty `field_names` list")
+        self.field_names = list(field_names)
+        self.extra_predicates = dict(extra_predicates or {})
+        kwargs.setdefault("field_name", self.field_names[0])
+        super().__init__(*args, **kwargs)
+
+    def get_lookup_filter_kwargs(self):
+        """Extra kwargs that `BaseFilterSet` must pass when deriving `<name>__<lookup>` filters from this one."""
+        return {"field_names": self.field_names, "extra_predicates": self.extra_predicates}
+
+    @property
+    def distinct(self):
+        """`distinct` is needed if any of `field_names` traverses a to-many relation; see `AutoDistinctFilterMixin`."""
+        model = getattr(self, "model", None)
+        if self._distinct_explicit or model is None:
+            return self._distinct
+        if self.exclude and self.exclude_uses_subquery:
+            return False
+        results = [field_path_traverses_to_many(model, field_name) for field_name in self.field_names]
+        if any(result is None for result in results):
+            return self._distinct
+        return any(results)
+
+    @distinct.setter
+    def distinct(self, value):
+        self._distinct = value
+
+    def _rebase_predicate(self, predicate, field_name):
+        """Rewrite a predicate built for `self.field_name` so that it targets `field_name` instead."""
+        rebased = {}
+        for key, val in predicate.items():
+            if key == self.field_name or key.startswith(f"{self.field_name}__"):
+                key = field_name + key[len(self.field_name) :]
+            rebased[key] = val
+        return rebased
+
+    def generate_query(self, value, **kwargs):
+        """Return a `Q` matching objects where any of `field_names` satisfies the lookup for any of `value`."""
+        if isinstance(value, (str, models.Model)) or not hasattr(value, "__iter__"):
+            value = [value]
+        query = models.Q()
+        for field_name in self.field_names:
+            for v in value:
+                predicate = self._rebase_predicate(self.get_filter_predicate(v), field_name)
+                query |= models.Q(**predicate, **self.extra_predicates)
+        return query
+
+    def filter(self, qs, value):
+        if value in EMPTY_VALUES or (hasattr(value, "exists") and not value.exists()):
+            return qs
+        if hasattr(self, "is_noop") and self.is_noop(qs, value):
+            return qs
+        qs = self.get_method(qs)(self.generate_query(value))
+        return qs.distinct() if self.distinct else qs
+
+
+class MultiFieldUUIDFilter(MultiFieldFilterMixin, MultiValueUUIDFilter):
+    """`MultiValueUUIDFilter` that matches any of several field paths; see `MultiFieldFilterMixin`."""
+
+
+class MultiFieldNumberFilter(MultiFieldFilterMixin, MultiValueNumberFilter):
+    """`MultiValueNumberFilter` that matches any of several field paths; see `MultiFieldFilterMixin`."""
+
+
+class MultiFieldNaturalKeyOrPKMultipleChoiceFilter(MultiFieldFilterMixin, NaturalKeyOrPKMultipleChoiceFilter):
+    """`NaturalKeyOrPKMultipleChoiceFilter` that matches any of several field paths; see `MultiFieldFilterMixin`."""
+
+
+class MultiFieldRelatedMembershipBooleanFilter(MultiFieldFilterMixin, RelatedMembershipBooleanFilter):
+    """
+    `RelatedMembershipBooleanFilter` over several field paths.
+
+    `True` matches objects where *any* of `field_names` is populated; `False` matches objects where *none* is.
+    For example, `has_primary_ip` over `primary_ip4` and `primary_ip6`.
+    """
+
+    def generate_query(self, value, **kwargs):
+        """Return a `Q` for the given `isnull` value, as Dynamic Groups pass it.
+
+        `False` (not null) matches objects where any of `field_names` is populated; `True` matches objects where none
+        of them is.
+        """
+        populated = models.Q()
+        for field_name in self.field_names:
+            populated |= models.Q(**{f"{field_name}__isnull": self.exclude}, **self.extra_predicates)
+        return ~populated if bool(value) else populated
+
+    def filter(self, qs, value):
+        if value in EMPTY_VALUES or (hasattr(value, "exists") and not value.exists()):
+            return qs
+        populated = self.generate_query(False)
+        if bool(value):
+            qs = qs.filter(populated)
+            if self.distinct and not self.exclude:
+                qs = qs.distinct()
+            return qs
+        # `.exclude()` compiles to a subquery rather than a join, so it can't return duplicates.
+        return qs.exclude(populated)
+
+
 #
 # FilterSets
 #
@@ -1005,12 +1133,15 @@ class BaseFilterSet(django_filters.FilterSet):
             # should retain the original lookup_expr type, such as `isnull` using a boolean field on a
             # char or date object.
             resolve_field(field, lookup_expr)  # Will raise FieldLookupError if the lookup is invalid
+            # Filters such as `MultiFieldFilterMixin` subclasses need constructor arguments beyond `extra`
+            lookup_filter_kwargs = getattr(filter_field, "get_lookup_filter_kwargs", dict)()
             return type(filter_field)(
                 field_name=filter_field.field_name,
                 lookup_expr=lookup_expr,
                 label=filter_field.label,
                 exclude=filter_field.exclude,
                 **cls._explicit_distinct(filter_field),
+                **lookup_filter_kwargs,
                 **filter_field.extra,
             )
 

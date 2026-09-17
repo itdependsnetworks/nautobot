@@ -8,6 +8,10 @@ from nautobot.core.filters import (
     BaseFilterSet,
     ContentTypeMultipleChoiceFilter,
     ModelMultipleChoiceFilter,
+    MultiFieldNaturalKeyOrPKMultipleChoiceFilter,
+    MultiFieldNumberFilter,
+    MultiFieldRelatedMembershipBooleanFilter,
+    MultiFieldUUIDFilter,
     MultipleChoiceFilter,
     MultiValueCharFilter,
     MultiValueMACAddressFilter,
@@ -853,8 +857,8 @@ class DeviceFilterSet(
         label="Is full depth",
     )
     serial = MultiValueCharFilter(lookup_expr="iexact")
-    has_primary_ip = django_filters.BooleanFilter(
-        method="_has_primary_ip",
+    has_primary_ip = MultiFieldRelatedMembershipBooleanFilter(
+        field_names=["primary_ip4", "primary_ip6"],
         label="Has a primary IP",
     )
     secrets_group = NaturalKeyOrPKMultipleChoiceFilter(
@@ -962,16 +966,6 @@ class DeviceFilterSet(
             "has_software_version",
             "software_version",
         ]
-
-    def generate_query__has_primary_ip(self, value):
-        query = Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False)
-        if not value:
-            return ~query
-        return query
-
-    def _has_primary_ip(self, queryset, name, value):
-        params = self.generate_query__has_primary_ip(value)
-        return queryset.filter(params)
 
 
 class ConsolePortFilterSet(
@@ -1133,8 +1127,8 @@ class InterfaceFilterSet(
         label="Has member interfaces",
     )
     mac_address = MultiValueMACAddressFilter()
-    vlan_id = django_filters.CharFilter(method="filter_vlan_id", label="Assigned VLAN")
-    vlan = django_filters.NumberFilter(method="filter_vlan", label="Assigned VID")
+    vlan_id = MultiFieldUUIDFilter(field_names=["untagged_vlan", "tagged_vlans"], label="Assigned VLAN")
+    vlan = MultiFieldNumberFilter(field_names=["untagged_vlan__vid", "tagged_vlans__vid"], label="Assigned VID")
     type = MultipleChoiceFilter(choices=InterfaceTypeChoices, null_value=None)
     port_type = MultipleChoiceFilter(choices=PortTypeChoices, null_value=None)
     duplex = MultipleChoiceFilter(choices=InterfaceDuplexChoices, null_value=None)
@@ -1226,18 +1220,6 @@ class InterfaceFilterSet(
             return queryset.filter(pk__in=device.common_vc_interfaces.values_list("pk", flat=True))
         except Device.DoesNotExist:
             return queryset.none()
-
-    def filter_vlan_id(self, queryset, name, value):
-        value = value.strip()
-        if not value:
-            return queryset
-        return queryset.filter(Q(untagged_vlan_id=value) | Q(tagged_vlans=value))
-
-    def filter_vlan(self, queryset, name, value):
-        value = str(value).strip()
-        if not value:
-            return queryset
-        return queryset.filter(Q(untagged_vlan_id__vid=value) | Q(tagged_vlans__vid=value))
 
     def filter_kind(self, queryset, name, value):
         value = value.strip().lower()
@@ -1575,15 +1557,26 @@ class CableFilterSet(NautobotFilterSet, StatusModelFilterSetMixin):
         method="_termination_b_type",
         label="Termination B type",
     )
-    termination_a_id = MultiValueUUIDFilter(method="_termination_a_id", label="Termination A (ID)")
-    termination_b_id = MultiValueUUIDFilter(method="_termination_b_id", label="Termination B (ID)")
+    termination_a_id = MultiFieldUUIDFilter(
+        field_names=[f"terminations__{fk}" for fk in TERMINATION_FK_FIELDS],
+        extra_predicates={"terminations__cable_end": "A"},
+        label="Termination A (ID)",
+    )
+    termination_b_id = MultiFieldUUIDFilter(
+        field_names=[f"terminations__{fk}" for fk in TERMINATION_FK_FIELDS],
+        extra_predicates={"terminations__cable_end": "B"},
+        label="Termination B (ID)",
+    )
     termination_type = ContentTypeMultipleChoiceFilter(
         choices=FeatureQuery("cable_terminations").get_choices,
         conjoined=False,
         method="_termination_type",
         label="Termination (either end) type",
     )
-    termination_id = MultiValueUUIDFilter(method="_termination_id", label="Termination (either end) (ID)")
+    termination_id = MultiFieldUUIDFilter(
+        field_names=[f"terminations__{fk}" for fk in TERMINATION_FK_FIELDS],
+        label="Termination (either end) (ID)",
+    )
 
     class Meta:
         model = Cable
@@ -1708,37 +1701,6 @@ class CableFilterSet(NautobotFilterSet, StatusModelFilterSetMixin):
     def _termination_b_type(self, queryset, name, value):
         """Filter cables by B-side termination type (backward compatible)."""
         cable_ids = CableToCableTermination.objects.filter(self._build_termination_type_q(value, "B")).values_list(
-            "cable_id", flat=True
-        )
-        return queryset.filter(pk__in=cable_ids)
-
-    @staticmethod
-    def _build_termination_id_q(value, cable_end=None):
-        """Build a Q matching CableToCableTermination rows whose populated termination FK has its PK in `value`."""
-        q = Q()
-        for fk in TERMINATION_FK_FIELDS:
-            q |= Q(**{f"{fk}_id__in": value})
-        if cable_end:
-            q &= Q(cable_end=cable_end)
-        return q
-
-    def _termination_a_id(self, queryset, name, value):
-        """Filter cables by A-side termination ID (backward compatible)."""
-        cable_ids = CableToCableTermination.objects.filter(self._build_termination_id_q(value, "A")).values_list(
-            "cable_id", flat=True
-        )
-        return queryset.filter(pk__in=cable_ids)
-
-    def _termination_b_id(self, queryset, name, value):
-        """Filter cables by B-side termination ID (backward compatible)."""
-        cable_ids = CableToCableTermination.objects.filter(self._build_termination_id_q(value, "B")).values_list(
-            "cable_id", flat=True
-        )
-        return queryset.filter(pk__in=cable_ids)
-
-    def _termination_id(self, queryset, name, value):
-        """Filter cables by either termination ID."""
-        cable_ids = CableToCableTermination.objects.filter(self._build_termination_id_q(value)).values_list(
             "cable_id", flat=True
         )
         return queryset.filter(pk__in=cable_ids)
@@ -2295,10 +2257,14 @@ class ModuleFilterSet(
         to_field_name="name",
         label="Module family (name or ID)",
     )
-    device = NaturalKeyOrPKMultipleChoiceFilter(
+    device = MultiFieldNaturalKeyOrPKMultipleChoiceFilter(
+        # A module may be nested in module bays of other modules; check the parent device at every nesting level
+        field_names=[
+            f"{'parent_module_bay__parent_module__' * level}parent_module_bay__parent_device"
+            for level in range(MODULE_RECURSION_DEPTH_LIMIT)
+        ],
         queryset=Device.objects.all(),
         to_field_name="name",
-        method="filter_device",
     )
     # TODO: change to a ModelMultipleChoiceFilter as a breaking change for Dynamic Group and permission definitions
     compatible_with_module_bay = extend_schema_field({"type": "string", "format": "uuid"})(
@@ -2308,30 +2274,6 @@ class ModuleFilterSet(
             label="Compatible with module bay (ID)",
         )
     )
-
-    def _construct_device_filter_recursively(self, field_name, value):
-        recursion_depth = MODULE_RECURSION_DEPTH_LIMIT
-        query = Q()
-        for level in range(recursion_depth):
-            recursive_query = "parent_module_bay__parent_module__" * level
-            query = query | Q(**{f"{recursive_query}parent_module_bay__parent_device__{field_name}__in": value})
-        return query
-
-    def generate_query_filter_device(self, value):
-        if not hasattr(value, "__iter__") or isinstance(value, str):
-            value = [value]
-
-        device_ids = set(str(item) for item in value if is_uuid(item))
-        device_names = set(str(item) for item in value if not is_uuid(item))
-        query = self._construct_device_filter_recursively("name", device_names)
-        query |= self._construct_device_filter_recursively("id", device_ids)
-        return query
-
-    def filter_device(self, queryset, name, value):
-        if not value:
-            return queryset
-        params = self.generate_query_filter_device(value)
-        return queryset.filter(params)
 
     def filter_module_bay(self, queryset, name, value):
         """Filter modules based on a module bay's module family."""
@@ -2526,8 +2468,8 @@ class VirtualDeviceContextFilterSet(
         method="filter_primary_ip6",
         label="Primary IPv6 Address (address or ID)",
     )
-    has_primary_ip = django_filters.BooleanFilter(
-        method="_has_primary_ip",
+    has_primary_ip = MultiFieldRelatedMembershipBooleanFilter(
+        field_names=["primary_ip4", "primary_ip6"],
         label="Has a primary IP",
     )
     device = NaturalKeyOrPKMultipleChoiceFilter(
@@ -2575,14 +2517,6 @@ class VirtualDeviceContextFilterSet(
 
     # TODO(timizuo): Make a mixin for ip filterset fields to reduce code duplication
     # VirtualMachineFilterSet,
-    def generate_query__has_primary_ip(self, value):
-        query = Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False)
-        return ~query if not value else query
-
-    def _has_primary_ip(self, queryset, name, value):
-        params = self.generate_query__has_primary_ip(value)
-        return queryset.filter(params)
-
     def get_ip_queryset(self, value):
         pk_values = {item for item in value if is_uuid(item)}
         addresses = {item for item in value if item not in pk_values}

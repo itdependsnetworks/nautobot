@@ -1,9 +1,11 @@
 import datetime
+import uuid
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import models as django_models
+from django.db.models import Q
 from django.shortcuts import reverse
 from django.test import TestCase
 from django.test.utils import isolate_apps
@@ -1677,3 +1679,95 @@ class AutoDistinctFilterTest(TestCase):
                     filters.field_path_traverses_to_many(dcim_models.Location, field_name),
                     expected,
                 )
+
+
+class MultiFieldFilterTest(TestCase):
+    """Tests for `MultiFieldFilterMixin` and the concrete `MultiField*` filter classes."""
+
+    def test_field_names_required(self):
+        with self.assertRaises(ValueError):
+            filters.MultiFieldUUIDFilter()
+        with self.assertRaises(ValueError):
+            filters.MultiFieldUUIDFilter(field_names=[])
+
+    def test_field_name_defaults_to_first_path(self):
+        flt = filters.MultiFieldUUIDFilter(field_names=["untagged_vlan", "tagged_vlans"])
+        self.assertEqual(flt.field_name, "untagged_vlan")
+        self.assertEqual(flt.field_names, ["untagged_vlan", "tagged_vlans"])
+        self.assertEqual(flt.extra_predicates, {})
+
+    def test_generate_query_ors_each_value_across_each_path(self):
+        flt = filters.MultiFieldUUIDFilter(field_names=["untagged_vlan", "tagged_vlans"])
+        first, second = uuid.uuid4(), uuid.uuid4()
+        expected = Q(untagged_vlan=first) | Q(untagged_vlan=second) | Q(tagged_vlans=first) | Q(tagged_vlans=second)
+        self.assertEqual(str(flt.generate_query([first, second])), str(expected))
+        # A single value is accepted too
+        self.assertEqual(str(flt.generate_query(first)), str(Q(untagged_vlan=first) | Q(tagged_vlans=first)))
+
+    def test_generate_query_ands_extra_predicates_with_each_path(self):
+        flt = filters.MultiFieldUUIDFilter(
+            field_names=["terminations__interface", "terminations__front_port"],
+            extra_predicates={"terminations__cable_end": "A"},
+        )
+        pk = uuid.uuid4()
+        expected = Q(terminations__interface=pk, terminations__cable_end="A") | Q(
+            terminations__front_port=pk, terminations__cable_end="A"
+        )
+        self.assertEqual(str(flt.generate_query([pk])), str(expected))
+
+    def test_natural_key_or_pk_predicates_are_rebased_onto_every_path(self):
+        flt = filters.MultiFieldNaturalKeyOrPKMultipleChoiceFilter(
+            field_names=[
+                "parent_module_bay__parent_device",
+                "parent_module_bay__parent_module__parent_module_bay__parent_device",
+            ],
+            queryset=Device.objects.all(),
+            to_field_name="name",
+        )
+        pk = uuid.uuid4()
+        query = flt.generate_query(["device-1", pk])
+        expected = (
+            Q(parent_module_bay__parent_device__name="device-1")
+            | Q(parent_module_bay__parent_device=str(pk))
+            | Q(parent_module_bay__parent_module__parent_module_bay__parent_device__name="device-1")
+            | Q(parent_module_bay__parent_module__parent_module_bay__parent_device=str(pk))
+        )
+        self.assertEqual(str(query), str(expected))
+
+    def test_membership_boolean_generate_query(self):
+        flt = filters.MultiFieldRelatedMembershipBooleanFilter(field_names=["primary_ip4", "primary_ip6"])
+        populated = Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False)
+        # `generate_query()` takes the `isnull` value, as Dynamic Groups pass it
+        self.assertEqual(str(flt.generate_query(False)), str(populated))
+        self.assertEqual(str(flt.generate_query(True)), str(~populated))
+
+    def test_membership_boolean_filters_match_manual_query(self):
+        populated = Q(primary_ip4__isnull=False) | Q(primary_ip6__isnull=False)
+        queryset = Device.objects.all()
+        self.assertQuerySetEqual(
+            dcim_filters.DeviceFilterSet({"has_primary_ip": True}, queryset).qs,
+            queryset.filter(populated),
+            ordered=False,
+        )
+        self.assertQuerySetEqual(
+            dcim_filters.DeviceFilterSet({"has_primary_ip": False}, queryset).qs,
+            queryset.exclude(populated),
+            ordered=False,
+        )
+
+    def test_distinct_is_derived_from_all_paths(self):
+        interface_filters = dcim_filters.InterfaceFilterSet().filters
+        # `tagged_vlans` is a many-to-many field, so the filter needs `.distinct()` even though `untagged_vlan` is a FK
+        self.assertTrue(interface_filters["vlan_id"].distinct)
+        self.assertTrue(interface_filters["vlan"].distinct)
+        # Neither `primary_ip4` nor `primary_ip6` is to-many
+        self.assertFalse(dcim_filters.DeviceFilterSet().filters["has_primary_ip"].distinct)
+
+    def test_lookup_expression_filters_keep_field_names_and_extra_predicates(self):
+        negated = dcim_filters.InterfaceFilterSet.base_filters["vlan_id__n"]
+        self.assertIsInstance(negated, filters.MultiFieldUUIDFilter)
+        self.assertEqual(negated.field_names, ["untagged_vlan", "tagged_vlans"])
+        self.assertTrue(negated.exclude)
+        negated = dcim_filters.CableFilterSet.base_filters["termination_a_id__n"]
+        self.assertEqual(negated.extra_predicates, {"terminations__cable_end": "A"})
+        self.assertEqual(negated.field_names, dcim_filters.CableFilterSet.base_filters["termination_a_id"].field_names)

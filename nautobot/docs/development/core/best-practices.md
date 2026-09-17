@@ -401,6 +401,18 @@ from nautobot.core.filters import RelatedMembershipBooleanFilter
     )
 ```
 
+- A filter that must match *any* of several fields (`Q(a=value) | Q(b=value)`) **should** use one of the `MultiField*` filter classes from `nautobot.apps.filters` (`MultiFieldUUIDFilter`, `MultiFieldNumberFilter`, `MultiFieldNaturalKeyOrPKMultipleChoiceFilter`, `MultiFieldRelatedMembershipBooleanFilter`, or your own subclass built on `MultiFieldFilterMixin`) instead of a `method=`. These take a `field_names` list and an optional `extra_predicates` dict of constant conditions, stay introspectable, derive `distinct` from all of their paths, and work with Dynamic Groups without a `generate_query_<method>` companion.
+
+```python
+from nautobot.apps.filters import MultiFieldRelatedMembershipBooleanFilter, MultiFieldUUIDFilter
+
+    has_primary_ip = MultiFieldRelatedMembershipBooleanFilter(
+        field_names=["primary_ip4", "primary_ip6"],
+        label="Has a primary IP",
+    )
+    vlan_id = MultiFieldUUIDFilter(field_names=["untagged_vlan", "tagged_vlans"], label="Assigned VLAN")
+```
+
 - Whenever possible otherwise, filter names **must** correspond exactly to the underlying model field they are referencing.
 
 - If there's necessarily a mismatch between the filter name and the model field name (such as in the `has_*` and `is_*` cases described above):

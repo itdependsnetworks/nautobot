@@ -216,8 +216,11 @@ class FilterTestCases:
                     paths = list(filter_field.filter_predicates)
                     label = f"{filter_name} (filter_predicates={paths})"
                 elif isinstance(filter_field, (django_filters.MultipleChoiceFilter, django_filters.BooleanFilter)):
-                    paths = [filter_field.field_name]
+                    # A `MultiFieldFilterMixin` filter ORs across several paths and needs `.distinct()` if any is to-many
+                    paths = list(getattr(filter_field, "field_names", None) or [filter_field.field_name])
                     label = f"{filter_name} (field_name={filter_field.field_name!r})"
+                    if len(paths) > 1:
+                        label = f"{filter_name} (field_names={paths!r})"
                 else:
                     continue
                 results = [field_path_traverses_to_many(model, path) for path in paths]
@@ -504,10 +507,11 @@ class FilterTestCases:
                 field_name = test[-1]  # default to filter_name if a second list item was not supplied
                 with self.subTest(f"{self.filterset.__name__} filter {filter_name} ({field_name})"):
                     self.assertIn(filter_name, self.filterset.base_filters)
-                    lookup_expr = self.filterset.base_filters[filter_name].lookup_expr
+                    filter_object = self.filterset.base_filters[filter_name]
+                    lookup_expr = filter_object.lookup_expr
                     if lookup_expr in ("exact", "in"):
                         test_data = self.get_filterset_test_values(field_name)
-                        qs_result = self.queryset.filter(**{f"{field_name}__in": test_data})
+                        lookup_expr = "in"
                     else:
                         # A filter with another lookup (e.g. the `icontains` that `BaseFilterSet` gives JSONFields)
                         # ORs that lookup across its values, so the expected queryset must do the same.
@@ -516,14 +520,41 @@ class FilterTestCases:
                             self._lookup_test_value(value, model_field, lookup_expr)
                             for value in self.get_filterset_test_values(field_name, raw=True)
                         ]
-                        query = Q()
-                        for value in test_data:
-                            query |= Q(**{f"{field_name}__{lookup_expr}": value})
-                        qs_result = self.queryset.filter(query)
+                    # A `MultiFieldFilterMixin` filter matches any of several paths, so the expected queryset ORs
+                    # the same lookup across all of them (each ANDed with the filter's constant `extra_predicates`).
+                    extra_predicates = getattr(filter_object, "extra_predicates", {})
+                    query = Q()
+                    for path in self._expected_field_paths(filter_object, field_name):
+                        if lookup_expr == "in":
+                            query |= Q(**{f"{path}__in": test_data}, **extra_predicates)
+                        else:
+                            for value in test_data:
+                                query |= Q(**{f"{path}__{lookup_expr}": value}, **extra_predicates)
+                    qs_result = self.queryset.filter(query)
                     params = {filter_name: test_data}
                     filterset = self.filterset(params, self.queryset)  # pylint: disable=not-callable
                     self.assertTrue(filterset.is_valid(), filterset.errors.as_text())
                     self.assertQuerySetEqualAndNotEmpty(filterset.qs, qs_result.distinct(), ordered=False)
+
+        def _expected_field_paths(self, filter_object, field_name):
+            """The model paths that `test_filters_generic` must OR together to mirror `filter_object`.
+
+            For an ordinary filter this is just `field_name` from the `generic_filter_tests` entry. For a
+            `MultiFieldFilterMixin` filter, `field_name` must extend one of the filter's `field_names` (for example
+            `untagged_vlan__id` for `field_names=["untagged_vlan", "tagged_vlans"]`), and the same suffix is applied
+            to every other path.
+            """
+            field_names = getattr(filter_object, "field_names", None)
+            if not field_names:
+                return [field_name]
+            for base in field_names:
+                if field_name == base or field_name.startswith(f"{base}__"):
+                    suffix = field_name[len(base) :]
+                    return [f"{path}{suffix}" for path in field_names]
+            self.fail(
+                f"generic_filter_tests entry field {field_name!r} must start with one of the filter's "
+                f"field_names {field_names!r}"
+            )
 
         @staticmethod
         def _lookup_test_value(value, model_field, lookup_expr):
@@ -593,6 +624,12 @@ class FilterTestCases:
                 if kind is None:
                     continue
                 field_name = filter_object.field_name
+                # A `MultiFieldRelatedMembershipBooleanFilter` is populated if any of its paths is
+                populated = Q()
+                for path in getattr(filter_object, "field_names", [field_name]):
+                    populated |= Q(
+                        **{f"{path}__isnull": filter_object.exclude}, **getattr(filter_object, "extra_predicates", {})
+                    )
                 if kind == "plain":
                     results = []
                     for value in (True, False):
@@ -612,11 +649,11 @@ class FilterTestCases:
                     continue
                 with self.subTest(f"{self.filterset.__name__} RelatedMembershipBooleanFilter {filter_name} (True)"):
                     filterset_result = self.filterset({filter_name: True}, self.queryset).qs  # pylint: disable=not-callable
-                    qs_result = self.queryset.filter(**{f"{field_name}__isnull": filter_object.exclude}).distinct()
+                    qs_result = self.queryset.filter(populated).distinct()
                     self.assertQuerySetEqualAndNotEmpty(filterset_result, qs_result)
                 with self.subTest(f"{self.filterset.__name__} RelatedMembershipBooleanFilter {filter_name} (False)"):
                     filterset_result = self.filterset({filter_name: False}, self.queryset).qs  # pylint: disable=not-callable
-                    qs_result = self.queryset.exclude(**{f"{field_name}__isnull": filter_object.exclude}).distinct()
+                    qs_result = self.queryset.exclude(populated).distinct()
                     self.assertQuerySetEqualAndNotEmpty(filterset_result, qs_result)
 
         def test_dynamic_groups_filter(self):

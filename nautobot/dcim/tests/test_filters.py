@@ -1898,7 +1898,6 @@ class DeviceTestCase(
     ]
     untested_filters = [
         "controller",
-        "has_primary_ip",
         "local_config_context_schema",
         "local_config_context_schema_id",
         "location",
@@ -2955,12 +2954,10 @@ class InterfaceTestCase(PathEndpointModelTestMixin, ModularDeviceComponentTestMi
         )
 
     def test_vlan_id(self):
-        # TODO: Not a generic_filter_test because this is a single-value filter
-        # 2.0 TODO: Support filtering for multiple values
         vlan = VLAN.objects.filter(
             Q(interfaces_as_untagged__isnull=False) | Q(interfaces_as_tagged__isnull=False)
         ).first()
-        params = {"vlan_id": vlan.id}
+        params = {"vlan_id": [vlan.id]}
         self.assertQuerySetEqual(
             self.filterset(params, self.queryset).qs, self.queryset.filter(Q(untagged_vlan=vlan) | Q(tagged_vlans=vlan))
         )
@@ -3510,11 +3507,8 @@ class CableTestCase(FilterTestCases.FilterTestCase):
         "location_id",
         "rack_id",
         "tenant_id",
-        "termination_a_id",
         "termination_a_type",
-        "termination_b_id",
         "termination_b_type",
-        "termination_id",
     ]
 
     @classmethod
@@ -3981,28 +3975,25 @@ class CableTestCase(FilterTestCases.FilterTestCase):
                 ).distinct(),
             )
 
-    def test_termination_id_and_a_id_and_b_id(self):
-        """Test the termination_a_id and termination_b_id filters."""
-        a_endpoints = list(CableToCableTermination.objects.filter(cable_end="A")[:2])
-        b_endpoints = list(CableToCableTermination.objects.filter(cable_end="B")[:2])
-        with self.subTest("termination_a_id"):
-            params = {"termination_a_id": [str(ep.termination_id) for ep in a_endpoints]}
-            self.assertQuerySetEqualAndNotEmpty(
-                self.filterset(params, self.queryset).qs,
-                self.queryset.filter(pk__in=[ep.cable_id for ep in a_endpoints]),
-            )
-        with self.subTest("termination_b_id"):
-            params = {"termination_b_id": [str(ep.termination_id) for ep in b_endpoints]}
-            self.assertQuerySetEqualAndNotEmpty(
-                self.filterset(params, self.queryset).qs,
-                self.queryset.filter(pk__in=[ep.cable_id for ep in b_endpoints]),
-            )
-        with self.subTest("termination_id"):
-            params = {"termination_id": [str(ep.termination_id) for ep in [*a_endpoints, *b_endpoints]]}
-            self.assertQuerySetEqualAndNotEmpty(
-                self.filterset(params, self.queryset).qs,
-                self.queryset.filter(pk__in=[ep.cable_id for ep in [*a_endpoints, *b_endpoints]]),
-            )
+    def _assert_termination_filter(self, filter_name, endpoints):
+        params = {filter_name: [str(ep.termination_id) for ep in endpoints]}
+        self.assertQuerySetEqualAndNotEmpty(
+            self.filterset(params, self.queryset).qs,
+            self.queryset.filter(pk__in=[ep.cable_id for ep in endpoints]),
+        )
+
+    def test_termination_a_id(self):
+        self._assert_termination_filter("termination_a_id", CableToCableTermination.objects.filter(cable_end="A")[:2])
+
+    def test_termination_b_id(self):
+        self._assert_termination_filter("termination_b_id", CableToCableTermination.objects.filter(cable_end="B")[:2])
+
+    def test_termination_id(self):
+        endpoints = [
+            *CableToCableTermination.objects.filter(cable_end="A")[:2],
+            *CableToCableTermination.objects.filter(cable_end="B")[:2],
+        ]
+        self._assert_termination_filter("termination_id", endpoints)
 
 
 class PowerPanelTestCase(FilterTestCases.FilterTestCase):
@@ -4626,9 +4617,9 @@ class ModuleTestCase(
         ("status", "status__id"),
         ("status", "status__name"),
         ("module_family", "module_type__module_family"),
+        ("device", "parent_module_bay__parent_device__id"),
     ]
     untested_filters = [
-        "device",
         "location",
     ]
 
