@@ -29,9 +29,7 @@ class RadioProfileTestCase(FilterTestCases.FilterTestCase):
         ("supported_data_rates",),
         ("tx_power_max",),
         ("tx_power_min",),
-    ]
-    untested_filters = [
-        "allowed_channel_list",
+        ("allowed_channel_list",),
     ]
 
     def test_channel_width(self):
@@ -57,10 +55,6 @@ class WirelessNetworkTestCase(FilterTestCases.FilterTestCase, FilterTestCases.Te
         ("ssid",),
         ("controller_managed_device_groups__controller",),
         ("controller_managed_device_groups__devices",),
-    ]
-    untested_filters = [
-        "enabled",
-        "hidden",
     ]
 
     @classmethod

@@ -24,11 +24,9 @@ class VPNProfileFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.T
         ("keepalive_interval",),
         ("keepalive_retries",),
         ("role",),
+        ("extra_options",),
     )
     untested_filters = [
-        "extra_options",
-        "keepalive_enabled",
-        "nat_traversal",
         "secrets_group",
     ]
 
@@ -49,7 +47,6 @@ class VPNPhase1PolicyFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCa
         ("vpn_profiles",),
     )
     untested_filters = [
-        "aggressive_mode",
         "ike_version",
     ]
 
@@ -127,10 +124,8 @@ class VPNFilterTestCase(FilterTestCases.FilterTestCase, FilterTestCases.TenancyF
         ("service_type",),
         ("role",),
         ("status",),
+        ("extra_attributes",),
     )
-    untested_filters = [
-        "extra_attributes",
-    ]
 
     @classmethod
     def setUpTestData(cls):

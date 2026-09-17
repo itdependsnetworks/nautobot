@@ -616,32 +616,32 @@ class DeviceTypeFilterSet(DeviceTypeModuleTypeCommonFiltersMixin, NautobotFilter
         queryset=DeviceFamily.objects.all(),
         to_field_name="name",
     )
-    console_ports = django_filters.BooleanFilter(
-        method="_console_ports",
+    console_ports = RelatedMembershipBooleanFilter(
+        field_name="console_port_templates",
         label="Has console ports",
     )
-    console_server_ports = django_filters.BooleanFilter(
-        method="_console_server_ports",
+    console_server_ports = RelatedMembershipBooleanFilter(
+        field_name="console_server_port_templates",
         label="Has console server ports",
     )
-    power_ports = django_filters.BooleanFilter(
-        method="_power_ports",
+    power_ports = RelatedMembershipBooleanFilter(
+        field_name="power_port_templates",
         label="Has power ports",
     )
-    power_outlets = django_filters.BooleanFilter(
-        method="_power_outlets",
+    power_outlets = RelatedMembershipBooleanFilter(
+        field_name="power_outlet_templates",
         label="Has power outlets",
     )
-    interfaces = django_filters.BooleanFilter(
-        method="_interfaces",
+    interfaces = RelatedMembershipBooleanFilter(
+        field_name="interface_templates",
         label="Has interfaces",
     )
     pass_through_ports = RelatedMembershipBooleanFilter(
         field_name="front_port_templates",
         label="Has pass-through ports",
     )
-    device_bays = django_filters.BooleanFilter(
-        method="_device_bays",
+    device_bays = RelatedMembershipBooleanFilter(
+        field_name="device_bay_templates",
         label="Has device bays",
     )
     has_devices = RelatedMembershipBooleanFilter(
@@ -682,24 +682,6 @@ class DeviceTypeFilterSet(DeviceTypeModuleTypeCommonFiltersMixin, NautobotFilter
             "has_software_image_files",
             "software_image_files",
         ]
-
-    def _console_ports(self, queryset, name, value):
-        return queryset.exclude(console_port_templates__isnull=value)
-
-    def _console_server_ports(self, queryset, name, value):
-        return queryset.exclude(console_server_port_templates__isnull=value)
-
-    def _power_ports(self, queryset, name, value):
-        return queryset.exclude(power_port_templates__isnull=value)
-
-    def _power_outlets(self, queryset, name, value):
-        return queryset.exclude(power_outlet_templates__isnull=value)
-
-    def _interfaces(self, queryset, name, value):
-        return queryset.exclude(interface_templates__isnull=value)
-
-    def _device_bays(self, queryset, name, value):
-        return queryset.exclude(device_bay_templates__isnull=value)
 
 
 class ConsolePortTemplateFilterSet(ModularDeviceComponentTemplateModelFilterSetMixin, BaseFilterSet):

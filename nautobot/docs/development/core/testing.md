@@ -67,6 +67,9 @@ Nautobot provides a set of generic tests for testing the behavior of FilterSets.
 
 When using `FilterTestCase`, all filters that are instances of `nautobot.core.filters.RelatedMembershipBooleanFilter` that are not using a custom filter method will be tested to verify that the filter returns the same results as the model's queryset. `RelatedMembershipBooleanFilter` filters will be tested for both `True` and `False` values.
 
++/- 3.3.0
+    Plain `BooleanFilter` filters (those doing an exact match on a model `BooleanField`, without a custom filter method) are now tested the same way: `True` and `False` are each compared to the equivalent `queryset.filter(field=value)` call, and at least one of the two must match something in the test data.
+
 ### Generic Multiple Choice Filter Tests
 
 A `generic_filter_tests` attribute with a list of filters can be defined on the test class to run generic tests against multiple choice filters. The `id`, `created` and `last_updated` filters, and the `contacts` and `teams` filters of contact-associable models, are tested automatically and don't need to be listed. The `generic_filter_tests` attribute should be in the following format:
@@ -82,6 +85,9 @@ generic_filter_tests = (
 )
 ```
 
++/- 3.3.0
+    The expected queryset is built from the filter's own `lookup_expr`. A filter using `exact` is compared against `queryset.filter(<field_name>__in=values)`; a filter using another lookup, such as the `icontains` that `BaseFilterSet` gives every `JSONField`, is compared against that lookup OR'd across the values. For a `JSONField` the test values are fragments of the stored JSON (a quoted key, a list element, or an encoded scalar) so that they can match the JSON text.
+
 ### Tags Filter Test
 
 If the model being tested is a `PrimaryModel`, the `tags` filter will be automatically tested by passing at least two values to the filter and verifying that the result matches the equivalent queryset filter.
@@ -93,7 +99,7 @@ If the model being tested is a `PrimaryModel`, the `tags` filter will be automat
 Line coverage can't tell you that a filter was declared but never exercised, because a filter's logic mostly lives in django-filter and in Nautobot's shared filter classes, not in the FilterSet itself. `FilterTestCase.test_filters_coverage` closes that gap: it fails if any filter on the FilterSet under test is not named by at least one test in the test case. A filter counts as tested when any of the following is true:
 
 - It is the first item of an entry in `generic_filter_tests`.
-- It is a `RelatedMembershipBooleanFilter` without a custom `method`, which `test_boolean_filters_generic` exercises automatically.
+- It is a `RelatedMembershipBooleanFilter`, or a `BooleanFilter` doing an exact match on a model `BooleanField`, without a custom `method`; `test_boolean_filters_generic` exercises those automatically.
 - The test case has a test method named `test_<filter_name>`.
 
 The naming rule is the whole mechanism for custom tests: name every filter test after the filter it exercises, so that what a test covers can be read from its name and checked mechanically. A test that exercises several filters should be split, or the remaining filters listed in `untested_filters` until it is.

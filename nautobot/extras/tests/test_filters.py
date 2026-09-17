@@ -1048,7 +1048,6 @@ class CustomLinkTestCase(FilterTestCases.FilterTestCase):
         "button_class",
         "content_type",
         "group_name",
-        "new_window",
     ]
 
     @classmethod
@@ -1184,11 +1183,9 @@ class ExternalIntegrationTestCase(FilterTestCases.FilterTestCase):
         ["secrets_group", "secrets_group__name"],
         ["http_method"],
         ("ca_file_path",),
+        ("extra_config",),
+        ("headers",),
     )
-    untested_filters = [
-        "extra_config",
-        "headers",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1398,22 +1395,6 @@ class JobFilterSetTestCase(FilterTestCases.FilterTestCase):
         ("soft_time_limit",),
         ("time_limit",),
     )
-    untested_filters = [
-        "console_log_default",
-        "console_log_default_override",
-        "description_override",
-        "dryrun_default_override",
-        "grouping_override",
-        "has_sensitive_variables",
-        "has_sensitive_variables_override",
-        "hidden_override",
-        "is_job_button_receiver",
-        "is_singleton",
-        "is_singleton_override",
-        "name_override",
-        "soft_time_limit_override",
-        "time_limit_override",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1711,9 +1692,7 @@ class JobButtonFilterTestCase(FilterTestCases.FilterTestCase):
     )
     untested_filters = [
         "button_class",
-        "confirmation",
         "content_types",
-        "enabled",
         "group_name",
     ]
 
@@ -2049,9 +2028,9 @@ class ObjectMetadataTestCase(FilterTestCases.FilterTestCase):
         ["metadata_type", "metadata_type__name"],
         ["metadata_type", "metadata_type__id"],
         ("assigned_object_id",),
+        ("scoped_fields",),
     )
     untested_filters = [
-        "scoped_fields",
         "value",
     ]
 
@@ -2768,9 +2747,6 @@ class WebhookTestCase(FilterTestCases.FilterTestCase):
     )
     untested_filters = [
         "content_types",
-        "type_create",
-        "type_delete",
-        "type_update",
     ]
 
     @classmethod

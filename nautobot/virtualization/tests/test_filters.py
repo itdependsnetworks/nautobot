@@ -573,7 +573,6 @@ class VMInterfaceTestCase(FilterTestCases.FilterTestCase):
         ("status",),
     )
     untested_filters = [
-        "enabled",
         "vlan_id",
     ]
 

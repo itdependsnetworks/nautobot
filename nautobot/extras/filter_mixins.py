@@ -1,4 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Model, Q
 from django.utils.encoding import force_str
 from django.utils.text import capfirst
@@ -15,6 +16,7 @@ from nautobot.core.filters import (
     ModelMultipleChoiceFilter,
     MultiValueDateTimeFilter,
     NaturalKeyOrPKMultipleChoiceFilter,
+    RelatedMembershipBooleanFilter,
 )
 from nautobot.dcim.models import Device
 from nautobot.extras.choices import (
@@ -180,10 +182,29 @@ class CreatedUpdatedModelFilterSetMixin(django_filters.FilterSet):
     created = MultiValueDateTimeFilter()
     last_updated = MultiValueDateTimeFilter()
 
+    @classmethod
+    def get_filters(cls):
+        """Omit `created`/`last_updated` when the model doesn't have those fields.
+
+        `NautobotFilterSet` includes this mixin for every model, including `BaseModel`-only through models that have
+        no `created`/`last_updated` columns. Without this check, those FilterSets would advertise the two filters and
+        raise a `FieldError` when either one was used.
+        """
+        filters = super().get_filters()
+        model = cls._meta.model
+        if model is not None:
+            for name in ("created", "last_updated"):
+                if name in filters:
+                    try:
+                        model._meta.get_field(name)
+                    except FieldDoesNotExist:
+                        del filters[name]
+        return filters
+
 
 class LocalContextModelFilterSetMixin(django_filters.FilterSet):
-    local_config_context_data = django_filters.BooleanFilter(
-        method="_local_config_context_data",
+    local_config_context_data = RelatedMembershipBooleanFilter(
+        field_name="local_config_context_data",
         label="Has local config context data",
     )
     local_config_context_schema_id = ModelMultipleChoiceFilter(
@@ -195,9 +216,6 @@ class LocalContextModelFilterSetMixin(django_filters.FilterSet):
         to_field_name="name",
         label="Schema (ID or name)",
     )
-
-    def _local_config_context_data(self, queryset, name, value):
-        return queryset.exclude(local_config_context_data__isnull=value)
 
 
 class RelationshipFilter(ModelMultipleChoiceFilter):

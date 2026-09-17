@@ -1,4 +1,5 @@
 import inspect
+import json
 import random
 import string
 from typing import ClassVar, Iterable, Optional
@@ -6,13 +7,14 @@ from typing import ClassVar, Iterable, Optional
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Count, Q, QuerySet
-from django.db.models.fields import CharField, TextField
+from django.db.models import Count, JSONField, Q, QuerySet
+from django.db.models.fields import BooleanField, CharField, TextField
 from django.db.models.fields.related import ManyToManyField
 from django.db.models.fields.reverse_related import ManyToManyRel, ManyToOneRel
 from django.test import tag
 import django_filters
 from django_filters import FilterSet
+from django_filters.utils import get_model_field
 
 from nautobot.core.constants import (
     CHARFIELD_MAX_LENGTH,
@@ -82,7 +84,7 @@ class FilterTestCases:
 
         queryset: ClassVar[Optional[QuerySet]] = None  # TODO: declared as Optional only to avoid a breaking change
 
-        def get_filterset_test_values(self, field_name, queryset=None):
+        def get_filterset_test_values(self, field_name, queryset=None, *, raw=False):
             """Returns a list of distinct values from the requested queryset field to use in filterset tests.
 
             Returns a list for use in testing multiple choice filters. The size of the returned list is random
@@ -92,6 +94,7 @@ class FilterTestCases:
             Args:
                 field_name (str): The name of the field to retrieve test values from.
                 queryset (QuerySet): The queryset to retrieve test values. Defaults to `self.queryset`.
+                raw (bool): Return the values as stored (e.g. a `dict` for a JSONField) instead of as strings.
 
             Returns:
                 (list): A list of unique values derived from the queryset.
@@ -111,7 +114,7 @@ class FilterTestCases:
                     break
                 if value[field_name] and value["count"] < qs_count:
                     qs_count -= value["count"]
-                    test_values.append(str(value[field_name]))
+                    test_values.append(value[field_name] if raw else str(value[field_name]))
 
             if len(test_values) < 2:
                 raise ValueError(
@@ -289,12 +292,9 @@ class FilterTestCases:
 
             covered = {test[0] for test in self.generic_filter_tests}
             covered |= {test[0] for test in self._get_automatic_generic_filter_tests()}
-            # `test_boolean_filters_generic` exercises every RelatedMembershipBooleanFilter without a custom method
+            # `test_boolean_filters_generic` exercises every boolean filter it knows how to test
             covered |= {
-                name
-                for name in requiring_coverage
-                if isinstance(filterset.filters[name], RelatedMembershipBooleanFilter)
-                and filterset.filters[name].method is None
+                name for name in requiring_coverage if self._generic_boolean_filter_kind(filterset.filters[name])
             }
 
             # A method named `test_<filter_name>` exercises that filter
@@ -503,13 +503,45 @@ class FilterTestCases:
                 filter_name = test[0]
                 field_name = test[-1]  # default to filter_name if a second list item was not supplied
                 with self.subTest(f"{self.filterset.__name__} filter {filter_name} ({field_name})"):
-                    test_data = self.get_filterset_test_values(field_name)
+                    self.assertIn(filter_name, self.filterset.base_filters)
+                    lookup_expr = self.filterset.base_filters[filter_name].lookup_expr
+                    if lookup_expr in ("exact", "in"):
+                        test_data = self.get_filterset_test_values(field_name)
+                        qs_result = self.queryset.filter(**{f"{field_name}__in": test_data})
+                    else:
+                        # A filter with another lookup (e.g. the `icontains` that `BaseFilterSet` gives JSONFields)
+                        # ORs that lookup across its values, so the expected queryset must do the same.
+                        model_field = get_model_field(self.queryset.model, field_name)
+                        test_data = [
+                            self._lookup_test_value(value, model_field, lookup_expr)
+                            for value in self.get_filterset_test_values(field_name, raw=True)
+                        ]
+                        query = Q()
+                        for value in test_data:
+                            query |= Q(**{f"{field_name}__{lookup_expr}": value})
+                        qs_result = self.queryset.filter(query)
                     params = {filter_name: test_data}
                     filterset = self.filterset(params, self.queryset)  # pylint: disable=not-callable
-                    self.assertIn(filter_name, list(filterset.filters.keys()))
-                    filterset_result = filterset.qs
-                    qs_result = self.queryset.filter(**{f"{field_name}__in": test_data}).distinct()
-                    self.assertQuerySetEqualAndNotEmpty(filterset_result, qs_result, ordered=False)
+                    self.assertTrue(filterset.is_valid(), filterset.errors.as_text())
+                    self.assertQuerySetEqualAndNotEmpty(filterset.qs, qs_result.distinct(), ordered=False)
+
+        @staticmethod
+        def _lookup_test_value(value, model_field, lookup_expr):
+            """Turn a stored field value into a parameter suitable for `lookup_expr` on `model_field`.
+
+            For a JSONField under a text lookup such as `icontains`, the database compares against the JSON text,
+            in which the Python `repr()` of a `dict` or `list` never appears. Use a fragment that does: a quoted key
+            for a mapping, the first element for a list, or the JSON encoding of a scalar.
+            """
+            if isinstance(model_field, JSONField) and lookup_expr in ("contains", "icontains"):
+                if isinstance(value, dict):
+                    return json.dumps(next(iter(value)))
+                if isinstance(value, list):
+                    return json.dumps(value[0])
+                if isinstance(value, str):
+                    return value
+                return json.dumps(value)
+            return str(value)
 
         def test_automagic_filters(self):
             """https://github.com/nautobot/nautobot/issues/6656"""
@@ -525,20 +557,59 @@ class FilterTestCases:
                 self.assertIsInstance(fs.filters["dynamic_groups"], NaturalKeyOrPKMultipleChoiceFilter)
                 self.assertIsInstance(fs.filters["dynamic_groups__n"], NaturalKeyOrPKMultipleChoiceFilter)
 
-        def test_boolean_filters_generic(self):
-            """Test all `RelatedMembershipBooleanFilter` filters found in `self.filterset.filters`
-            except for the ones with custom filter logic defined in its `method` attribute.
+        def _generic_boolean_filter_kind(self, filter_object):
+            """Classify a filter for `test_boolean_filters_generic`.
 
-            This test asserts that `filter=True` matches `self.queryset.filter(field__isnull=...)` and
-            that `filter=False` matches `self.queryset.exclude(field__isnull=...)`.
+            Returns:
+                (str | None): `"membership"` for a `RelatedMembershipBooleanFilter`, `"plain"` for any other
+                    `BooleanFilter` that does an exact match on a model `BooleanField`, or `None` if the filter has a
+                    custom `method` or is otherwise not testable generically.
+            """
+            if not isinstance(filter_object, django_filters.BooleanFilter) or filter_object.method is not None:
+                return None
+            if isinstance(filter_object, RelatedMembershipBooleanFilter):
+                return "membership"
+            if filter_object.lookup_expr != "exact":
+                return None
+            model_field = get_model_field(self.queryset.model, filter_object.field_name)
+            if isinstance(model_field, BooleanField):
+                return "plain"
+            return None
+
+        def test_boolean_filters_generic(self):
+            """Test all boolean filters found in `self.filterset.filters` that don't have a custom `method`.
+
+            For a `RelatedMembershipBooleanFilter`, asserts that `filter=True` matches
+            `self.queryset.filter(field__isnull=...)` and that `filter=False` matches
+            `self.queryset.exclude(field__isnull=...)`.
+
+            For any other `BooleanFilter` doing an exact match on a model `BooleanField`, asserts that each of
+            `filter=True` and `filter=False` matches `self.queryset.filter(field=value)` (or `.exclude()` if the filter
+            declares `exclude=True`), and that at least one of the two returns something.
             """
             self.assertIsNotNone(self.filterset)
             for filter_name, filter_object in self.filterset().filters.items():  # pylint: disable=not-callable
-                if not isinstance(filter_object, RelatedMembershipBooleanFilter):
-                    continue
-                if filter_object.method is not None:
+                kind = self._generic_boolean_filter_kind(filter_object)
+                if kind is None:
                     continue
                 field_name = filter_object.field_name
+                if kind == "plain":
+                    results = []
+                    for value in (True, False):
+                        with self.subTest(f"{self.filterset.__name__} BooleanFilter {filter_name} ({value})"):
+                            filterset_result = self.filterset({filter_name: value}, self.queryset).qs  # pylint: disable=not-callable
+                            if filter_object.exclude:
+                                qs_result = self.queryset.exclude(**{field_name: value})
+                            else:
+                                qs_result = self.queryset.filter(**{field_name: value})
+                            self.assertQuerySetEqual(filterset_result, qs_result, ordered=False)
+                            results.append(qs_result.exists())
+                    with self.subTest(f"{self.filterset.__name__} BooleanFilter {filter_name} (has data)"):
+                        self.assertTrue(
+                            any(results),
+                            f"Neither {filter_name}=True nor {filter_name}=False matched anything in the test data",
+                        )
+                    continue
                 with self.subTest(f"{self.filterset.__name__} RelatedMembershipBooleanFilter {filter_name} (True)"):
                     filterset_result = self.filterset({filter_name: True}, self.queryset).qs  # pylint: disable=not-callable
                     qs_result = self.queryset.filter(**{f"{field_name}__isnull": filter_object.exclude}).distinct()

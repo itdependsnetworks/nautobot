@@ -1068,9 +1068,6 @@ class LocationTypeFilterSetTestCase(
         ("parent", "parent__id"),
         ("parent", "parent__name"),
     ]
-    untested_filters = [
-        "nestable",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1482,15 +1479,6 @@ class DeviceTypeTestCase(FilterTestCases.FilterTestCase, CustomFieldsFilters.Cus
         ("software_image_files", "software_image_files__image_file_name"),
         ("u_height",),
         ("subdevice_role",),
-    ]
-    untested_filters = [
-        "console_ports",
-        "console_server_ports",
-        "device_bays",
-        "interfaces",
-        "is_full_depth",
-        "power_outlets",
-        "power_ports",
     ]
 
     @classmethod
@@ -1909,8 +1897,6 @@ class DeviceTestCase(
     untested_filters = [
         "controller",
         "has_primary_ip",
-        "is_full_depth",
-        "local_config_context_data",
         "local_config_context_schema",
         "local_config_context_schema_id",
         "location",
@@ -4751,9 +4737,6 @@ class ModuleBayTestCase(FilterTestCases.FilterTestCase):
         ("position",),
         ("module_family",),
     ]
-    untested_filters = [
-        "requires_first_party_modules",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4866,10 +4849,6 @@ class InterfaceVDCAssignmentTestCase(FilterTestCases.FilterTestCase):
         ("device", "interface__device__id"),
         ("device", "interface__device__name"),
     ]
-    untested_filters = [
-        "created",
-        "last_updated",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -4962,10 +4941,6 @@ class DeviceClusterAssignmentTestCase(FilterTestCases.FilterTestCase):
         ("device", "device__name"),
         ("cluster", "cluster__id"),
         ("cluster", "cluster__name"),
-    ]
-    untested_filters = [
-        "created",
-        "last_updated",
     ]
 
     @classmethod

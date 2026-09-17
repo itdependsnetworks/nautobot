@@ -136,10 +136,6 @@ class VRFPrefixAssignmentTestCase(FilterTestCases.FilterTestCase):
         ("vrf", "vrf__id"),
         ("vrf", "vrf__name"),
     )
-    untested_filters = [
-        "created",
-        "last_updated",
-    ]
 
     def test_prefix_filter_by_string(self):
         """Test filtering by prefix strings as an alternative to pk."""
@@ -337,8 +333,6 @@ class PrefixLocationAssignmentTestCase(FilterTestCases.FilterTestCase):
     # NOTE: No generic logic in place yet to test TreeNodeMultipleChoiceFilter
     generic_filter_tests = []
     untested_filters = [
-        "created",
-        "last_updated",
         "location",
     ]
     # generic_filter_tests = (
@@ -1138,17 +1132,6 @@ class IPAddressToInterfaceTestCase(FilterTestCases.FilterTestCase):
         ["vm_interface", "vm_interface__id"],
         ["vm_interface", "vm_interface__name"],
     )
-    untested_filters = [
-        "created",
-        "is_default",
-        "is_destination",
-        "is_preferred",
-        "is_primary",
-        "is_secondary",
-        "is_source",
-        "is_standby",
-        "last_updated",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1520,10 +1503,6 @@ class VRFDeviceAssignmentTestCase(FilterTestCases.FilterTestCase):
         ["name"],
         ["rd"],
     )
-    untested_filters = [
-        "created",
-        "last_updated",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -1835,8 +1814,6 @@ class VLANLocationAssignmentTestCase(FilterTestCases.FilterTestCase):
         # ["location", "location__id"],
     )
     untested_filters = [
-        "created",
-        "last_updated",
         "location",
     ]
 

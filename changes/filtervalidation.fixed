@@ -1,0 +1,1 @@
+Fixed `NautobotFilterSet` subclasses for models without `created`/`last_updated` fields (such as `VRFPrefixAssignment` and `IPAddressToInterface`) advertising `created` and `last_updated` filters that raised a `FieldError` when used. Those filters are now omitted for such models.

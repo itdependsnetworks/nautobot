@@ -55,10 +55,6 @@ class RegularExpressionValidationRuleFilterTestCase(ValidationRuleFilterTestCase
         ("error_message",),
         ("field",),
     ]
-    untested_filters = [
-        "context_processing",
-        "enabled",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -109,7 +105,6 @@ class MinMaxValidationRuleFilterTestCase(ValidationRuleFilterTestCaseMixin, Filt
         ("field",),
     ]
     untested_filters = [
-        "enabled",
         "max",
         "min",
     ]
@@ -167,9 +162,6 @@ class RequiredValidationRuleFilterTestCase(ValidationRuleFilterTestCaseMixin, Fi
         ("error_message",),
         ("field",),
     ]
-    untested_filters = [
-        "enabled",
-    ]
 
     @classmethod
     def setUpTestData(cls):
@@ -216,9 +208,6 @@ class UniqueValidationRuleFilterTestCase(ValidationRuleFilterTestCaseMixin, Filt
         ("error_message",),
         ("field",),
         ("max_instances",),
-    ]
-    untested_filters = [
-        "enabled",
     ]
 
     @classmethod
