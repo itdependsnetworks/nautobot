@@ -610,10 +610,6 @@ class NoOpSaveCoalescingTestCase(TestCase):
     either way.
     """
 
-    # Dispatch is no longer asserted here. Since #9469 a change is only dispatched when something is
-    # listening, so a test with no webhook configured proves nothing either way; `test_change_consumers`
-    # covers the gate, and `ChangeLogUnchangedSaveTest` covers the record.
-
     def setUp(self):
         super().setUp()
         self.user = User.objects.create_user(username="coalescing-user")
@@ -713,8 +709,3 @@ class NoOpSaveCoalescingTestCase(TestCase):
         for index, manufacturer in enumerate(manufacturers):
             with self.subTest(manufacturer=manufacturer.name):
                 self.assertEqual(get_changes_for_model(manufacturer).count(), 1 if index % 2 else 0)
-
-    # Dispatch is deliberately not asserted here any more. Since #9469 a change is only dispatched
-    # when something is listening, so with no webhook configured both the no-op and the real change
-    # dispatch nothing and the pair proved nothing either way. `test_change_consumers` covers the
-    # gate; `ChangeLogUnchangedSaveTest` covers whether the record is written.
