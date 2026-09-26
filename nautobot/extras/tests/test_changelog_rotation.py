@@ -367,7 +367,7 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
         result = self.run_job()
 
         self.assertEqual(result, {"extras.ObjectChange": 1})
-        self.assertEqual(archived(ArchivedObjectChange).objects.filter(pk=change.pk).count(), 1)
+        self.assertEqual(archived(ArchivedObjectChange, "2020").objects.filter(pk=change.pk).count(), 1)
         self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2020")
         self.assertEqual(segment.row_count, 1)
@@ -394,13 +394,13 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
         # connection while this transaction is on `default`, so they are two transactions. That is why
         # rotation copies before deleting -- the record is in both places, not neither -- and why the run
         # above converges rather than losing it.
-        self.assertTrue(archived(ArchivedObjectChange).objects.filter(pk=change.pk).exists())
+        self.assertTrue(archived(ArchivedObjectChange, "2020").objects.filter(pk=change.pk).exists())
 
         # And the next run does converge.
         result = self.run_job()
         self.assertEqual(result, {"extras.ObjectChange": 1})
         self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
-        self.assertEqual(archived(ArchivedObjectChange).objects.filter(pk=change.pk).count(), 1)
+        self.assertEqual(archived(ArchivedObjectChange, "2020").objects.filter(pk=change.pk).count(), 1)
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2020")
         self.assertEqual(segment.row_count, 1)
 
@@ -411,7 +411,8 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
 
         self.run_job(batch_size=2)
 
-        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 5)
+        # These are dated 2020, so 2020 is the table they land in.
+        self.assertEqual(archived(ArchivedObjectChange, "2020").objects.count(), 5)
         self.assertEqual(ObjectChange.objects.count(), 0)
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2020")
         self.assertEqual(segment.row_count, 5)

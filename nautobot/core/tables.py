@@ -577,7 +577,14 @@ class BaseTable(django_tables2.Table):
             data = args[0]
         else:
             return args, kwargs
-        if not isinstance(data, QuerySet) or data.model not in registry["changelog_archive_models"].values():
+        from nautobot.extras.models.archive import archive_base_of
+
+        # Resolved through the base, because a read uses the concrete per-period class and those are
+        # generated rather than registered.
+        if (
+            not isinstance(data, QuerySet)
+            or archive_base_of(data.model) not in registry["changelog_archive_models"].values()
+        ):
             return args, kwargs
         wrapped = RetainedHistoryTableData(data)
         if "data" in kwargs:

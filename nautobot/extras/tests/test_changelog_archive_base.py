@@ -30,9 +30,30 @@ def archived(mirror, period_key=PERIOD):
     to say which period it means. `ensure_period_table` is what rotation calls, so a fixture built this
     way is built the same way real data is.
     """
-    from nautobot.extras.models.archive import ensure_period_table
+    from nautobot.extras.models import ArchiveSegment
+    from nautobot.extras.models.archive import ensure_period, period_bounds_for, period_label_for
 
-    return ensure_period_table(mirror, period_key)
+    # Opens the whole period, as rotation does, so a test reading a model that has no records in this
+    # period finds an empty table instead of a missing one.
+    models = ensure_period(period_key)
+
+    # Rotation never creates a period's table without registering the period, and the verification jobs
+    # read that registry to know which periods exist. A fixture that skipped it would leave records no
+    # sweep can find.
+    warm_label = mirror._meta.label_lower.replace("archived", "")
+    start, end = period_bounds_for(period_key)
+    ArchiveSegment.objects.get_or_create(
+        model_label=warm_label,
+        period_key=period_key,
+        defaults={
+            "label": period_label_for(period_key),
+            "time_start": start,
+            "time_end": end,
+            "row_count": 0,
+            "is_period_closed": True,
+        },
+    )
+    return models[warm_label]
 
 
 def clear_archive(*mirrors):

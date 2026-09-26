@@ -303,6 +303,23 @@ def ensure_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
     return model
 
 
+def ensure_period(period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Open a period by creating every covered model's table for it, and return them.
+
+    A period is one unit, so its tables come into existence together even where a model has nothing to
+    file there yet. Creating them lazily instead would mean a read of a period that happens to hold no
+    records of some type hits a table that does not exist: a retained job result with no console output
+    would raise rather than show an empty tab. Empty tables are cheap; a conditional on every read is not.
+    """
+    from nautobot.extras.registry import registry
+
+    return {
+        label: ensure_period_table(mirror, period_key, using=using)
+        for label, mirror in registry["changelog_archive_models"].items()
+    }
+
+
 def period_table_exists(mirror, period_key, using=CHANGELOG_ARCHIVE):
     """
     Whether this period's table has been created.

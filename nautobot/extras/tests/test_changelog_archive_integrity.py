@@ -26,7 +26,7 @@ from nautobot.extras.models import (
     JobResult,
     ObjectChange,
 )
-from nautobot.extras.tests.test_changelog_archive_base import archived
+from nautobot.extras.tests.test_changelog_archive_base import archived, clear_archive
 from nautobot.extras.tests.test_changelog_truncation import RecordingLogger, StubJobResult
 
 PERIOD = "2021"
@@ -41,14 +41,8 @@ class ArchiveIntegrityTestMixin:
     def setUp(self):
         super().setUp()
         self.content_type = ContentType.objects.get_for_model(ObjectChange)
-        for model in (
-            ArchivedObjectChange,
-            ArchivedJobResult,
-            ArchivedJobLogEntry,
-            ArchivedJobConsoleEntry,
-            ArchiveSegment,
-        ):
-            model.objects.all().delete()
+        clear_archive(ArchivedObjectChange, ArchivedJobResult, ArchivedJobLogEntry, ArchivedJobConsoleEntry)
+        ArchiveSegment.objects.all().delete()
         self.logger = RecordingLogger()
 
     def drive(self, job_class, **kwargs):

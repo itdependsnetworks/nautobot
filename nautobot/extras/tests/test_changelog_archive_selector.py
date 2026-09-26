@@ -25,6 +25,7 @@ from nautobot.extras.models import (
     ArchiveSegment,
     ObjectChange,
 )
+from nautobot.extras.models.archive import archive_base_of
 from nautobot.extras.tests.test_changelog_archive_base import archived, ArchiveReadFixtureMixin, clear_archive, PERIOD
 
 
@@ -243,7 +244,8 @@ class ArchiveObjectChangeLogTabTestCase(ArchiveReadFixtureMixin, TestCase):
         queryset, period_key = object_change_history(self.target, self.content_type, request)
 
         self.assertEqual(period_key, PERIOD)
-        self.assertEqual(queryset.model, ArchivedObjectChange)
+        # One table per period, so the queryset's model is that period's subclass of the mirror.
+        self.assertEqual(archive_base_of(queryset.model), ArchivedObjectChange)
         self.assertEqual([change.pk for change in queryset], [mine.pk])
 
     def test_period_counts_are_hidden_on_object_scoped_views(self):
@@ -504,8 +506,8 @@ class ArchivedRowsLinkNowhereWarmTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        for model in (ArchivedObjectChange, ArchivedJobResult, ArchiveSegment):
-            model.objects.all().delete()
+        clear_archive(ArchivedObjectChange, ArchivedJobResult)
+        ArchiveSegment.objects.all().delete()
         self.user.is_superuser = True
         self.user.save()
         self.client.force_login(self.user)

@@ -259,7 +259,9 @@ class ArchivedRecordDiffTestCase(ArchivedRelatedChangesTestCase):
         self.assertEqual(self.renamed.get_prev_change().pk, self.created.pk)
         self.assertEqual(self.renamed.get_next_change().pk, self.tagged.pk)
         # A record in an adjacent period is not a neighbour: one period per query.
-        other_period = archived(ArchivedObjectChange).objects.create(
+        # In the adjacent period's own table, because the table is the period now. Writing it into this
+        # period's table with a different `period_key` would no longer be a record in another period.
+        other_period = archived(ArchivedObjectChange, str(int(PERIOD) - 1)).objects.create(
             id=uuid.uuid4(),
             period_key=str(int(PERIOD) - 1),
             time=datetime(int(PERIOD) - 1, 12, 31, tzinfo=dt_timezone.utc),

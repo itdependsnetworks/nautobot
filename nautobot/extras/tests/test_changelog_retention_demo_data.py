@@ -131,7 +131,9 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.run_command("--no-rotate")
 
         self.assertEqual(self.demo_changes().count(), sum(CHANGES_PER_YEAR))
-        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 0)
+        # Deliberately not `archived()`, which opens a period and registers it the way rotation does.
+        # Nothing was rotated, so there is no period to look in and no period registered.
+        self.assertEqual(self.retained_demo_changes().count(), 0)
         self.assertEqual(ArchiveSegment.objects.count(), 0)
 
     def test_history_is_backdated_into_every_period(self):

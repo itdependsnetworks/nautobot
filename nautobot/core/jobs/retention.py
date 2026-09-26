@@ -38,7 +38,7 @@ from nautobot.extras.models import (
 from nautobot.extras.models.archive import (
     age_field_for,
     build_mirror_instance,
-    ensure_period_table,
+    ensure_period,
     period_bounds_for,
     period_key_for,
     period_label_for,
@@ -259,7 +259,7 @@ class ChangelogRotation(Job):
             segment = self._get_or_create_segment(model, period_key)
             # Creating the table is what opens a period. Idempotent, so this costs an existence check on
             # every batch after the first.
-            period_mirror = ensure_period_table(mirror, period_key)
+            period_mirror = ensure_period(period_key)[model._meta.label_lower]
             mirrors = [build_mirror_instance(warm_object, period_mirror, period_key) for warm_object in objects]
             pks = [warm_object.pk for warm_object in objects]
             latest = max(getattr(warm_object, age_field) for warm_object in objects)
