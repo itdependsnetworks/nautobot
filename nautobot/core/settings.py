@@ -586,6 +586,12 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
     DATABASES["default"].setdefault("TEST", {})["CHARSET"] = "utf8mb4"
     DATABASES["default"]["TEST"]["COLLATION"] = "utf8mb4_0900_ai_ci"
 
+# Whether changelog long-term retention is available at all. Deliberately not a Constance setting:
+# turning it on commits an installation to a second connection, a set of retention tables, and two
+# scheduled jobs, so it is an administrator's deployment decision made once, not something to be toggled
+# from the UI. Changing it requires a restart.
+CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))
+
 # Put each retained-history period in its own PostgreSQL schema, named `<prefix>_<period>`, instead of
 # separating periods by table name. Empty by default, which keeps every period table in the connection's
 # default schema. Setting it makes a period removable with one `DROP SCHEMA ... CASCADE`, grantable as a
@@ -928,12 +934,6 @@ CONSTANCE_CONFIG = {
         default="",
         help_text="Custom Markdown or limited HTML to display in a banner at the top of all pages.",
     ),
-    "CHANGELOG_ARCHIVE_ENABLED": ConstanceConfigItem(
-        default=False,
-        help_text="Enable long-term retention of change and job history.\n"
-        "While this is disabled, all reads and writes behave exactly as they do without the capability.",
-        field_type=bool,
-    ),
     "CHANGELOG_ARCHIVE_PERIOD": ConstanceConfigItem(
         default="year",
         help_text="Calendar period each retained record is filed under: 'year', 'quarter', or 'month'.\n"
@@ -1115,7 +1115,6 @@ CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
     "Change Logging": [
         "CHANGELOG_RETENTION",
-        "CHANGELOG_ARCHIVE_ENABLED",
         "CHANGELOG_WARM_WINDOW_DAYS",
         "CHANGELOG_ARCHIVE_PERIOD",
         "CHANGELOG_LEGACY_OBJECT_DATA",

@@ -42,10 +42,10 @@ from nautobot.extras.models import (
 from nautobot.extras.tests.test_changelog_archive_base import archived
 from nautobot.users.models import ObjectPermission, User
 
-# `override_config`, not just `override_settings`: the command turns retention on by writing Constance
-# config, which is cached in memory and so survives the per-test database rollback. Left to leak, it
-# switches retention on for every suite that runs afterwards -- which changes what truncation withholds,
-# and was quietly failing eleven of its tests.
+# `override_config` for the two runtime knobs the command still writes. Constance config is cached in
+# memory and survives the per-test database rollback, so left to leak it changes what a later suite sees.
+# The capability itself is `override_settings`, because it is a deployment setting now rather than
+# something the command can turn on.
 
 
 class _AcrossPeriods:
@@ -78,7 +78,7 @@ class _AcrossPeriods:
         return values
 
 
-@override_config(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90, CHANGELOG_ARCHIVE_PERIOD="year")
+@override_config(CHANGELOG_WARM_WINDOW_DAYS=90, CHANGELOG_ARCHIVE_PERIOD="year")
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class CreateChangelogRetentionDemoDataTestCase(TestCase):
     databases = ["default", CHANGELOG_ARCHIVE]
@@ -350,7 +350,7 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         return Location.objects.first().pk
 
 
-@override_config(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90, CHANGELOG_ARCHIVE_PERIOD="year")
+@override_config(CHANGELOG_WARM_WINDOW_DAYS=90, CHANGELOG_ARCHIVE_PERIOD="year")
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class DemoDataTruncationTestCase(CreateChangelogRetentionDemoDataTestCase):
     """

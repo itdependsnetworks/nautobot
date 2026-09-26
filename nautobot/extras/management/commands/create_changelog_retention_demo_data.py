@@ -195,13 +195,19 @@ class Command(BaseCommand):
     # Setup
 
     def _configure(self, period):
-        """Turn retention on, at the granularity the fabricated history is shaped for."""
+        """Set the runtime tuning this fabricated history is shaped for, and check the capability is on."""
         from constance import config
+        from django.conf import settings
 
-        config.CHANGELOG_ARCHIVE_ENABLED = True
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
+            raise CommandError(
+                "Changelog long-term retention is off. It is a deployment setting rather than a runtime "
+                "toggle, so this command cannot turn it on. Set CHANGELOG_ARCHIVE_ENABLED = True in "
+                "nautobot_config.py (or NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED=True), restart, and run again."
+            )
         config.CHANGELOG_ARCHIVE_PERIOD = period
         config.CHANGELOG_WARM_WINDOW_DAYS = 90
-        self.stdout.write(self.style.NOTICE(f"Retention enabled, period granularity {period}, warm window 90 days"))
+        self.stdout.write(self.style.NOTICE(f"Period granularity {period}, warm window 90 days"))
 
     def _targets(self, rng):
         """
@@ -669,7 +675,6 @@ class Command(BaseCommand):
         period is removed only once nothing is filed under it, since the period registry is otherwise the
         rotation job's to maintain.
         """
-        from constance import config
 
         from nautobot.extras.registry import registry
 
@@ -712,9 +717,9 @@ class Command(BaseCommand):
         if emptied:
             deleted["extras.ArchiveSegment (emptied)"] = emptied
 
-        config.CHANGELOG_ARCHIVE_ENABLED = False
         for label, count in sorted(deleted.items()):
             self.stdout.write(f"Removed {count:6} {label}")
         if not deleted:
             self.stdout.write("Nothing to remove")
-        self.stdout.write(self.style.NOTICE("Retention disabled"))
+        # The capability itself is a deployment setting, so this leaves it alone and says so.
+        self.stdout.write(self.style.NOTICE("Demo data removed. CHANGELOG_ARCHIVE_ENABLED is unchanged."))

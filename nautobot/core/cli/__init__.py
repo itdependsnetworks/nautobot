@@ -107,6 +107,8 @@ def _preprocess_settings(settings_module, config_path):
     # purely through the environment variables below.
     # An operator who writes this connection out in their own config file owns it, and nothing here
     # second-guesses them. The copy below is only the default for everyone who does not.
+    # KC Note: this should not effect anything and make tests easier, but
+    # perhaps only including when CHANGELOG_ARCHIVE_ENABLED is on is the proper way.
     if CHANGELOG_ARCHIVE not in settings_module.DATABASES:
         settings_module.DATABASES[CHANGELOG_ARCHIVE] = deepcopy(settings_module.DATABASES["default"])
         for _setting, _env_var in (

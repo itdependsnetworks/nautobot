@@ -181,6 +181,21 @@ The response schema is identical to a warm response. Valid period values are dis
 
 `JobConsoleEntry` has no REST endpoint, and gains none here. Retained console output is reached through the job result view's console export.
 
+### Turning retention on
+
+`CHANGELOG_ARCHIVE_ENABLED` is a deployment setting, not a runtime toggle. Set it in `nautobot_config.py` (or as `NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED`) and restart:
+
+```python
+# nautobot_config.py
+CHANGELOG_ARCHIVE_ENABLED = True
+```
+
+It is deliberately not configurable from Admin > Configuration. Turning it on commits the installation to a second database connection, a growing set of retention tables, and two scheduled jobs that move and delete history, so it is an administrator's decision made once with the rest of the deployment rather than something switched on from a web form.
+
+Set [`CHANGELOG_ARCHIVE_PERIOD`](../administration/configuration/settings.md) and, on PostgreSQL, `CHANGELOG_ARCHIVE_SCHEMA_PREFIX` before enabling it. Both decide how periods are laid out on disk, and changing either later does not move tables that already exist.
+
+The remaining settings are runtime tuning and can be changed from Admin > Configuration at any time: the warm window, and the two batch sizes.
+
 ### Maintaining retention
 
 Four system jobs, all disabled from running on a schedule until you schedule them:

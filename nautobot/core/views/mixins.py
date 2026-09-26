@@ -1,6 +1,7 @@
 import logging
 from typing import ClassVar, Optional, Type
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import AccessMixin
 from django.contrib.auth.models import AnonymousUser
@@ -896,7 +897,6 @@ class ArchiveAwareRetrieveMixin:
         Raises `PermissionDenied` where the record exists but the user may not read retained history, rather
         than returning None: a 404 there would say the record does not exist.
         """
-        from nautobot.core.utils.config import get_settings_or_config
         from nautobot.extras.archive_reads import user_can_read_archive
         from nautobot.extras.models.archive import archive_model_for
 
@@ -904,7 +904,7 @@ class ArchiveAwareRetrieveMixin:
             return None
         # Skipped entirely while retention is off, so a miss costs no extra query and behaves exactly as
         # it did before the capability existed.
-        if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
             return None
         warm_model = type(self).queryset.model
         if archive_model_for(warm_model) is None:

@@ -9,6 +9,7 @@ Kept apart from the models so the read path can be followed without reading six 
 and so a caller that only needs to resolve a period does not import the mirrors to get it.
 """
 
+from django.conf import settings
 from django.db import models
 
 from nautobot.core.constants import COLD_STORAGE_PERMISSION
@@ -52,9 +53,8 @@ def get_archive_periods(model, user):
     Empty when retention is off, the model has no mirror, or the user lacks the cold-storage permission --
     so a caller can render the selector from this alone without repeating the checks.
     """
-    from nautobot.core.utils.config import get_settings_or_config
 
-    if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
+    if not settings.CHANGELOG_ARCHIVE_ENABLED:
         return ArchiveSegment.objects.none()
     if archive_model_for(model) is None:
         return ArchiveSegment.objects.none()

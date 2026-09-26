@@ -530,14 +530,17 @@ properties:
     description: >-
       Whether long-term retention of change and job history is enabled. While disabled, all reads and
       writes behave exactly as they do without the capability.
-    is_constance_config: true
+    environment_variable: "NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED"
+    is_constance_config: false
     type: "boolean"
     version_added: "3.3.0"
   CHANGELOG_ARCHIVE_PERIOD:
     default: "year"
     description: >-
       The calendar period each retained record is filed under. Narrow this if periods grow unwieldy;
-      periods already created keep the granularity they were created with.
+      periods already created keep the granularity they were created with, so an installation that
+      changes it ends up with a mix. Settable either way: pin it in `nautobot_config.py` to fix it for
+      the deployment, or leave it to Admin > Configuration. A value in the configuration file wins.
     enum:
     - "year"
     - "quarter"

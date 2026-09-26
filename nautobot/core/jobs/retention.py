@@ -12,6 +12,7 @@ one, and the two share `CascadeDeleteMixin` rather than each carrying its own ca
 from datetime import timedelta
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -107,7 +108,7 @@ class ChangelogRotation(Job):
     def run(  # pylint: disable=arguments-differ
         self, *, record_types=None, warm_window_days=None, batch_size=None, include_job_files=False, dry_run=True
     ):
-        if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
             self.logger.warning("Changelog long-term retention is disabled (CHANGELOG_ARCHIVE_ENABLED); nothing to do.")
             return {}
 
@@ -769,7 +770,7 @@ class ChangelogTruncation(CascadeDeleteMixin, Job):
         its period is implied by its timestamp, and a closed period is exactly the half-open interval the
         segment records.
         """
-        if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
             return selected
 
         warm_window_days = get_settings_or_config("CHANGELOG_WARM_WINDOW_DAYS", fallback=90)
