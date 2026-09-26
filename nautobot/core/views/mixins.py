@@ -906,10 +906,10 @@ class ArchiveAwareRetrieveMixin:
         # it did before the capability existed.
         if not get_settings_or_config("CHANGELOG_ARCHIVE_ENABLED", fallback=False):
             return None
-        mirror = archive_model_for(type(self).queryset.model)
-        if mirror is None:
+        warm_model = type(self).queryset.model
+        if archive_model_for(warm_model) is None:
             return None
-        record = mirror.objects.filter(pk=pk).first()
+        record = self._find_across_periods(warm_model, pk)
         if record is None:
             return None
         # The warm view's own permission was already checked; reading retained history needs the
@@ -918,6 +918,33 @@ class ArchiveAwareRetrieveMixin:
             raise PermissionDenied("You do not have permission to read archived change history.")
         self.archived_instance = record
         return record
+
+    @staticmethod
+    def _find_across_periods(warm_model, pk):
+        """
+        The retained record with this primary key, wherever it was filed.
+
+        The one read that cannot name its period. Every other read arrives with one, but a detail page
+        reached from a link saved before rotation has only the key, and that link is supposed to keep
+        working. Retained history is one table per period, so this asks each in turn, newest first, on the
+        assumption that a link someone still holds is more likely to be recent.
+
+        Bounded by the number of periods and indexed within each, so it is a handful of primary key
+        lookups rather than a scan.
+        """
+        from nautobot.extras.models.archive import archive_model_for, ArchiveSegment
+
+        periods = (
+            ArchiveSegment.objects.filter(model_label=warm_model._meta.label_lower)
+            .order_by("-period_key")
+            .values_list("period_key", flat=True)
+        )
+        for period_key in periods:
+            mirror = archive_model_for(warm_model, period_key)
+            record = mirror.objects.filter(pk=pk).first()
+            if record is not None:
+                return record
+        return None
 
     def is_archived(self, instance):
         """Whether `instance` came from long-term retention rather than warm storage."""

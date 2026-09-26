@@ -21,6 +21,7 @@ from nautobot.extras.models import (
     JobResult,
     ObjectChange,
 )
+from nautobot.extras.tests.test_changelog_archive_base import archived, clear_archive
 from nautobot.extras.tests.test_changelog_truncation import RecordingLogger, StubJobResult
 
 
@@ -42,7 +43,7 @@ class ChangelogRotationTestCase(TestCase):
         # Rotation is unfiltered by design, so it would sweep up the test database's own change records
         # and make every count assertion meaningless. Start from an empty population.
         ObjectChange.objects.all().delete()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.job = ChangelogRotation()
         self.logger = RecordingLogger()
@@ -85,7 +86,7 @@ class ChangelogRotationTestCase(TestCase):
 
         self.assertEqual(result, {"extras.ObjectChange": 1})
         self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
-        mirror = ArchivedObjectChange.objects.get(pk=change.pk)
+        mirror = archived(ArchivedObjectChange).objects.get(pk=change.pk)
         self.assertEqual(mirror.period_key, "2021")
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2021")
         self.assertEqual(segment.label, "2021")
@@ -98,7 +99,7 @@ class ChangelogRotationTestCase(TestCase):
 
         self.run_job()
 
-        mirror = ArchivedObjectChange.objects.get(pk=change.pk)
+        mirror = archived(ArchivedObjectChange).objects.get(pk=change.pk)
         self.assertEqual(mirror.id, change.id)
         self.assertEqual(mirror.time, change.time)
         self.assertEqual(mirror.action, change.action)
@@ -120,7 +121,7 @@ class ChangelogRotationTestCase(TestCase):
         second = self.run_job()
 
         self.assertEqual(second, {"extras.ObjectChange": 0})
-        self.assertEqual(ArchivedObjectChange.objects.count(), 1)
+        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 1)
         segment.refresh_from_db()
         self.assertEqual(segment.row_count, first_count)
         self.assertEqual(segment.last_rotated_time, first_rotated)
@@ -132,7 +133,7 @@ class ChangelogRotationTestCase(TestCase):
 
         self.assertEqual(result, {"extras.ObjectChange": 0})
         self.assertTrue(ObjectChange.objects.filter(pk=recent.pk).exists())
-        self.assertFalse(ArchivedObjectChange.objects.filter(pk=recent.pk).exists())
+        self.assertFalse(archived(ArchivedObjectChange).objects.filter(pk=recent.pk).exists())
 
     def test_separate_periods_get_separate_segments(self):
         self.make_object_change(time=datetime(2020, 6, 1, tzinfo=dt_timezone.utc))
@@ -240,8 +241,8 @@ class ChangelogRotationJobResultTestCase(TestCase):
         super().setUp()
         JobLogEntry.objects.all().delete()
         JobResult.objects.all().delete()
-        ArchivedJobLogEntry.objects.all().delete()
-        ArchivedJobResult.objects.all().delete()
+        clear_archive(ArchivedJobLogEntry)
+        clear_archive(ArchivedJobResult)
         ArchiveSegment.objects.all().delete()
         self.job = ChangelogRotation()
         self.logger = RecordingLogger()
@@ -282,9 +283,9 @@ class ChangelogRotationJobResultTestCase(TestCase):
 
         self.job.run(record_types=None, dry_run=False)
 
-        self.assertTrue(ArchivedJobLogEntry.objects.filter(pk=entry.pk).exists())
-        self.assertEqual(ArchivedJobLogEntry.objects.get(pk=entry.pk).message, "hello")
-        self.assertTrue(ArchivedJobResult.objects.filter(pk=result.pk).exists())
+        self.assertTrue(archived(ArchivedJobLogEntry).objects.filter(pk=entry.pk).exists())
+        self.assertEqual(archived(ArchivedJobLogEntry).objects.get(pk=entry.pk).message, "hello")
+        self.assertTrue(archived(ArchivedJobResult).objects.filter(pk=result.pk).exists())
         self.assertFalse(JobLogEntry.objects.filter(pk=entry.pk).exists())
         self.assertFalse(JobResult.objects.filter(pk=result.pk).exists())
 
@@ -299,7 +300,7 @@ class ChangelogRotationJobResultTestCase(TestCase):
 
         self.assertTrue(JobResult.objects.filter(pk=result.pk).exists())
         self.assertTrue(JobLogEntry.objects.filter(pk=entry.pk).exists())
-        self.assertFalse(ArchivedJobResult.objects.filter(pk=result.pk).exists())
+        self.assertFalse(archived(ArchivedJobResult).objects.filter(pk=result.pk).exists())
         self.assertTrue(self.logger.said("still in warm storage"))
 
     def test_held_back_count_is_job_results_not_log_entries(self):
@@ -328,7 +329,7 @@ class ChangelogRotationJobResultTestCase(TestCase):
 
         self.job.run(record_types=["extras.jobresult"], dry_run=False)
 
-        self.assertEqual(ArchivedJobResult.objects.get(pk=result.pk).user_name, self.user.username)
+        self.assertEqual(archived(ArchivedJobResult).objects.get(pk=result.pk).user_name, self.user.username)
 
 
 class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
@@ -349,7 +350,7 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
         """
         change = self.make_object_change(time=datetime(2020, 5, 1, tzinfo=dt_timezone.utc))
         # Exactly what the interrupted run had done: mirror written, warm row still present, no count.
-        ArchivedObjectChange.objects.create(
+        archived(ArchivedObjectChange).objects.create(
             id=change.pk,
             period_key="2020",
             time=change.time,
@@ -366,11 +367,11 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
         result = self.run_job()
 
         self.assertEqual(result, {"extras.ObjectChange": 1})
-        self.assertEqual(ArchivedObjectChange.objects.filter(pk=change.pk).count(), 1)
+        self.assertEqual(archived(ArchivedObjectChange).objects.filter(pk=change.pk).count(), 1)
         self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2020")
         self.assertEqual(segment.row_count, 1)
-        self.assertEqual(segment.row_count, ArchivedObjectChange.objects.filter(period_key="2020").count())
+        self.assertEqual(segment.row_count, archived(ArchivedObjectChange).objects.filter(period_key="2020").count())
 
     def test_the_warm_delete_and_the_row_count_commit_together(self):
         """
@@ -393,13 +394,13 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
         # connection while this transaction is on `default`, so they are two transactions. That is why
         # rotation copies before deleting -- the record is in both places, not neither -- and why the run
         # above converges rather than losing it.
-        self.assertTrue(ArchivedObjectChange.objects.filter(pk=change.pk).exists())
+        self.assertTrue(archived(ArchivedObjectChange).objects.filter(pk=change.pk).exists())
 
         # And the next run does converge.
         result = self.run_job()
         self.assertEqual(result, {"extras.ObjectChange": 1})
         self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
-        self.assertEqual(ArchivedObjectChange.objects.filter(pk=change.pk).count(), 1)
+        self.assertEqual(archived(ArchivedObjectChange).objects.filter(pk=change.pk).count(), 1)
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2020")
         self.assertEqual(segment.row_count, 1)
 
@@ -410,7 +411,7 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
 
         self.run_job(batch_size=2)
 
-        self.assertEqual(ArchivedObjectChange.objects.count(), 5)
+        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 5)
         self.assertEqual(ObjectChange.objects.count(), 0)
         segment = ArchiveSegment.objects.get(model_label="extras.objectchange", period_key="2020")
         self.assertEqual(segment.row_count, 5)
@@ -448,7 +449,7 @@ class ChangelogRotationDryRunReportingTestCase(ChangelogRotationTestCase):
         result = self.run_job(dry_run=True)
 
         self.assertEqual(result, {"extras.ObjectChange": 4, "dry_run": True})
-        self.assertEqual(ArchivedObjectChange.objects.count(), 0)
+        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 0)
         self.assertEqual(ObjectChange.objects.count(), 4)
 
     def test_a_real_run_carries_no_dry_run_flag(self):

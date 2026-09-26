@@ -17,9 +17,34 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
+from nautobot.extras.models.archive import period_model_for
 
 ARCHIVE_MODELS = (ArchivedObjectChange, ArchivedJobResult, ArchivedJobLogEntry, ArchivedJobConsoleEntry)
+# Concrete per-period classes, which is what a read or a write actually touches.
+PERIOD_MODELS = tuple(period_model_for(mirror, "2024") for mirror in ARCHIVE_MODELS)
 WARM_MODELS = (ObjectChange, JobResult, JobLogEntry, JobConsoleEntry)
+
+
+# The router asks whether the two connections point at the same place, so these set up each case. A
+# fabricated `DATABASES` is the condition itself, where the old flag was a stand-in for it.
+SAME_DATABASE = {
+    "default": {"ENGINE": "django.db.backends.postgresql", "NAME": "nautobot", "HOST": "db", "PORT": "5432"},
+    CHANGELOG_ARCHIVE: {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "nautobot",
+        "HOST": "db",
+        "PORT": "5432",
+    },
+}
+SEPARATE_DATABASES = {
+    "default": {"ENGINE": "django.db.backends.postgresql", "NAME": "nautobot", "HOST": "db", "PORT": "5432"},
+    CHANGELOG_ARCHIVE: {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "nautobot_archive",
+        "HOST": "archive-db",
+        "PORT": "5432",
+    },
+}
 
 
 class ChangelogArchiveRouterTestCase(TestCase):
@@ -59,7 +84,7 @@ class ChangelogArchiveRouterTestCase(TestCase):
                 self.assertIsNone(self.router.db_for_read(model))
                 self.assertIsNone(self.router.db_for_write(model))
 
-    @override_settings(CHANGELOG_ARCHIVE_SEPARATE_DATABASE=False)
+    @override_settings(DATABASES=SAME_DATABASE)
     def test_allow_migrate_defers_entirely_when_one_database(self):
         """
         With both aliases on one database there is nothing to route, so the router abstains.
@@ -72,29 +97,26 @@ class ChangelogArchiveRouterTestCase(TestCase):
                 self.assertIsNone(self.router.allow_migrate("default", "extras", model._meta.model_name))
                 self.assertIsNone(self.router.allow_migrate(CHANGELOG_ARCHIVE, "extras", model._meta.model_name))
 
-    @override_settings(CHANGELOG_ARCHIVE_SEPARATE_DATABASE=True)
-    def test_allow_migrate_separate_database(self):
-        """A separate archive database has its own migration history and takes only the mirrors."""
-        for model in ARCHIVE_MODELS:
-            with self.subTest(model=model.__name__):
-                self.assertIs(self.router.allow_migrate("default", "extras", model._meta.model_name), False)
-                self.assertIs(self.router.allow_migrate(CHANGELOG_ARCHIVE, "extras", model._meta.model_name), True)
+    @override_settings(DATABASES=SEPARATE_DATABASES)
+    def test_a_separate_archive_database_takes_no_migrations(self):
+        """
+        Retained history is one table per period, created by rotation, so nothing migrates onto the alias.
 
-    @override_settings(CHANGELOG_ARCHIVE_SEPARATE_DATABASE=True)
-    def test_allow_migrate_excludes_everything_else_from_archive_alias(self):
-        """The archive database holds the retention tables and nothing else."""
+        A separate archive database therefore has no migrated tables and needs no migration history of its
+        own. `default` keeps building everything it already built.
+        """
         for model in (*WARM_MODELS, ArchiveSegment, RetentionRule):
             with self.subTest(model=model.__name__):
                 self.assertIs(self.router.allow_migrate(CHANGELOG_ARCHIVE, "extras", model._meta.model_name), False)
                 self.assertIsNone(self.router.allow_migrate("default", "extras", model._meta.model_name))
 
-    @override_settings(CHANGELOG_ARCHIVE_SEPARATE_DATABASE=True)
+    @override_settings(DATABASES=SEPARATE_DATABASES)
     def test_allow_migrate_ignores_unknown_models(self):
         """An app_label/model_name Django cannot resolve is not ours to route."""
         self.assertIsNone(self.router.allow_migrate("default", "extras", "nosuchmodel"))
         self.assertIsNone(self.router.allow_migrate("default", "extras", None))
 
-    @override_settings(CHANGELOG_ARCHIVE_SEPARATE_DATABASE=False)
+    @override_settings(DATABASES=SAME_DATABASE)
     def test_transaction_test_case_flush_set_is_not_narrowed(self):
         """
         The regression guard for the above: every installed model must stay flushable on `default`.
@@ -117,7 +139,7 @@ class ChangelogArchiveRouterTestCase(TestCase):
         otherwise be a false positive for any code comparing instances across them.
         """
         segment = ArchiveSegment(model_label="extras.objectchange", period_key="2024")
-        mirror = ArchivedObjectChange(period_key="2024")
+        mirror = period_model_for(ArchivedObjectChange, "2024")(period_key="2024")
         segment._state.db = "default"
         mirror._state.db = CHANGELOG_ARCHIVE
         self.assertIs(self.router.allow_relation(segment, mirror), True)
@@ -125,7 +147,7 @@ class ChangelogArchiveRouterTestCase(TestCase):
 
     def test_allow_relation_defers_for_unrelated_aliases(self):
         segment = ArchiveSegment(model_label="extras.objectchange", period_key="2024")
-        mirror = ArchivedObjectChange(period_key="2024")
+        mirror = period_model_for(ArchivedObjectChange, "2024")(period_key="2024")
         segment._state.db = "some_other_alias"
         mirror._state.db = CHANGELOG_ARCHIVE
         self.assertIsNone(self.router.allow_relation(segment, mirror))

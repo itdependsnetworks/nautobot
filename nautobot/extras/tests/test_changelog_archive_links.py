@@ -24,7 +24,7 @@ from nautobot.extras.models import (
     ObjectChange,
 )
 from nautobot.extras.tables import ObjectChangeTable
-from nautobot.extras.tests.test_changelog_archive_base import ArchiveReadFixtureMixin, PERIOD
+from nautobot.extras.tests.test_changelog_archive_base import archived, ArchiveReadFixtureMixin, clear_archive, PERIOD
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
@@ -39,7 +39,7 @@ class ArchiveChangedObjectLinkTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.segment = self.build_period(rows=0)
         self.location = Location.objects.first()
@@ -48,7 +48,7 @@ class ArchiveChangedObjectLinkTestCase(ArchiveReadFixtureMixin, TestCase):
         self.absent = self.make_record(self.location_ct.pk, uuid.uuid4(), "A location that is long gone")
 
     def make_record(self, content_type_id, object_id, object_repr):
-        return ArchivedObjectChange.objects.create(
+        return archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             time=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
@@ -64,7 +64,7 @@ class ArchiveChangedObjectLinkTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def render_cell(self, record):
         """Render just the Object column for one record, through the real table."""
-        table = ObjectChangeTable(ArchivedObjectChange.objects.filter(pk=record.pk))
+        table = ObjectChangeTable(archived(ArchivedObjectChange).objects.filter(pk=record.pk))
         return table.rows[0].get_cell("object_repr")
 
     def test_a_resolvable_object_is_linked(self):
@@ -90,7 +90,7 @@ class ArchiveChangedObjectLinkTestCase(ArchiveReadFixtureMixin, TestCase):
         for _ in range(5):
             self.make_record(self.location_ct.pk, Location.objects.last().pk, "Another location")
             self.make_record(location_type_ct.pk, location_type.pk, "A location type")
-        table = ObjectChangeTable(ArchivedObjectChange.objects.filter(period_key=PERIOD))
+        table = ObjectChangeTable(archived(ArchivedObjectChange).objects.filter(period_key=PERIOD))
         for content_type_id in (self.location_ct.pk, location_type_ct.pk):
             ContentType.objects.get_for_id(content_type_id)  # warm the content type cache
 
@@ -149,7 +149,7 @@ class MirrorTableWarningTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.build_period(rows=2)
 
@@ -160,7 +160,7 @@ class MirrorTableWarningTestCase(ArchiveReadFixtureMixin, TestCase):
         return [str(warning.message) for warning in caught]
 
     def test_a_mirror_does_not_warn(self):
-        caught = self.build_table(ArchivedObjectChange.objects.filter(period_key=PERIOD))
+        caught = self.build_table(archived(ArchivedObjectChange).objects.filter(period_key=PERIOD))
 
         self.assertEqual([message for message in caught if "Table data is of type" in message], [])
 

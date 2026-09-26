@@ -89,12 +89,14 @@ def get_archive_queryset(model, period_key, user):
     time-sortable primary key never becomes a problem.
     """
     segment = get_archive_segment(model, period_key, user)
-    mirror = archive_model_for(model)
+    mirror = archive_model_for(model, segment.period_key)
     if mirror is None:
         from django.core.exceptions import ValidationError
 
         raise ValidationError(f"{model._meta.verbose_name} does not support archived history.")
-    return mirror.objects.filter(period_key=segment.period_key)
+    # No period filter: the table is the period. `period_key` stays on the row so reconciliation can
+    # still catch a record filed in the wrong one.
+    return mirror.objects.all()
 
 
 # Query parameters that are not filters, and so are carried across a period switch untouched. Sorting and

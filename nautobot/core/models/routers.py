@@ -1,6 +1,7 @@
 """Database routers."""
 
 from nautobot.core.constants import CHANGELOG_ARCHIVE
+from nautobot.core.utils.config import changelog_archive_is_separate
 
 
 class ChangelogArchiveRouter:
@@ -26,9 +27,12 @@ class ChangelogArchiveRouter:
         """Whether `model` is one of the registered long-term retention mirrors."""
         # Imported lazily: the registry is populated during app loading, and this module is imported from
         # settings before that finishes.
+        # Resolved through the base: reads use the concrete per-period class, which is generated rather
+        # than registered, so asking about it by identity would send retained reads to `default`.
+        from nautobot.extras.models.archive import archive_base_of
         from nautobot.extras.registry import registry
 
-        return model in registry["changelog_archive_models"].values()
+        return archive_base_of(model) in registry["changelog_archive_models"].values()
 
     def db_for_read(self, model, **hints):
         return CHANGELOG_ARCHIVE if self._is_archive_model(model) else None
@@ -52,37 +56,19 @@ class ChangelogArchiveRouter:
 
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         """
-        Build each table exactly once, on the connection that owns it.
+        Nothing migrates onto the archive connection.
+
+        Retained history is one table per period, and rotation creates each of those when the period
+        opens. No migration builds them, so a separate archive database has no migrated tables at all and
+        needs none.
 
         When `changelog_archive` addresses the same physical database as `default` -- the default, and the
-        only arrangement that needs no provisioning -- there is nothing to route. Both aliases share one
-        set of tables and one `django_migrations`, so the `default` run builds everything and a run against
-        the archive alias finds every migration already recorded and does nothing. Returning `None` here
-        keeps this router out of a decision it has no business making, which matters: `allow_migrate` also
-        decides which tables `TransactionTestCase` flushes between tests, and narrowing that set breaks
-        unrelated fixtures.
-
-        When the alias is genuinely a separate database it has its own `django_migrations`, replays from
-        scratch, and takes only the retention tables -- and `default` must then skip them.
+        only arrangement that needs no provisioning -- this router abstains entirely. That matters beyond
+        tidiness: `allow_migrate` also decides which tables `TransactionTestCase` flushes between tests,
+        and narrowing that set breaks unrelated fixtures.
         """
-        from django.conf import settings
-
-        if not getattr(settings, "CHANGELOG_ARCHIVE_SEPARATE_DATABASE", False):
+        if not changelog_archive_is_separate():
             return None
-
-        if model_name is None:
-            return None
-
-        from django.apps import apps
-
-        try:
-            model = apps.get_model(app_label, model_name)
-        except LookupError:
-            return None
-
-        if self._is_archive_model(model):
-            return db == CHANGELOG_ARCHIVE
         if db == CHANGELOG_ARCHIVE:
-            # A separate archive database holds the retention tables and nothing else.
             return False
         return None

@@ -148,7 +148,9 @@ def build_mirror_instance(warm_object, mirror_model, period_key):
     sides needs no change here. A field present only on the mirror raises, rather than silently writing a
     default -- `MIRROR_DERIVED_FIELDS` is where a deliberate exception is declared.
     """
-    derived = MIRROR_DERIVED_FIELDS.get(mirror_model._meta.label_lower, {})
+    # Keyed on the abstract mirror: the exceptions are a property of the shape of retained history, and
+    # every period shares it.
+    derived = MIRROR_DERIVED_FIELDS.get(archive_base_of(mirror_model)._meta.label_lower, {})
     values = {"id": warm_object.pk, "period_key": period_key}
     for field in mirror_model._meta.fields:
         name = field.name
@@ -168,11 +170,114 @@ def build_mirror_instance(warm_object, mirror_model, period_key):
     return mirror_model(**values)
 
 
-def archive_model_for(model):
-    """The retention mirror holding `model`'s history, or None if it has none."""
+def archive_model_for(model, period_key=None):
+    """
+    The retention mirror holding `model`'s history, or None if it has none.
+
+    Without a period this is the abstract mirror, which is the right answer for anything asking about the
+    shape of retained history: its fields, its filterset, its serializer. It cannot be queried.
+
+    With a period it is the concrete class for that period's table, which is what a read wants. Retained
+    history is one table per period, so the period is not a column to filter on, it is which table to read.
+    """
     from nautobot.extras.registry import registry
 
-    return registry["changelog_archive_models"].get(model._meta.label_lower)
+    mirror = registry["changelog_archive_models"].get(model._meta.label_lower)
+    if mirror is None or period_key is None:
+        return mirror
+    return period_model_for(mirror, period_key)
+
+
+def archive_base_of(model):
+    """
+    The abstract mirror a model is, or was generated from.
+
+    Every registry keyed on the mirror -- the database router, the archive filtersets, the table's
+    read-only detection -- is asked about concrete per-period classes too, and each of them has to arrive
+    at the same answer for both.
+    """
+    return getattr(model, "archive_base", model)
+
+
+def period_table_name(mirror, period_key):
+    """The table holding one period of one mirror, for example `extras_archivedobjectchange_2024_q3`."""
+    return f"{mirror._meta.db_table}_{period_key.lower().replace('-', '_')}"
+
+
+def period_model_for(mirror, period_key):
+    """
+    The concrete model for one period's table, generated once and cached.
+
+    Generated rather than declared because the set of periods is data, not code: a period comes into
+    existence the first time rotation has a record to file in it. Subclassing the abstract mirror carries
+    its fields *and* its methods, which is what lets the detail page diff a retained record and walk its
+    neighbours without knowing which period it came from.
+
+    `managed = False` keeps these out of `makemigrations`. The tables are created by rotation when a period
+    opens and dropped whole when a period is purged, which is the point of the arrangement.
+    """
+    cached = _PERIOD_MODELS.get((mirror, period_key))
+    if cached is not None:
+        return cached
+
+    name = f"{mirror.__name__}{period_key.replace('-', '')}"
+    meta = type(
+        "Meta",
+        (mirror.Meta,),
+        {"abstract": False, "managed": False, "db_table": period_table_name(mirror, period_key)},
+    )
+    model = type(
+        name,
+        (mirror,),
+        {"__module__": mirror.__module__, "Meta": meta, "archive_base": mirror, "period_key_value": period_key},
+    )
+    _PERIOD_MODELS[(mirror, period_key)] = model
+    return model
+
+
+def ensure_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Create this period's table if it does not exist yet, and return its model.
+
+    Called by rotation when it first has a record to file in a period, beside the `ArchiveSegment` it
+    writes there. Creating the table is the act that opens a period; the segment row records that it is
+    open. Idempotent, so a re-run or a concurrent worker costs an existence check.
+    """
+    from django.db import connections
+
+    model = period_model_for(mirror, period_key)
+    connection = connections[using]
+    with connection.cursor() as cursor:
+        existing = connection.introspection.table_names(cursor)
+    if model._meta.db_table not in existing:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.create_model(model)
+    return model
+
+
+def drop_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Drop a whole period's table.
+
+    This is what the arrangement buys. Removing a period is a `DROP TABLE`, which returns the space
+    immediately and leaves no index entries behind, where deleting the same records row by row would
+    leave the table exactly as large as it was.
+    """
+    from django.db import connections
+
+    model = period_model_for(mirror, period_key)
+    connection = connections[using]
+    with connection.cursor() as cursor:
+        if model._meta.db_table not in connection.introspection.table_names(cursor):
+            return False
+    with connection.schema_editor() as schema_editor:
+        schema_editor.delete_model(model)
+    return True
+
+
+# Keyed by (abstract mirror, period key). Model classes are expensive to build and Django registers each
+# one in the app registry, so building the same period twice would be both wasteful and a name collision.
+_PERIOD_MODELS = {}
 
 
 class ArchiveSegment(BaseModel):
@@ -329,7 +434,9 @@ class ArchivedRecord(BaseModel):
         """
         from django.urls import NoReverseMatch, reverse
 
-        route = self.DETAIL_ROUTES.get(self._meta.label_lower)
+        # Keyed on the abstract mirror: the route belongs to the kind of record, not to the period it was
+        # filed in, and a retained record opens at the URL it had before rotation.
+        route = self.DETAIL_ROUTES.get(archive_base_of(type(self))._meta.label_lower)
         if route is None or api:
             return None
         try:
@@ -368,18 +475,18 @@ class ArchivedObjectChange(ObjectChangeSnapshotsMixin, ArchivedRecord):
     object_data_v2 = models.JSONField(encoder=NautobotKombuJSONEncoder, editable=False, null=True, blank=True)
 
     class Meta(ArchivedRecord.Meta):
-        abstract = False
+        abstract = True
         default_permissions = ()
         ordering = ["-time"]
         get_latest_by = "time"
         verbose_name = "archived object change"
         verbose_name_plural = "archived object changes"
         indexes = [
-            models.Index(name="extras_aoc_period_time_idx", fields=["period_key", "-time"]),
-            models.Index(name="extras_aoc_changed_obj_idx", fields=["changed_object_type_id", "changed_object_id"]),
-            models.Index(name="extras_aoc_related_obj_idx", fields=["related_object_type_id", "related_object_id"]),
-            models.Index(name="extras_aoc_request_idx", fields=["request_id"]),
-            models.Index(name="extras_aoc_user_name_idx", fields=["user_name"]),
+            models.Index(fields=["period_key", "-time"]),
+            models.Index(fields=["changed_object_type_id", "changed_object_id"]),
+            models.Index(fields=["related_object_type_id", "related_object_id"]),
+            models.Index(fields=["request_id"]),
+            models.Index(fields=["user_name"]),
         ]
 
     def get_related_changes(self, user=None, permission="view"):
@@ -398,11 +505,16 @@ class ArchivedObjectChange(ObjectChangeSnapshotsMixin, ArchivedRecord):
         `get_snapshots` already handles -- it is the same case as a warm record whose predecessor has been
         deleted, and it yields the change's own data with no diff rather than an error.
         """
-        return ArchivedObjectChange.objects.filter(
-            period_key=self.period_key,
-            changed_object_type_id=self.changed_object_type_id,
-            changed_object_id=self.changed_object_id,
-        ).exclude(pk=self.pk)
+        # `type(self)` is this period's own table, which is the scoping the docstring describes: one
+        # period or none, with no period filter needed because the table is the period.
+        return (
+            type(self)
+            .objects.filter(
+                changed_object_type_id=self.changed_object_type_id,
+                changed_object_id=self.changed_object_id,
+            )
+            .exclude(pk=self.pk)
+        )
 
     @property
     def changed_object_type(self):
@@ -545,16 +657,18 @@ class ArchivedJobResult(ArchivedRecord, CustomFieldModel):
         on the stored identifier gives the same answer for records that were rotated together, which is the
         normal case: rotation moves children before parents.
         """
-        from django.apps import apps
 
-        return apps.get_model("extras", "ArchivedJobLogEntry").objects.filter(job_result_id=self.pk)
+        # This result's own period: a run's log and console entries are filed under the same
+        # period the result is, because they share its timestamp.
+        return period_model_for(ArchivedJobLogEntry, self.period_key).objects.filter(job_result_id=self.pk)
 
     @property
     def job_console_entries(self):
         """This result's retained console output. See `job_log_entries`."""
-        from django.apps import apps
 
-        return apps.get_model("extras", "ArchivedJobConsoleEntry").objects.filter(job_result_id=self.pk)
+        # This result's own period: a run's log and console entries are filed under the same
+        # period the result is, because they share its timestamp.
+        return period_model_for(ArchivedJobConsoleEntry, self.period_key).objects.filter(job_result_id=self.pk)
 
     @property
     def queue(self):
@@ -583,16 +697,16 @@ class ArchivedJobResult(ArchivedRecord, CustomFieldModel):
         return False
 
     class Meta(ArchivedRecord.Meta):
-        abstract = False
+        abstract = True
         default_permissions = ()
         ordering = ["-date_created"]
         get_latest_by = "date_created"
         verbose_name = "archived job result"
         verbose_name_plural = "archived job results"
         indexes = [
-            models.Index(name="extras_ajr_period_created_idx", fields=["period_key", "-date_created"]),
-            models.Index(name="extras_ajr_status_idx", fields=["status", "-date_created"]),
-            models.Index(name="extras_ajr_name_idx", fields=["name"]),
+            models.Index(fields=["period_key", "-date_created"]),
+            models.Index(fields=["status", "-date_created"]),
+            models.Index(fields=["name"]),
         ]
 
     def __str__(self):
@@ -613,7 +727,7 @@ class ArchivedJobLogEntry(ArchivedRecord):
     absolute_url = models.CharField(max_length=JOB_LOG_MAX_ABSOLUTE_URL_LENGTH, blank=True, default="")
 
     class Meta(ArchivedRecord.Meta):
-        abstract = False
+        abstract = True
         default_permissions = ()
         ordering = ["created"]
         get_latest_by = "created"
@@ -621,8 +735,8 @@ class ArchivedJobLogEntry(ArchivedRecord):
         verbose_name_plural = "archived job log entries"
         indexes = [
             # Mirrors `extras_joblog_jr_created_idx`; this is the access path for a job result's log table.
-            models.Index(name="extras_ajle_jr_created_idx", fields=["job_result_id", "created"]),
-            models.Index(name="extras_ajle_period_created_idx", fields=["period_key", "created"]),
+            models.Index(fields=["job_result_id", "created"]),
+            models.Index(fields=["period_key", "created"]),
         ]
 
     def __str__(self):
@@ -643,15 +757,15 @@ class ArchivedJobConsoleEntry(ArchivedRecord):
     text = models.TextField(help_text="Actual line of output data")
 
     class Meta(ArchivedRecord.Meta):
-        abstract = False
+        abstract = True
         default_permissions = ()
         ordering = ["timestamp"]
         get_latest_by = "timestamp"
         verbose_name = "archived job console entry"
         verbose_name_plural = "archived job console entries"
         indexes = [
-            models.Index(name="extras_ajce_jr_ts_idx", fields=["job_result_id", "timestamp"]),
-            models.Index(name="extras_ajce_period_ts_idx", fields=["period_key", "timestamp"]),
+            models.Index(fields=["job_result_id", "timestamp"]),
+            models.Index(fields=["period_key", "timestamp"]),
         ]
 
     def __str__(self):

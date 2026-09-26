@@ -593,7 +593,9 @@ class BaseTable(django_tables2.Table):
         data = getattr(self.data, "data", None)
         if not isinstance(data, QuerySet):
             return False
-        return data.model in registry["changelog_archive_models"].values()
+        from nautobot.extras.models.archive import archive_base_of
+
+        return archive_base_of(data.model) in registry["changelog_archive_models"].values()
 
     @staticmethod
     def _can_prefetch(model, field_name):

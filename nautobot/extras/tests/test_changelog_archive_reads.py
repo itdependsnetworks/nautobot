@@ -33,7 +33,7 @@ from nautobot.extras.models import (
     ObjectChange,
 )
 from nautobot.extras.models.archive import archive_model_for
-from nautobot.extras.tests.test_changelog_archive_base import ArchiveReadFixtureMixin, PERIOD
+from nautobot.extras.tests.test_changelog_archive_base import archived, ArchiveReadFixtureMixin, clear_archive, PERIOD
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
@@ -42,7 +42,7 @@ class ArchiveReadHelperTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
 
     def test_registry_resolves_a_warm_model_to_its_mirror(self):
@@ -129,7 +129,7 @@ class ArchiveReadAPITestCase(ArchiveReadFixtureMixin, APITestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.url = reverse("extras-api:objectchange-list")
 
@@ -237,7 +237,7 @@ class ArchivedRecordsAreReadOnlyTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedJobResult.objects.all().delete()
+        clear_archive(ArchivedJobResult)
         ArchiveSegment.objects.all().delete()
         self.user.is_superuser = True
         self.user.save()
@@ -252,7 +252,7 @@ class ArchivedRecordsAreReadOnlyTestCase(ArchiveReadFixtureMixin, TestCase):
             row_count=1,
             is_period_closed=True,
         )
-        ArchivedJobResult.objects.create(
+        archived(ArchivedJobResult).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Archived Run",

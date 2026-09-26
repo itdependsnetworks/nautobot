@@ -545,17 +545,6 @@ properties:
     is_constance_config: true
     type: "string"
     version_added: "3.3.0"
-  CHANGELOG_ARCHIVE_SEPARATE_DATABASE:
-    default: false
-    description: >-
-      Whether the `changelog_archive` database connection addresses a different physical database than
-      `default`. Recomputed at startup from the `NAUTOBOT_CHANGELOG_ARCHIVE_DB_*` environment variables;
-      setting it directly has no effect.
-    details: |-
-      This governs migration routing. Two connections onto one database also share one migration history,
-      so when they are the same database the retention tables are built by the `default` migrate run.
-    type: "boolean"
-    version_added: "3.3.0"
   CHANGELOG_LEGACY_OBJECT_DATA:
     default: true
     description: >-
@@ -748,6 +737,10 @@ properties:
 
       Nautobot supports either MySQL or PostgreSQL as a database backend. You must make sure that the `ENGINE`
       setting matches your selected database backend or **you will be unable to connect to the database**.
+      A second connection named `changelog_archive` holds the long-term retention tables. Define it
+      yourself to control it outright. Left undefined, Nautobot copies the `default` connection and
+      applies `NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME`, `_USER`, `_PASSWORD`, `_HOST` and `_PORT` over the
+      copy where they are set, so retention needs no separate provisioning to turn on.
     details: |-
       !!! note
           Nautobot supports all database options supported by the underlying Django framework.

@@ -49,6 +49,7 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
+from nautobot.extras.models.archive import period_model_for
 from nautobot.users.models import ObjectPermission
 
 MARKER = "retention-demo"
@@ -540,16 +541,31 @@ class Command(BaseCommand):
 
     # Reporting and teardown
 
+    @staticmethod
+    def _retained_querysets(mirror, model_label, **filters):
+        """One queryset per period table, since retained history has no single table to query."""
+        from nautobot.extras.models import ArchiveSegment
+
+        for period_key in (
+            ArchiveSegment.objects.filter(model_label=model_label)
+            .order_by("-period_key")
+            .values_list("period_key", flat=True)
+        ):
+            yield period_model_for(mirror, period_key).objects.filter(**filters)
+
+    def _retained_count(self, mirror, model_label):
+        return sum(queryset.count() for queryset in self._retained_querysets(mirror, model_label))
+
     def _report(self):
         """What exists now, warm and retained, so a run can be checked without opening the UI."""
         rows = [
             ("Warm change records", ObjectChange.objects.count()),
             (f"  of which {MARKER}", ObjectChange.objects.filter(change_context_detail__startswith=MARKER).count()),
-            ("Retained change records", ArchivedObjectChange.objects.count()),
+            ("Retained change records", self._retained_count(ArchivedObjectChange, "extras.objectchange")),
             ("Warm job results", JobResult.objects.count()),
-            ("Retained job results", ArchivedJobResult.objects.count()),
-            ("Retained job log entries", ArchivedJobLogEntry.objects.count()),
-            ("Retained console entries", ArchivedJobConsoleEntry.objects.count()),
+            ("Retained job results", self._retained_count(ArchivedJobResult, "extras.jobresult")),
+            ("Retained job log entries", self._retained_count(ArchivedJobLogEntry, "extras.joblogentry")),
+            ("Retained console entries", self._retained_count(ArchivedJobConsoleEntry, "extras.jobconsoleentry")),
             ("Retention rules", RetentionRule.objects.count()),
             # Truncation deletes these, so they are used up by the first real run. Reported so a tester can
             # see when there is nothing left for the rules to act on and re-run with --flush.
@@ -592,11 +608,16 @@ class Command(BaseCommand):
         # deleting 17 job results reports 120 once their log and console entries are included, which reads
         # as this command having created records it did not.
         deleted = defaultdict(int)
+        retained = [
+            *self._retained_querysets(
+                ArchivedObjectChange, "extras.objectchange", change_context_detail__startswith=MARKER
+            ),
+            *self._retained_querysets(ArchivedJobLogEntry, "extras.joblogentry", message__startswith=MARKER),
+            *self._retained_querysets(ArchivedJobConsoleEntry, "extras.jobconsoleentry", text__startswith=MARKER),
+            *self._retained_querysets(ArchivedJobResult, "extras.jobresult", name__startswith=MARKER),
+        ]
         for queryset in (
-            ArchivedObjectChange.objects.filter(change_context_detail__startswith=MARKER),
-            ArchivedJobLogEntry.objects.filter(message__startswith=MARKER),
-            ArchivedJobConsoleEntry.objects.filter(text__startswith=MARKER),
-            ArchivedJobResult.objects.filter(name__startswith=MARKER),
+            *retained,
             ObjectChange.objects.filter(change_context_detail__startswith=MARKER),
             JobResult.objects.filter(name__startswith=MARKER),
             RetentionRule.objects.filter(name__startswith=MARKER),
@@ -613,7 +634,7 @@ class Command(BaseCommand):
         emptied = 0
         for segment in ArchiveSegment.objects.all():
             mirror = registry["changelog_archive_models"].get(segment.model_label)
-            if mirror and not mirror.objects.filter(period_key=segment.period_key).exists():
+            if mirror and not period_model_for(mirror, segment.period_key).objects.exists():
                 segment.delete()
                 emptied += 1
         if emptied:

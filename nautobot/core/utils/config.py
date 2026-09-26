@@ -81,3 +81,29 @@ def get_nautobot_edition():
         if app_edition in editions_by_weight and editions_by_weight[app_edition] > editions_by_weight[current_edition]:
             current_edition = app_edition
     return current_edition
+
+
+def changelog_archive_is_separate(databases=None):
+    """
+    Whether the changelog retention connection points at a different physical database than `default`.
+
+    Worked out from the two connections whenever it is asked, because that is all it ever was. It decides
+    how migrations are routed: two aliases onto one database share one `django_migrations` table, so the
+    retention tables have to be built by the `default` run, since the archive-alias run would find every
+    migration already recorded and skip it.
+
+    Args:
+        databases (dict, optional): The `DATABASES` mapping to read. Defaults to the active settings, and
+            is passed explicitly while settings are still being assembled.
+    """
+    from django.conf import settings
+
+    from nautobot.core.constants import CHANGELOG_ARCHIVE
+
+    if databases is None:
+        databases = settings.DATABASES
+    archive = databases.get(CHANGELOG_ARCHIVE)
+    if archive is None:
+        return False
+    default = databases.get("default", {})
+    return any(archive.get(key) != default.get(key) for key in ("NAME", "HOST", "PORT"))

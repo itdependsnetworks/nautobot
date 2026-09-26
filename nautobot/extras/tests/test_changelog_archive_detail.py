@@ -27,7 +27,7 @@ from nautobot.extras.models import (
     ArchiveSegment,
     ObjectChange,
 )
-from nautobot.extras.tests.test_changelog_archive_base import ArchiveReadFixtureMixin, PERIOD
+from nautobot.extras.tests.test_changelog_archive_base import archived, ArchiveReadFixtureMixin, clear_archive, PERIOD
 
 
 class ArchiveAwareRetrieveGuardsTestCase(ArchiveReadFixtureMixin, TestCase):
@@ -40,7 +40,7 @@ class ArchiveAwareRetrieveGuardsTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedJobResult.objects.all().delete()
+        clear_archive(ArchivedJobResult)
         ArchiveSegment.objects.all().delete()
         self.user.is_superuser = True
         self.user.save()
@@ -54,7 +54,7 @@ class ArchiveAwareRetrieveGuardsTestCase(ArchiveReadFixtureMixin, TestCase):
             row_count=1,
             is_period_closed=True,
         )
-        self.archived = ArchivedJobResult.objects.create(
+        self.archived = archived(ArchivedJobResult).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Archived Run",
@@ -105,7 +105,7 @@ class ArchivedRelatedChangesTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.user.is_superuser = True
         self.user.save()
@@ -127,7 +127,7 @@ class ArchivedRelatedChangesTestCase(ArchiveReadFixtureMixin, TestCase):
         self._change(uuid.uuid4(), uuid.uuid4(), 0)
 
     def _change(self, request_id, object_id, second, action=None, object_data=None):
-        return ArchivedObjectChange.objects.create(
+        return archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             time=datetime(int(PERIOD), 6, 1, 12, 0, second, tzinfo=dt_timezone.utc),
@@ -259,7 +259,7 @@ class ArchivedRecordDiffTestCase(ArchivedRelatedChangesTestCase):
         self.assertEqual(self.renamed.get_prev_change().pk, self.created.pk)
         self.assertEqual(self.renamed.get_next_change().pk, self.tagged.pk)
         # A record in an adjacent period is not a neighbour: one period per query.
-        other_period = ArchivedObjectChange.objects.create(
+        other_period = archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=str(int(PERIOD) - 1),
             time=datetime(int(PERIOD) - 1, 12, 31, tzinfo=dt_timezone.utc),
@@ -312,7 +312,7 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
     def setUp(self):
         super().setUp()
         self.log_entries = [
-            ArchivedJobLogEntry.objects.create(
+            archived(ArchivedJobLogEntry).objects.create(
                 id=uuid.uuid4(),
                 period_key=PERIOD,
                 job_result_id=self.archived.pk,
@@ -324,7 +324,7 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
             for index in range(3)
         ]
         self.console_entries = [
-            ArchivedJobConsoleEntry.objects.create(
+            archived(ArchivedJobConsoleEntry).objects.create(
                 id=uuid.uuid4(),
                 period_key=PERIOD,
                 job_result_id=self.archived.pk,
@@ -335,14 +335,14 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
             for index in range(2)
         ]
         # A second retained result, so a panel cannot pass by showing everything in the period.
-        self.other = ArchivedJobResult.objects.create(
+        self.other = archived(ArchivedJobResult).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Other Archived Run",
             date_created=datetime(int(PERIOD), 6, 2, tzinfo=dt_timezone.utc),
             status=JobResultStatusChoices.STATUS_SUCCESS,
         )
-        ArchivedJobLogEntry.objects.create(
+        archived(ArchivedJobLogEntry).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             job_result_id=self.other.pk,

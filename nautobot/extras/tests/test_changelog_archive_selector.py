@@ -25,7 +25,7 @@ from nautobot.extras.models import (
     ArchiveSegment,
     ObjectChange,
 )
-from nautobot.extras.tests.test_changelog_archive_base import ArchiveReadFixtureMixin, PERIOD
+from nautobot.extras.tests.test_changelog_archive_base import archived, ArchiveReadFixtureMixin, clear_archive, PERIOD
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
@@ -39,7 +39,7 @@ class ArchivePeriodSelectorTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.url = reverse("extras:objectchange_list")
 
@@ -160,7 +160,7 @@ class ArchiveObjectChangeLogTabTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.content_type = ContentType.objects.get_for_model(ObjectChange)
         # Any object with a change log tab will do; ObjectChange itself has one.
@@ -188,7 +188,7 @@ class ArchiveObjectChangeLogTabTestCase(ArchiveReadFixtureMixin, TestCase):
                 "is_period_closed": True,
             },
         )
-        return ArchivedObjectChange.objects.create(
+        return archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=period_key,
             time=datetime(int(period_key), 6, 1, tzinfo=dt_timezone.utc),
@@ -273,7 +273,7 @@ class ArchivePeriodSurvivesNavigationTestCase(ArchiveReadFixtureMixin, TestCase)
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.url = reverse("extras:objectchange_list")
         self.add_permissions("extras.view_objectchange")
@@ -333,7 +333,7 @@ class ArchivePeriodSwitchPreservesViewTestCase(ArchiveReadFixtureMixin, TestCase
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.build_period(period_key="2023")
         self.build_period(period_key="2024")
@@ -430,12 +430,12 @@ class ArchivedRelationRenderingTestCase(ArchiveReadFixtureMixin, TestCase):
 
     def test_unknown_relation_resolves_to_none_rather_than_raising(self):
         """Serializers, tables, and templates all reach for `job_result` by name."""
-        entry = ArchivedJobLogEntry(period_key=PERIOD, job_result_id=uuid.uuid4())
+        entry = archived(ArchivedJobLogEntry)(period_key=PERIOD, job_result_id=uuid.uuid4())
         self.assertIsNone(entry.job_result)
 
     def test_a_genuine_typo_still_raises(self):
         """The fallback is narrow on purpose: only names backed by a real `<name>_id` field resolve."""
-        entry = ArchivedJobLogEntry(period_key=PERIOD, job_result_id=uuid.uuid4())
+        entry = archived(ArchivedJobLogEntry)(period_key=PERIOD, job_result_id=uuid.uuid4())
         with self.assertRaises(AttributeError):
             entry.job_reslut  # deliberate typo
 
@@ -449,7 +449,7 @@ class ArchivedRelationRenderingTestCase(ArchiveReadFixtureMixin, TestCase):
         from nautobot.extras.api.serializers import JobLogEntrySerializer
 
         job_result_id = uuid.uuid4()
-        entry = ArchivedJobLogEntry(
+        entry = archived(ArchivedJobLogEntry)(
             id=uuid.uuid4(),
             period_key=PERIOD,
             job_result_id=job_result_id,
@@ -531,7 +531,7 @@ class ArchivedRowsLinkNowhereWarmTestCase(ArchiveReadFixtureMixin, TestCase):
         self.archived_pks[model_label] = str(factory().pk)
 
     def _archived_object_change(self):
-        return ArchivedObjectChange.objects.create(
+        return archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             time=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
@@ -546,7 +546,7 @@ class ArchivedRowsLinkNowhereWarmTestCase(ArchiveReadFixtureMixin, TestCase):
         )
 
     def _archived_job_result(self):
-        return ArchivedJobResult.objects.create(
+        return archived(ArchivedJobResult).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Archived Run",

@@ -26,6 +26,7 @@ from nautobot.extras.models import (
     JobResult,
     ObjectChange,
 )
+from nautobot.extras.tests.test_changelog_archive_base import archived
 from nautobot.extras.tests.test_changelog_truncation import RecordingLogger, StubJobResult
 
 PERIOD = "2021"
@@ -67,7 +68,7 @@ class ArchiveIntegrityTestMixin:
         )
 
     def make_archived_change(self, *, time=IN_PERIOD, content_type_id=None, pk=None):
-        return ArchivedObjectChange.objects.create(
+        return archived(ArchivedObjectChange).objects.create(
             id=pk or uuid.uuid4(),
             period_key=PERIOD,
             time=time,
@@ -82,7 +83,7 @@ class ArchiveIntegrityTestMixin:
         )
 
     def make_archived_job_result(self, *, pk=None):
-        return ArchivedJobResult.objects.create(
+        return archived(ArchivedJobResult).objects.create(
             id=pk or uuid.uuid4(),
             period_key=PERIOD,
             name="Test Job",
@@ -91,7 +92,7 @@ class ArchiveIntegrityTestMixin:
         )
 
     def make_archived_log_entry(self, *, job_result_id):
-        return ArchivedJobLogEntry.objects.create(
+        return archived(ArchivedJobLogEntry).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             job_result_id=job_result_id,
@@ -137,7 +138,7 @@ class ChangelogArchiveIntegrityCheckTestCase(ArchiveIntegrityTestMixin, TestCase
         result = self.drive(ChangelogArchiveIntegrityCheck)
 
         self.assertEqual(result["orphaned_log_entries"], 1)
-        self.assertTrue(ArchivedJobLogEntry.objects.filter(pk=entry.pk).exists())
+        self.assertTrue(archived(ArchivedJobLogEntry).objects.filter(pk=entry.pk).exists())
         self.assertTrue(self.logger.said("Re-run with `repair`"))
 
     def test_orphaned_log_entry_is_deleted_when_repairing(self):
@@ -146,10 +147,10 @@ class ChangelogArchiveIntegrityCheckTestCase(ArchiveIntegrityTestMixin, TestCase
         result = self.drive(ChangelogArchiveIntegrityCheck, repair=True)
 
         self.assertEqual(result["orphaned_log_entries"], 1)
-        self.assertFalse(ArchivedJobLogEntry.objects.filter(pk=entry.pk).exists())
+        self.assertFalse(archived(ArchivedJobLogEntry).objects.filter(pk=entry.pk).exists())
 
     def test_orphaned_console_entry_is_reported(self):
-        ArchivedJobConsoleEntry.objects.create(
+        archived(ArchivedJobConsoleEntry).objects.create(
             id=uuid.uuid4(), period_key=PERIOD, job_result_id=uuid.uuid4(), timestamp=IN_PERIOD, text="line"
         )
 
@@ -168,7 +169,7 @@ class ChangelogArchiveIntegrityCheckTestCase(ArchiveIntegrityTestMixin, TestCase
     def test_null_content_type_is_not_stale(self):
         """`changed_object_type` is nullable on the warm model too; absent is not dangling."""
         self.make_archived_change(content_type_id=None)
-        ArchivedObjectChange.objects.update(changed_object_type_id=None)
+        archived(ArchivedObjectChange).objects.update(changed_object_type_id=None)
 
         result = self.drive(ChangelogArchiveIntegrityCheck)
 

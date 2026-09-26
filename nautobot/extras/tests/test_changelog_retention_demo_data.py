@@ -39,6 +39,7 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
+from nautobot.extras.tests.test_changelog_archive_base import archived
 from nautobot.users.models import ObjectPermission, User
 
 
@@ -84,16 +85,16 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         It moves every record past the warm window, including the test database's own change history, so an
         unscoped count here measures the fixture rather than the command.
         """
-        return ArchivedObjectChange.objects.filter(change_context_detail=MARKER)
+        return archived(ArchivedObjectChange).objects.filter(change_context_detail=MARKER)
 
     def retained_demo_results(self):
-        return ArchivedJobResult.objects.filter(name__startswith=MARKER)
+        return archived(ArchivedJobResult).objects.filter(name__startswith=MARKER)
 
     def test_generates_warm_history_without_rotating_it(self):
         self.run_command("--no-rotate")
 
         self.assertEqual(self.demo_changes().count(), sum(CHANGES_PER_YEAR))
-        self.assertEqual(ArchivedObjectChange.objects.count(), 0)
+        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 0)
         self.assertEqual(ArchiveSegment.objects.count(), 0)
 
     def test_history_is_backdated_into_every_period(self):
@@ -127,7 +128,7 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.assertEqual(periods, {str(year) for year in YEARS})
         for segment in ArchiveSegment.objects.filter(model_label="extras.objectchange"):
             with self.subTest(period=segment.period_key):
-                actual = ArchivedObjectChange.objects.filter(period_key=segment.period_key).count()
+                actual = archived(ArchivedObjectChange).objects.filter(period_key=segment.period_key).count()
                 self.assertEqual(segment.row_count, actual)
 
     def test_history_is_coherent_per_object(self):
@@ -179,9 +180,11 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.run_command()
 
         self.assertGreater(self.retained_demo_results().count(), 0)
-        self.assertGreater(ArchivedJobLogEntry.objects.filter(message__startswith=MARKER).count(), 0)
+        self.assertGreater(archived(ArchivedJobLogEntry).objects.filter(message__startswith=MARKER).count(), 0)
         with_console = set(
-            ArchivedJobConsoleEntry.objects.filter(text__startswith=MARKER).values_list("job_result_id", flat=True)
+            archived(ArchivedJobConsoleEntry)
+            .objects.filter(text__startswith=MARKER)
+            .values_list("job_result_id", flat=True)
         )
         all_results = set(self.retained_demo_results().values_list("pk", flat=True))
         self.assertTrue(with_console)

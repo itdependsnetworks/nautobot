@@ -6,6 +6,7 @@ from nautobot.core import settings as core_settings
 from nautobot.core.cli import _preprocess_settings, migrate_deprecated_templates
 from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
+from nautobot.core.utils.config import changelog_archive_is_separate
 
 
 class TestMigrateTemplates(TestCase):
@@ -103,7 +104,7 @@ class TestPreprocessSettings(TestCase):
                 continue
             self.assertEqual(value, settings_module.DATABASES[CHANGELOG_ARCHIVE][key])
         # Same physical database, so the retention tables are built by the "default" migrate run
-        self.assertFalse(settings_module.CHANGELOG_ARCHIVE_SEPARATE_DATABASE)
+        self.assertFalse(changelog_archive_is_separate(settings_module.DATABASES))
 
         # STORAGES should remain as default
         self.assertEqual(

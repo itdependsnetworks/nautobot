@@ -1922,5 +1922,12 @@ ARCHIVE_FILTERSETS = {
 
 
 def archive_filterset_for(mirror_model):
-    """The filterset to apply within a retained period, or None if the mirror has none."""
-    return ARCHIVE_FILTERSETS.get(mirror_model._meta.label_lower)
+    """
+    The filterset to apply within a retained period, or None if the mirror has none.
+
+    Keyed on the abstract mirror, because the filterset describes the shape of retained history and every
+    period shares that shape. A read passes the concrete per-period class, which resolves to the same key.
+    """
+    from nautobot.extras.models.archive import archive_base_of
+
+    return ARCHIVE_FILTERSETS.get(archive_base_of(mirror_model)._meta.label_lower)

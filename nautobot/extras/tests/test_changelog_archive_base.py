@@ -22,6 +22,34 @@ from nautobot.extras.models import (
 PERIOD = "2021"
 
 
+def archived(mirror, period_key=PERIOD):
+    """
+    The concrete model for one period of `mirror`, with its table created.
+
+    Retained history is one table per period, so a test that wants to read or write retained records has
+    to say which period it means. `ensure_period_table` is what rotation calls, so a fixture built this
+    way is built the same way real data is.
+    """
+    from nautobot.extras.models.archive import ensure_period_table
+
+    return ensure_period_table(mirror, period_key)
+
+
+def clear_archive(*mirrors):
+    """
+    Drop every period table these mirrors have, so a test starts from nothing.
+
+    Dropping the tables rather than deleting rows, because that is what purging a period does and it
+    leaves no partially-populated period behind for the next test to trip over.
+    """
+    from nautobot.extras.models import ArchiveSegment
+    from nautobot.extras.models.archive import drop_period_table
+
+    for mirror in mirrors:
+        for period_key in set(ArchiveSegment.objects.values_list("period_key", flat=True)) | {PERIOD}:
+            drop_period_table(mirror, period_key)
+
+
 class ArchiveReadFixtureMixin:
     databases = ["default", CHANGELOG_ARCHIVE]
 
@@ -37,8 +65,9 @@ class ArchiveReadFixtureMixin:
             last_rotated_time=datetime(year, 6, 1, tzinfo=dt_timezone.utc),
             is_period_closed=closed,
         )
+        archived(ArchivedObjectChange, period_key)  # the table is what opens the period
         for _ in range(rows):
-            ArchivedObjectChange.objects.create(
+            archived(ArchivedObjectChange, period_key).objects.create(
                 id=uuid.uuid4(),
                 period_key=period_key,
                 time=datetime(year, 6, 1, tzinfo=dt_timezone.utc),

@@ -37,9 +37,11 @@ from nautobot.extras.models import (
 from nautobot.extras.models.archive import (
     age_field_for,
     build_mirror_instance,
+    ensure_period_table,
     period_bounds_for,
     period_key_for,
     period_label_for,
+    period_model_for,
 )
 from nautobot.extras.registry import registry
 
@@ -254,12 +256,15 @@ class ChangelogRotation(Job):
         moved = 0
         for period_key, objects in by_period.items():
             segment = self._get_or_create_segment(model, period_key)
-            mirrors = [build_mirror_instance(warm_object, mirror, period_key) for warm_object in objects]
+            # Creating the table is what opens a period. Idempotent, so this costs an existence check on
+            # every batch after the first.
+            period_mirror = ensure_period_table(mirror, period_key)
+            mirrors = [build_mirror_instance(warm_object, period_mirror, period_key) for warm_object in objects]
             pks = [warm_object.pk for warm_object in objects]
             latest = max(getattr(warm_object, age_field) for warm_object in objects)
             with transaction.atomic():
-                mirror.objects.bulk_create(mirrors, ignore_conflicts=True)
-                archived = set(mirror.objects.filter(pk__in=pks).values_list("pk", flat=True))
+                period_mirror.objects.bulk_create(mirrors, ignore_conflicts=True)
+                archived = set(period_mirror.objects.filter(pk__in=pks).values_list("pk", flat=True))
                 if len(archived) != len(pks):
                     missing = len(pks) - len(archived)
                     self.logger.error(
@@ -321,6 +326,21 @@ class ChangelogRotation(Job):
                     self.logger.info("Closed retention period %s for %s", segment.label, model._meta.label)
 
 
+def period_models_for(mirror, model_label):
+    """
+    Every period table that exists for one mirror, newest first.
+
+    Retained history is one table per period, so anything that used to sweep a mirror now sweeps its
+    periods. `ArchiveSegment` is the catalogue of which ones exist.
+    """
+    period_keys = (
+        ArchiveSegment.objects.filter(model_label=model_label)
+        .order_by("-period_key")
+        .values_list("period_key", flat=True)
+    )
+    return [period_model_for(mirror, period_key) for period_key in period_keys]
+
+
 class ChangelogArchiveIntegrityCheck(Job):
     """
     Stand in for what CASCADE used to do for retained history.
@@ -347,14 +367,15 @@ class ChangelogArchiveIntegrityCheck(Job):
             ("orphaned_console_entries", self._find_orphaned_console_entries),
             ("stale_content_types", self._find_stale_content_types),
         ):
-            queryset = finder()
-            count = queryset.count()
+            # One queryset per period table, since retained history has no single table to sweep.
+            querysets = list(finder())
+            count = sum(queryset.count() for queryset in querysets)
             result[name] = count
             if not count:
                 self.logger.info("%s: none found", name)
                 continue
             if repair:
-                deleted = queryset.delete()[0]
+                deleted = sum(queryset.delete()[0] for queryset in querysets)
                 self.logger.warning("%s: deleted %d records", name, deleted)
                 result[name] = deleted
             else:
@@ -362,13 +383,23 @@ class ChangelogArchiveIntegrityCheck(Job):
         return result
 
     def _find_orphaned_log_entries(self):
-        """Retained log entries whose job result is in neither warm storage nor retention."""
-        missing = self._missing_referents(ArchivedJobLogEntry, "job_result_id", (JobResult, ArchivedJobResult))
-        return ArchivedJobLogEntry.objects.filter(job_result_id__in=missing)
+        """Retained log entries whose job result is in neither warm storage nor retention, per period."""
+        return self._orphans_by_period(ArchivedJobLogEntry, "extras.joblogentry")
 
     def _find_orphaned_console_entries(self):
-        missing = self._missing_referents(ArchivedJobConsoleEntry, "job_result_id", (JobResult, ArchivedJobResult))
-        return ArchivedJobConsoleEntry.objects.filter(job_result_id__in=missing)
+        return self._orphans_by_period(ArchivedJobConsoleEntry, "extras.jobconsoleentry")
+
+    def _orphans_by_period(self, mirror, model_label):
+        """
+        A job result referent is looked for across every period, not just the entry's own.
+
+        An entry and the result it belongs to can be filed in different periods when a run straddles a
+        period boundary, so a result that exists one period over is not an orphan.
+        """
+        result_mirrors = period_models_for(ArchivedJobResult, "extras.jobresult")
+        for period_mirror in period_models_for(mirror, model_label):
+            missing = self._missing_referents(period_mirror, "job_result_id", (JobResult, *result_mirrors))
+            yield period_mirror.objects.filter(job_result_id__in=missing)
 
     def _find_stale_content_types(self):
         """
@@ -378,12 +409,13 @@ class ChangelogArchiveIntegrityCheck(Job):
         for the same cross-connection reason as `_missing_referents`.
         """
         known = list(ContentType.objects.values_list("pk", flat=True))
-        return ArchivedObjectChange.objects.filter(changed_object_type_id__isnull=False).exclude(
-            changed_object_type_id__in=known
-        )
+        for period_mirror in period_models_for(ArchivedObjectChange, "extras.objectchange"):
+            yield period_mirror.objects.filter(changed_object_type_id__isnull=False).exclude(
+                changed_object_type_id__in=known
+            )
 
     @staticmethod
-    def _missing_referents(mirror, field_name, referent_models, chunk_size=10000):
+    def _missing_referents(period_mirror, field_name, referent_models, chunk_size=10000):
         """
         Which values of `mirror.field_name` name nothing that still exists.
 
@@ -394,7 +426,9 @@ class ChangelogArchiveIntegrityCheck(Job):
         """
         missing = []
         distinct_ids = (
-            mirror.objects.exclude(**{f"{field_name}__isnull": True}).values_list(field_name, flat=True).distinct()
+            period_mirror.objects.exclude(**{f"{field_name}__isnull": True})
+            .values_list(field_name, flat=True)
+            .distinct()
         )
         offset = 0
         while True:
@@ -447,7 +481,7 @@ class ChangelogArchiveReconciliation(Job):
                     segment.model_label,
                 )
                 continue
-            actual = mirror.objects.filter(period_key=segment.period_key).count()
+            actual = period_model_for(mirror, segment.period_key).objects.count()
             if actual == segment.row_count:
                 continue
             drift += 1
@@ -474,7 +508,7 @@ class ChangelogArchiveReconciliation(Job):
             if mirror is None:
                 continue
             age_field = age_field_for(apps.get_model(segment.model_label))
-            stray = mirror.objects.filter(period_key=segment.period_key).exclude(
+            stray = period_model_for(mirror, segment.period_key).objects.exclude(
                 **{f"{age_field}__gte": segment.time_start, f"{age_field}__lt": segment.time_end}
             )
             count = stray.count()
@@ -505,14 +539,15 @@ class ChangelogArchiveReconciliation(Job):
             # Chunked in Python for the same reason as `_missing_referents`: the two live on different
             # connections, so a subquery across them cannot be relied on.
             count = 0
-            offset = 0
-            mirror_pks = mirror.objects.values_list("pk", flat=True)
-            while True:
-                chunk = list(mirror_pks[offset : offset + 10000])
-                if not chunk:
-                    break
-                count += warm.objects.filter(pk__in=chunk).count()
-                offset += 10000
+            for period_mirror in period_models_for(mirror, label):
+                offset = 0
+                mirror_pks = period_mirror.objects.values_list("pk", flat=True)
+                while True:
+                    chunk = list(mirror_pks[offset : offset + 10000])
+                    if not chunk:
+                        break
+                    count += warm.objects.filter(pk__in=chunk).count()
+                    offset += 10000
             if count:
                 total += count
                 self.logger.warning(

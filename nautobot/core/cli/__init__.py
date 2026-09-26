@@ -17,6 +17,7 @@ from jinja2 import BaseLoader, Environment
 from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.events import load_event_brokers
 from nautobot.core.settings_funcs import is_truthy
+from nautobot.core.utils.config import changelog_archive_is_separate
 from nautobot.extras.plugins.utils import load_plugins
 
 CONFIG_TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates/nautobot_config.py.j2")
@@ -104,21 +105,22 @@ def _preprocess_settings(settings_module, config_path):
     # provisioning to turn on. Nothing in the read path spans retention periods, so no query ever needs
     # warm and retained rows in one statement -- which is what leaves this repointable at its own host
     # purely through the environment variables below.
-    settings_module.DATABASES[CHANGELOG_ARCHIVE] = deepcopy(settings_module.DATABASES["default"])
-    for _setting, _env_var in (
-        ("NAME", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME"),
-        ("USER", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_USER"),
-        ("PASSWORD", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_PASSWORD"),
-        ("HOST", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST"),
-        ("PORT", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_PORT"),
+    # An operator who writes this connection out in their own config file owns it, and nothing here
+    # second-guesses them. The copy below is only the default for everyone who does not.
+    if CHANGELOG_ARCHIVE not in settings_module.DATABASES:
+        settings_module.DATABASES[CHANGELOG_ARCHIVE] = deepcopy(settings_module.DATABASES["default"])
+        for _setting, _env_var in (
+            ("NAME", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME"),
+            ("USER", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_USER"),
+            ("PASSWORD", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_PASSWORD"),
+            ("HOST", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST"),
+            ("PORT", "NAUTOBOT_CHANGELOG_ARCHIVE_DB_PORT"),
+        ):
+            if os.environ.get(_env_var):
+                settings_module.DATABASES[CHANGELOG_ARCHIVE][_setting] = os.environ[_env_var]
+    if "TEST" not in settings_module.DATABASES[CHANGELOG_ARCHIVE] and not changelog_archive_is_separate(
+        settings_module.DATABASES
     ):
-        if os.environ.get(_env_var):
-            settings_module.DATABASES[CHANGELOG_ARCHIVE][_setting] = os.environ[_env_var]
-    settings_module.CHANGELOG_ARCHIVE_SEPARATE_DATABASE = any(
-        settings_module.DATABASES[CHANGELOG_ARCHIVE].get(_key) != settings_module.DATABASES["default"].get(_key)
-        for _key in ("NAME", "HOST", "PORT")
-    )
-    if not settings_module.CHANGELOG_ARCHIVE_SEPARATE_DATABASE:
         # Same physical database, so under test it is the same test database, not one of its own.
         settings_module.DATABASES[CHANGELOG_ARCHIVE]["TEST"] = {"MIRROR": "default"}
 

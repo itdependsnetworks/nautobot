@@ -590,12 +590,6 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
 # alongside `job_logs`.
 DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]
 
-# Whether `changelog_archive` points at a different physical database than `default`. Recomputed in
-# `nautobot.core.cli._preprocess_settings` from the NAUTOBOT_CHANGELOG_ARCHIVE_DB_* environment
-# variables. This governs migration routing, because two aliases onto one database also share one
-# `django_migrations` table: when they are the same database the retention tables have to be built by
-# the `default` run, since the archive-alias run would see every migration already recorded and skip it.
-CHANGELOG_ARCHIVE_SEPARATE_DATABASE = False
 
 # The secret key is used to encrypt session keys and salt passwords.
 SECRET_KEY = os.getenv("NAUTOBOT_SECRET_KEY", "")

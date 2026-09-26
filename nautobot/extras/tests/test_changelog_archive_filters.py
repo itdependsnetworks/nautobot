@@ -22,7 +22,7 @@ from nautobot.extras.models import (
     ArchiveSegment,
     ObjectChange,
 )
-from nautobot.extras.tests.test_changelog_archive_base import ArchiveReadFixtureMixin, PERIOD
+from nautobot.extras.tests.test_changelog_archive_base import archived, ArchiveReadFixtureMixin, clear_archive, PERIOD
 
 
 class ArchiveFilterSetTestCase(TestCase):
@@ -58,12 +58,14 @@ class ArchiveFilterSetTestCase(TestCase):
 
     def test_every_kept_filter_actually_executes(self):
         """A filter that resolves at class-definition time but raises on use would be worse than a dropped one."""
-        from django.apps import apps
-
         from nautobot.extras.filters import ARCHIVE_FILTERSETS
+        from nautobot.extras.registry import registry
 
+        # The filtersets are keyed on the abstract mirrors, which are not in the app registry. A filter
+        # has to execute against a period's table, so each is exercised against one.
+        mirrors = {m._meta.label_lower: m for m in registry["changelog_archive_models"].values()}
         for label, filterset_class in ARCHIVE_FILTERSETS.items():
-            model = apps.get_model(label)
+            model = archived(mirrors[label])
             for name in filterset_class.base_filters:
                 with self.subTest(model=label, filter=name):
                     # Values are deliberately junk; the point is that the lookup resolves against the mirror.
@@ -83,14 +85,14 @@ class ArchiveFilteredReadAPITestCase(ArchiveReadFixtureMixin, APITestCase):
 
     def setUp(self):
         super().setUp()
-        ArchivedObjectChange.objects.all().delete()
+        clear_archive(ArchivedObjectChange)
         ArchiveSegment.objects.all().delete()
         self.url = reverse("extras-api:objectchange-list")
         self.add_permissions("extras.view_objectchange")
         self.grant_cold_storage()
         self.build_period(rows=2)
         # A third record, distinguishable by user_name and action.
-        ArchivedObjectChange.objects.create(
+        archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
             time=datetime(2021, 7, 1, tzinfo=dt_timezone.utc),
