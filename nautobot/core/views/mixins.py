@@ -16,8 +16,7 @@ from django.core.exceptions import (
 from django.db import transaction
 from django.db.models import CharField, ManyToManyField, Model, ProtectedError, Q, QuerySet
 from django.forms import Form, ModelMultipleChoiceField, MultipleHiddenInput
-from django.http import HttpResponse, HttpResponseBadRequest
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import select_template, TemplateDoesNotExist
 from django.urls import resolve, reverse
@@ -972,18 +971,9 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
     filterset_class: Optional[type[FilterSet]] = None
     filterset_form_class: Optional[type[Form]] = None
     hide_hierarchy_ui = False
-    non_filter_params = NON_FILTER_PARAMS
-    non_filter_params = (
-        "export",  # trigger for CSV/export-template/YAML export # 3.0 TODO: remove, irrelevant after #4746
-        "page",  # used by django-tables2.RequestConfig
-        "per_page",  # used by get_paginate_count
-        "sort",  # table sorting
-        "saved_view",  # saved_view indicator pk or composite keys
-        "table_changes_pending",  # indicator for if there is any table changes not applied to the saved view
-        "all_filters_removed",  # indicator for if all filters have been removed from the saved view
-        "clear_view",  # indicator for if the clear view button is clicked or not
-        "archive_period",  # selects one retained-history period; see nautobot.extras.models.archive
-    )
+    # Extends the shared set with the parameter that selects one retained-history period; see
+    # nautobot.extras.models.archive.
+    non_filter_params = (*NON_FILTER_PARAMS, "archive_period")
 
     def filter_queryset(self, queryset):
         """

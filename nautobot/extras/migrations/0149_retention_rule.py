@@ -13,7 +13,7 @@ import nautobot.extras.models.mixins
 class Migration(migrations.Migration):
     dependencies = [
         ("contenttypes", "0002_remove_content_type_name"),
-        ("extras", "0147_changelog_archive_storage"),
+        ("extras", "0148_changelog_archive_storage"),
     ]
 
     operations = [

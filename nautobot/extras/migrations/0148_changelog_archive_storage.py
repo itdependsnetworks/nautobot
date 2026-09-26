@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [
         ("contenttypes", "0002_remove_content_type_name"),
-        ("extras", "0146_changelog_optional_legacy_snapshot"),
+        ("extras", "0147_changelog_optional_legacy_snapshot"),
     ]
 
     operations = [

@@ -610,6 +610,10 @@ class NoOpSaveCoalescingTestCase(TestCase):
     either way.
     """
 
+    # Dispatch is no longer asserted here. Since #9469 a change is only dispatched when something is
+    # listening, so a test with no webhook configured proves nothing either way; `test_change_consumers`
+    # covers the gate, and `ChangeLogUnchangedSaveTest` covers the record.
+
     def setUp(self):
         super().setUp()
         self.user = User.objects.create_user(username="coalescing-user")
@@ -710,23 +714,7 @@ class NoOpSaveCoalescingTestCase(TestCase):
             with self.subTest(manufacturer=manufacturer.name):
                 self.assertEqual(get_changes_for_model(manufacturer).count(), 1 if index % 2 else 0)
 
-    @mock.patch("nautobot.extras.context_managers.enqueue_webhooks")
-    @mock.patch("nautobot.extras.context_managers.publish_event")
-    def test_a_no_op_dispatches_nothing(self, mock_publish_event, mock_enqueue_webhooks):
-        """No record means no webhook and no event -- the consequence that needs documenting."""
-        with web_request_context(self.user, context_detail="silent"):
-            self.manufacturer.save()
-
-        mock_enqueue_webhooks.assert_not_called()
-        mock_publish_event.assert_not_called()
-
-    @mock.patch("nautobot.extras.context_managers.enqueue_webhooks")
-    @mock.patch("nautobot.extras.context_managers.publish_event")
-    def test_a_real_change_still_dispatches(self, mock_publish_event, mock_enqueue_webhooks):
-        """The comparison that makes the previous test mean something."""
-        with web_request_context(self.user, context_detail="dispatched"):
-            self.manufacturer.description = "changed"
-            self.manufacturer.save()
-
-        mock_enqueue_webhooks.assert_called_once()
-        mock_publish_event.assert_called_once()
+    # Dispatch is deliberately not asserted here any more. Since #9469 a change is only dispatched
+    # when something is listening, so with no webhook configured both the no-op and the real change
+    # dispatch nothing and the pair proved nothing either way. `test_change_consumers` covers the
+    # gate; `ChangeLogUnchangedSaveTest` covers whether the record is written.
