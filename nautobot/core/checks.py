@@ -304,3 +304,25 @@ def check_changelog_archive_schema(app_configs, **kwargs):
             )
         )
     return warnings
+
+
+@register(Tags.compatibility)
+def check_changelog_archive_schema_prefix(app_configs, **kwargs):
+    """`CHANGELOG_ARCHIVE_SCHEMA_PREFIX` asks for something only PostgreSQL can give."""
+    from nautobot.core.constants import CHANGELOG_ARCHIVE
+
+    prefix = getattr(settings, "CHANGELOG_ARCHIVE_SCHEMA_PREFIX", "") or ""
+    if not prefix:
+        return []
+    engine = settings.DATABASES.get(CHANGELOG_ARCHIVE, {}).get("ENGINE", "")
+    if "postgres" in engine:
+        return []
+    return [
+        Warning(
+            "CHANGELOG_ARCHIVE_SCHEMA_PREFIX is set, but the changelog_archive connection is not "
+            f"PostgreSQL (ENGINE is {engine!r}).",
+            hint="MySQL has no schemas within a database. Clear the setting to separate retained-history "
+            "periods by table name instead, which works on either backend.",
+            id="nautobot.core.W012",
+        )
+    ]

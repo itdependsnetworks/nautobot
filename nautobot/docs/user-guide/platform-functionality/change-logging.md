@@ -6,7 +6,7 @@ Nautobot utilizes two fundamental types of change categories to log change event
 
 Administrative changes are those made under the "Admin" section of the user interface. This is the primary view for Users, Groups, Object Permissions, and other objects core to the administration of Nautobot. Any changes made to objects using this interface will be displayed as "Log entries" under the "Administration" section of the Admin list view. This is a read-only view that disallows manual creation, updating, or deletion of these objects.
 
-These records are commonly referred to as "admin logs" for short and are provided by default by the Django web framework.  
+These records are commonly referred to as "admin logs" for short and are provided by default by the Django web framework.
 
 You may access these records if logged in either as a superuser, or a staff user with `view_logentry` permission, by navigating to `/admin/` or by clicking your username in the navigation bar, then "Admin".
 
@@ -45,7 +45,7 @@ Change records are exposed in the API via the read-only endpoint `/api/extras/ob
 Change records can also be accessed via the read-only GraphQL endpoint `/api/graphql/`. An example query to fetch change logs by action:
 
 ```graphql
-{ 
+{
   query: object_changes(action: "created") {
     action
     user_name
@@ -247,7 +247,135 @@ It is for development and demonstration instances: the two users it creates shar
 
 Retained history lives in the same database as everything else, reached through a separate connection named `changelog_archive`. Nothing needs provisioning to enable retention.
 
-To put retained history on its own database server, point that connection elsewhere with `NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST` and the other `NAUTOBOT_CHANGELOG_ARCHIVE_DB_*` variables, then run `nautobot-server migrate --database changelog_archive`.
+Each period gets its own table, named after the period it holds: `extras_archivedobjectchange_2024`, `extras_archivedobjectchange_2025`, and so on. That is what makes a period removable, because dropping a table returns its space immediately where deleting its rows does not. See [Reclaiming disk space](#reclaiming-disk-space).
+
+To put retained history on its own database server, point that connection elsewhere with `NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST` and the other `NAUTOBOT_CHANGELOG_ARCHIVE_DB_*` variables. You can also define `DATABASES["changelog_archive"]` yourself in `nautobot_config.py`, in which case Nautobot leaves it exactly as you wrote it.
+
+On PostgreSQL you can put each period in its own schema instead of separating periods by table name. Set `CHANGELOG_ARCHIVE_SCHEMA_PREFIX` to a name such as `changelog_archive`, and a period's tables become `"changelog_archive_2024"."extras_archivedobjectchange"` and its siblings. A whole period is then removable with one `DROP SCHEMA changelog_archive_2024 CASCADE`, can be granted or revoked as a unit, and can be excluded from a backup by name. Set it before enabling retention: changing it later does not move tables that already exist. MySQL has no schemas within a database, so the setting is ignored there and Nautobot reports it at startup as check `nautobot.core.W012`.
+
+### Example configurations
+
+Four arrangements, three of which are supported. In every case `DATABASE_ROUTERS` already includes `ChangelogArchiveRouter` by default; you only need to name it yourself if you set `DATABASE_ROUTERS` to add routers of your own, and it must stay in the list.
+
+#### 1. One database, one table per period
+
+The default. No configuration at all.
+
+```python
+# nautobot_config.py -- nothing to add
+DATABASES = {
+    "default": {
+        "NAME": "nautobot",
+        "USER": os.getenv("NAUTOBOT_DB_USER", ""),
+        "PASSWORD": os.getenv("NAUTOBOT_DB_PASSWORD", ""),
+        "HOST": os.getenv("NAUTOBOT_DB_HOST", "localhost"),
+        "PORT": os.getenv("NAUTOBOT_DB_PORT", ""),
+        "ENGINE": "django.db.backends.postgresql",
+    },
+}
+```
+
+Nautobot copies `default` into a second connection named `changelog_archive`, and rotation creates one table per period in it:
+
+```no-highlight
+extras_archivedobjectchange_2024
+extras_archivedobjectchange_2025
+extras_archivedjobresult_2024
+...
+```
+
+#### 2. A separate archive database
+
+Point the archive connection at another server. Either set the environment variables:
+
+```no-highlight
+NAUTOBOT_CHANGELOG_ARCHIVE_DB_HOST=archive.example.com
+NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME=nautobot_archive
+NAUTOBOT_CHANGELOG_ARCHIVE_DB_USER=nautobot
+NAUTOBOT_CHANGELOG_ARCHIVE_DB_PASSWORD=...
+```
+
+or write the connection out yourself, in which case Nautobot leaves it exactly as you wrote it:
+
+```python
+# nautobot_config.py
+DATABASES = {
+    "default": {...},
+    "changelog_archive": {
+        "NAME": "nautobot_archive",
+        "USER": "nautobot",
+        "PASSWORD": os.getenv("NAUTOBOT_ARCHIVE_DB_PASSWORD", ""),
+        "HOST": "archive.example.com",
+        "PORT": "5432",
+        "ENGINE": "django.db.backends.postgresql",
+        "CONN_MAX_AGE": 300,
+    },
+}
+```
+
+There is nothing to migrate onto this database. The retention tables are created by rotation when each period opens, so the archive database holds only those tables and needs no migration history of its own. `ArchiveSegment`, the registry of which periods exist, stays on `default`.
+
+#### 3. One PostgreSQL schema per period
+
+Combine with either arrangement above.
+
+```python
+# nautobot_config.py
+CHANGELOG_ARCHIVE_SCHEMA_PREFIX = "changelog_archive"
+```
+
+Rotation then creates a schema per period, with the tables keeping their plain names:
+
+```no-highlight
+changelog_archive_2024.extras_archivedobjectchange
+changelog_archive_2024.extras_archivedjobresult
+changelog_archive_2025.extras_archivedobjectchange
+```
+
+The connection's role must be able to create schemas:
+
+```no-highlight
+GRANT CREATE ON DATABASE nautobot_archive TO nautobot;
+```
+
+Removing a period is then one statement for every record type at once:
+
+```no-highlight
+DROP SCHEMA changelog_archive_2024 CASCADE;
+```
+
+Set this before enabling retention. Changing it later does not move tables that already exist, so you would end up with some periods in schemas and some not.
+
+### Reclaiming disk space
+
+Deleting rows does not give disk space back, on either PostgreSQL or MySQL. This surprises people, and it decides how you should operate this feature.
+
+When PostgreSQL deletes a row it marks the row dead and leaves it in place. `VACUUM`, which autovacuum runs for you, then marks that space reusable **by the same table**. The file on disk does not shrink. Delete 100 GB of old change records and you have given that table 100 GB to grow back into, and given the operating system nothing.
+
+To actually shrink a table you need `VACUUM FULL`, which rewrites it. That takes an exclusive lock, so nothing can read or write the table while it runs, and it needs enough free disk to hold a second copy. On a table large enough to be worth shrinking, that is exactly when you can least afford either. MySQL behaves the same way: `DELETE` leaves the space inside the InnoDB file and `OPTIMIZE TABLE` is the equivalent rebuild.
+
+What this means in practice:
+
+- **Rotation plus dropping a period is how you reclaim disk.** A period is a table of its own, so removing it is a `DROP TABLE` (or `DROP SCHEMA ... CASCADE`). Space comes back at once, nothing else is locked, and the indexes go with it.
+- **Truncation bounds row count, not disk.** The truncation job deletes rows from the warm tables. Those tables stop growing and stay at whatever size they reached. That is usually what you want, because the space is reused by new records instead of being returned and re-allocated.
+- **Run truncation on a schedule from the start.** A warm table that is kept at a steady size never needs shrinking. A table allowed to grow for two years and then truncated will hold mostly empty space until someone rebuilds it.
+- **If you do need the space back from a warm table**, schedule it during a maintenance window and expect the table to be unavailable:
+
+```no-highlight
+VACUUM FULL extras_objectchange;
+```
+
+- **`pg_repack` is the online alternative.** It rebuilds a table without holding an exclusive lock for the duration, at the cost of an extension and roughly double the disk while it runs. Worth having if you cannot take the outage.
+- **Check what you would actually recover** before planning any of this. `pg_stat_user_tables.n_dead_tup` shows how many dead rows a table is carrying:
+
+```no-highlight
+SELECT relname, n_live_tup, n_dead_tup, last_autovacuum
+  FROM pg_stat_user_tables
+ WHERE relname LIKE 'extras_objectchange%'
+    OR relname LIKE 'extras_job%';
+```
+
+If `n_dead_tup` is small, there is nothing to reclaim and a rebuild would only cost you an outage.
 
 ### Operational notes
 

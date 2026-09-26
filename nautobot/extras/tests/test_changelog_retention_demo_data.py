@@ -42,11 +42,42 @@ from nautobot.extras.models import (
 from nautobot.extras.tests.test_changelog_archive_base import archived
 from nautobot.users.models import ObjectPermission, User
 
-
 # `override_config`, not just `override_settings`: the command turns retention on by writing Constance
 # config, which is cached in memory and so survives the per-test database rollback. Left to leak, it
 # switches retention on for every suite that runs afterwards -- which changes what truncation withholds,
 # and was quietly failing eleven of its tests.
+
+
+class _AcrossPeriods:
+    """
+    The demo command's retained records, wherever they were filed.
+
+    Retained history is one table per period, so a count or a value list has to visit each of them. This
+    offers only the two operations these tests need, rather than pretending to be a queryset.
+    """
+
+    def __init__(self, mirror, **filters):
+        from nautobot.extras.models.archive import period_model_for
+
+        period_keys = ArchiveSegment.objects.filter(
+            model_label=mirror._meta.label_lower.replace("archived", "")
+        ).values_list("period_key", flat=True)
+        if not period_keys:
+            period_keys = set(ArchiveSegment.objects.values_list("period_key", flat=True))
+        self._querysets = [
+            period_model_for(mirror, period_key).objects.filter(**filters) for period_key in set(period_keys)
+        ]
+
+    def count(self):
+        return sum(queryset.count() for queryset in self._querysets)
+
+    def values_list(self, *fields, flat=False):
+        values = []
+        for queryset in self._querysets:
+            values.extend(queryset.values_list(*fields, flat=flat))
+        return values
+
+
 @override_config(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90, CHANGELOG_ARCHIVE_PERIOD="year")
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class CreateChangelogRetentionDemoDataTestCase(TestCase):
@@ -66,8 +97,14 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
 
     @staticmethod
     def _clear_retained_history():
+        # Dropping the period tables, not deleting rows: a period is a table now, and an empty one left
+        # behind still answers reads, so a later suite would see a period that should not exist.
+        from nautobot.extras.models.archive import drop_period_table
+
+        period_keys = set(ArchiveSegment.objects.values_list("period_key", flat=True))
         for model in (ArchivedObjectChange, ArchivedJobLogEntry, ArchivedJobConsoleEntry, ArchivedJobResult):
-            model.objects.all().delete()
+            for period_key in period_keys:
+                drop_period_table(model, period_key)
         ArchiveSegment.objects.all().delete()
 
     def run_command(self, *args):
@@ -85,10 +122,10 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         It moves every record past the warm window, including the test database's own change history, so an
         unscoped count here measures the fixture rather than the command.
         """
-        return archived(ArchivedObjectChange).objects.filter(change_context_detail=MARKER)
+        return _AcrossPeriods(ArchivedObjectChange, change_context_detail=MARKER)
 
     def retained_demo_results(self):
-        return archived(ArchivedJobResult).objects.filter(name__startswith=MARKER)
+        return _AcrossPeriods(ArchivedJobResult, name__startswith=MARKER)
 
     def test_generates_warm_history_without_rotating_it(self):
         self.run_command("--no-rotate")
@@ -128,7 +165,7 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.assertEqual(periods, {str(year) for year in YEARS})
         for segment in ArchiveSegment.objects.filter(model_label="extras.objectchange"):
             with self.subTest(period=segment.period_key):
-                actual = archived(ArchivedObjectChange).objects.filter(period_key=segment.period_key).count()
+                actual = archived(ArchivedObjectChange, segment.period_key).objects.count()
                 self.assertEqual(segment.row_count, actual)
 
     def test_history_is_coherent_per_object(self):
@@ -180,11 +217,9 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.run_command()
 
         self.assertGreater(self.retained_demo_results().count(), 0)
-        self.assertGreater(archived(ArchivedJobLogEntry).objects.filter(message__startswith=MARKER).count(), 0)
+        self.assertGreater(_AcrossPeriods(ArchivedJobLogEntry, message__startswith=MARKER).count(), 0)
         with_console = set(
-            archived(ArchivedJobConsoleEntry)
-            .objects.filter(text__startswith=MARKER)
-            .values_list("job_result_id", flat=True)
+            _AcrossPeriods(ArchivedJobConsoleEntry, text__startswith=MARKER).values_list("job_result_id", flat=True)
         )
         all_results = set(self.retained_demo_results().values_list("pk", flat=True))
         self.assertTrue(with_console)

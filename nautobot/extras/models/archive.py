@@ -199,9 +199,37 @@ def archive_base_of(model):
     return getattr(model, "archive_base", model)
 
 
+def period_schema_name(period_key):
+    """
+    The PostgreSQL schema holding one period, or None when periods are separated by table name instead.
+
+    Controlled by `CHANGELOG_ARCHIVE_SCHEMA_PREFIX`, which is empty by default. Setting it puts each
+    period in its own schema, so a period is removed with one `DROP SCHEMA ... CASCADE` instead of four
+    `DROP TABLE`s, can be granted or revoked as a unit, and can be excluded from a backup by name.
+    """
+    from django.conf import settings
+
+    prefix = getattr(settings, "CHANGELOG_ARCHIVE_SCHEMA_PREFIX", "") or ""
+    if not prefix:
+        return None
+    return f"{prefix}_{period_key.lower().replace('-', '_')}"
+
+
 def period_table_name(mirror, period_key):
-    """The table holding one period of one mirror, for example `extras_archivedobjectchange_2024_q3`."""
-    return f"{mirror._meta.db_table}_{period_key.lower().replace('-', '_')}"
+    """
+    Where one period of one mirror is stored.
+
+    With no schema prefix set, the period is in the table name and everything sits in the connection's
+    default schema: `extras_archivedobjectchange_2024_q3`. With a prefix, the schema carries the period
+    and the table keeps its plain name: `"changelog_archive_2024_q3"."extras_archivedobjectchange"`.
+
+    Django understands a schema-qualified `db_table` and splits it when generating index names, so the
+    rest of the ORM needs to know nothing about which arrangement is in use.
+    """
+    schema = period_schema_name(period_key)
+    if schema is None:
+        return f"{mirror._meta.db_table}_{period_key.lower().replace('-', '_')}"
+    return '"{}"."{}"'.format(schema, mirror._meta.db_table)
 
 
 def period_model_for(mirror, period_key):
@@ -247,12 +275,54 @@ def ensure_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
 
     model = period_model_for(mirror, period_key)
     connection = connections[using]
-    with connection.cursor() as cursor:
-        existing = connection.introspection.table_names(cursor)
-    if model._meta.db_table not in existing:
+    schema = period_schema_name(period_key)
+    if schema is not None:
+        with connection.cursor() as cursor:
+            # Quoted through the schema editor so a prefix from configuration cannot become SQL.
+            cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {connection.ops.quote_name(schema)}")
+    if not period_table_exists(mirror, period_key, using=using):
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+            # `create_model` skips `Meta.indexes` entirely for an unmanaged model, and these are
+            # unmanaged so they stay out of `makemigrations`. Without this a period read is a sequential
+            # scan, which is the opposite of the point.
+            for index in model._meta.indexes:
+                schema_editor.add_index(model, index)
+            # A field carrying `db_index` that a declared index already covers would be created twice,
+            # and the two would generate the same name.
+            declared = {tuple(index.fields) for index in model._meta.indexes}
+            for field in model._meta.local_fields:
+                if not field.db_index or field.unique or field.primary_key:
+                    continue
+                if (field.name,) in declared:
+                    continue
+                index = models.Index(fields=[field.name])
+                # Named the way Django names an implicit index, which also keeps it unique per table.
+                index.set_name_with_model(model)
+                schema_editor.add_index(model, index)
     return model
+
+
+def period_table_exists(mirror, period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Whether this period's table has been created.
+
+    `introspection.table_names()` only sees the connection's search path, so a schema-qualified table has
+    to be looked for by schema and name instead.
+    """
+    from django.db import connections
+
+    connection = connections[using]
+    schema = period_schema_name(period_key)
+    if schema is None:
+        with connection.cursor() as cursor:
+            return period_table_name(mirror, period_key) in connection.introspection.table_names(cursor)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+            [schema, mirror._meta.db_table],
+        )
+        return cursor.fetchone() is not None
 
 
 def drop_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
@@ -267,9 +337,8 @@ def drop_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
 
     model = period_model_for(mirror, period_key)
     connection = connections[using]
-    with connection.cursor() as cursor:
-        if model._meta.db_table not in connection.introspection.table_names(cursor):
-            return False
+    if not period_table_exists(mirror, period_key, using=using):
+        return False
     with connection.schema_editor() as schema_editor:
         schema_editor.delete_model(model)
     return True

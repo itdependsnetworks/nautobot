@@ -545,6 +545,21 @@ properties:
     is_constance_config: true
     type: "string"
     version_added: "3.3.0"
+  CHANGELOG_ARCHIVE_SCHEMA_PREFIX:
+    default: ""
+    description: >-
+      Put each retained-history period in its own PostgreSQL schema, named `<prefix>_<period>`, instead of
+      separating periods by table name. Empty by default, which keeps every period table in the
+      connection's default schema. Setting it makes a whole period removable with one
+      `DROP SCHEMA ... CASCADE`, grantable or revocable as a unit, and excludable from a backup by name.
+      PostgreSQL only, since MySQL has no schemas within a database. Changing it does not move tables that
+      already exist, so set it before enabling retention.
+    environment_variable: "NAUTOBOT_CHANGELOG_ARCHIVE_SCHEMA_PREFIX"
+    is_constance_config: false
+    see_also:
+      "Where the retained tables live": "../../platform-functionality/change-logging.md#where-the-retained-tables-live"
+    type: "string"
+    version_added: "3.3.0"
   CHANGELOG_LEGACY_OBJECT_DATA:
     default: true
     description: >-

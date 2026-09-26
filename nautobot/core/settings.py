@@ -586,6 +586,12 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
     DATABASES["default"].setdefault("TEST", {})["CHARSET"] = "utf8mb4"
     DATABASES["default"]["TEST"]["COLLATION"] = "utf8mb4_0900_ai_ci"
 
+# Put each retained-history period in its own PostgreSQL schema, named `<prefix>_<period>`, instead of
+# separating periods by table name. Empty by default, which keeps every period table in the connection's
+# default schema. Setting it makes a period removable with one `DROP SCHEMA ... CASCADE`, grantable as a
+# unit, and excludable from a backup by name. PostgreSQL only: MySQL has no schemas within a database.
+CHANGELOG_ARCHIVE_SCHEMA_PREFIX = os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_SCHEMA_PREFIX", "")
+
 # The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
 # alongside `job_logs`.
 DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]

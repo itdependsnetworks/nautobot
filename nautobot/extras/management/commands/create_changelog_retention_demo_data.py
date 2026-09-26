@@ -49,7 +49,12 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
-from nautobot.extras.models.archive import period_model_for
+from nautobot.extras.models.archive import (
+    archive_base_of,
+    period_model_for,
+    period_table_exists,
+    period_table_name,
+)
 from nautobot.users.models import ObjectPermission
 
 MARKER = "retention-demo"
@@ -91,6 +96,26 @@ class _StubJobResult:
 
     def __init__(self, user):
         self.user = user
+
+
+def _model_for_label(label):
+    """
+    The model a `delete()` result is keyed by, or None where it is not a registered model.
+
+    Per-period retention classes are generated rather than registered, so `apps.get_model` cannot find
+    them. Their names are `<Mirror><Period>`, which `archive_base_of` resolves back to the mirror.
+    """
+
+    from nautobot.extras.registry import registry
+
+    try:
+        return apps.get_model(label)
+    except LookupError:
+        _, _, model_name = label.partition(".")
+        for mirror in registry["changelog_archive_models"].values():
+            if model_name.lower().startswith(mirror.__name__.lower()):
+                return mirror
+        return None
 
 
 class Command(BaseCommand):
@@ -551,6 +576,11 @@ class Command(BaseCommand):
             .order_by("-period_key")
             .values_list("period_key", flat=True)
         ):
+            # A segment whose table is absent is not an error here. It is what an operator sees after
+            # changing `CHANGELOG_ARCHIVE_SCHEMA_PREFIX` on an instance that already had periods, and a
+            # diagnostic command should report that rather than raise on it.
+            if not period_table_exists(mirror, period_key):
+                continue
             yield period_model_for(mirror, period_key).objects.filter(**filters)
 
     def _retained_count(self, mirror, model_label):
@@ -586,11 +616,50 @@ class Command(BaseCommand):
         for label, count in rows:
             self.stdout.write(f"{label:28} {count}")
 
+        self._report_storage()
+
+        from nautobot.extras.registry import registry
+
         segments = ArchiveSegment.objects.order_by("model_label", "-period_key")
         self.stdout.write(f"{'Retention periods':28} {segments.count()}")
         for segment in segments:
             state = "complete" if segment.is_period_closed else "still receiving"
-            self.stdout.write(f"  {segment.model_label:32} {segment.label:10} {segment.row_count:6} rows  ({state})")
+            mirror = registry["changelog_archive_models"].get(segment.model_label)
+            where = period_table_name(mirror, segment.period_key) if mirror else "?"
+            if mirror and not period_table_exists(mirror, segment.period_key):
+                where += "  MISSING"
+            self.stdout.write(
+                f"  {segment.model_label:32} {segment.label:10} {segment.row_count:6} rows  ({state})  {where}"
+            )
+
+    def _report_storage(self):
+        """
+        Where retained history is being written, which is the thing a tester most often needs to check.
+
+        Three arrangements look identical from the UI and entirely different on disk: same database or a
+        separate one, and periods separated by table name or by schema. Printing it here beats asking
+        someone to work it out from settings.
+        """
+        from django.conf import settings
+
+        from nautobot.core.constants import CHANGELOG_ARCHIVE
+        from nautobot.core.utils.config import changelog_archive_is_separate
+
+        archive = settings.DATABASES.get(CHANGELOG_ARCHIVE, {})
+        if changelog_archive_is_separate():
+            host = archive.get("HOST") or "localhost"
+            target = f"{archive.get('NAME', '?')} on {host}:{archive.get('PORT') or 'default'}"
+        else:
+            target = f"{archive.get('NAME', '?')} (same database as default)"
+        self.stdout.write("")
+        self.stdout.write(f"{'Retained history connection':28} {CHANGELOG_ARCHIVE} -> {target}")
+
+        prefix = getattr(settings, "CHANGELOG_ARCHIVE_SCHEMA_PREFIX", "") or ""
+        if prefix:
+            layout = f"one schema per period, prefix {prefix!r}"
+        else:
+            layout = "one table per period, in the connection's default schema"
+        self.stdout.write(f"{'Layout':28} {layout}")
 
     def _flush(self):
         """
@@ -625,11 +694,14 @@ class Command(BaseCommand):
             User.objects.filter(username__in=DEMO_USERS),
         ):
             for label, count in queryset.delete()[1].items():
+                model = _model_for_label(label)
                 # Skip many-to-many through tables: they are an artifact of how a permission's users and
                 # object types are stored, not something this command created.
-                if apps.get_model(label)._meta.auto_created:
+                if model is not None and model._meta.auto_created:
                     continue
-                deleted[label] += count
+                # Reported against the mirror, not the period: one line per record type reads as a count
+                # of what this command created, where a line per period reads as internal detail.
+                deleted[archive_base_of(model)._meta.label if model else label] += count
 
         emptied = 0
         for segment in ArchiveSegment.objects.all():
