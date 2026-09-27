@@ -1603,11 +1603,6 @@ class TestSerializeObjectV2(TestCase):
     def test_serialize_object_v2_json_only(self):
         """Make sure serialize_object_v2() returns a JSON-serializable dict and no lazy/deferred queryset data."""
         for model_class in apps.get_models():
-            # Unmanaged models have no table unless something else created it. Changelog retention
-            # generates one concrete class per period and Django registers each, so this sweep sees
-            # periods whose table may never have been created in this test database.
-            if not model_class._meta.managed:
-                continue
             instance = model_class.objects.first()
             if instance is None:
                 continue

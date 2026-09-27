@@ -259,8 +259,27 @@ def period_model_for(mirror, period_key):
         (mirror,),
         {"__module__": mirror.__module__, "Meta": meta, "archive_base": mirror, "period_key_value": period_key},
     )
+    _unregister(model)
     _PERIOD_MODELS[(mirror, period_key)] = model
     return model
+
+
+def _unregister(model):
+    """
+    Take a period model back out of Django's app registry.
+
+    Defining a concrete model registers it, and from then on it is returned by `apps.get_models()`. That
+    sweep is how Nautobot decides what appears in global search, what goes in the searchable-fields
+    artifact, and which models carry which features -- none of which should list one table of one period
+    of retained history as though it were a model an operator works with.
+
+    Nothing resolves these by name: `period_model_for` is the only way to reach one, and it holds its own
+    cache. Unregistering also keeps `post_migrate` from minting a `ContentType` per period.
+    """
+    from django.apps import apps
+
+    apps.all_models[model._meta.app_label].pop(model._meta.model_name, None)
+    apps.clear_cache()
 
 
 def ensure_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):

@@ -2259,10 +2259,15 @@ class ExportScopeTests(ImportExportJobTestCase):
 
         Replacing the default outright would let a view that omits `saved_view` -- or an App's view that
         simply has not kept up -- hand that parameter to a filterset as though it were a filter.
+
+        Every list view also carries `archive_period`, because changelog retention puts it on the shared
+        list mixin rather than on the handful of views that can serve a period. That is what makes the
+        parameter *ignored* on a model with no retained history instead of rejected as an unknown filter.
         """
         job = ExportObjectList()
-        self.assertEqual(job._get_non_filter_params(Status), set(NON_FILTER_PARAMS))
-        self.assertEqual(job._get_non_filter_params(Prefix), {*NON_FILTER_PARAMS, "expanded_subtree"})
+        every_view = {*NON_FILTER_PARAMS, "archive_period"}
+        self.assertEqual(job._get_non_filter_params(Status), every_view)
+        self.assertEqual(job._get_non_filter_params(Prefix), {*every_view, "expanded_subtree"})
         # A through model is exportable as a content type of its own but has no list view to ask
         self.assertIsNone(get_view_for_model(VRFDeviceAssignment, "List"))
         self.assertEqual(job._get_non_filter_params(VRFDeviceAssignment), set(NON_FILTER_PARAMS))
@@ -2272,6 +2277,7 @@ class ExportScopeTests(ImportExportJobTestCase):
 
         with mock.patch("nautobot.core.jobs.get_view_for_model", return_value=NarrowView):
             self.assertEqual(job._get_non_filter_params(Status), set(NON_FILTER_PARAMS))
+            # The narrow view's own list is what is unioned, so it does not pick up `archive_period`.
 
 
 # ===========================================================================
