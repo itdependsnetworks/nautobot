@@ -51,7 +51,7 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
-from nautobot.extras.models.archive import warm_model_for
+from nautobot.extras.models.archive import period_models_for, warm_model_for
 from nautobot.extras.registry import registry
 from nautobot.users.models import ObjectPermission
 
@@ -94,6 +94,19 @@ class _StubJobResult:
 
     def __init__(self, user):
         self.user = user
+
+
+def _reported_label(model, label):
+    """The label a deletion is counted under: the mirror's, for a period model, and otherwise its own."""
+    from nautobot.extras.models.archive import archive_base_of
+    from nautobot.extras.registry import registry
+
+    if model is None:
+        for mirror in registry["changelog_archive_models"].values():
+            if label.lower().startswith(mirror._meta.label_lower):
+                return mirror._meta.label
+        return label
+    return archive_base_of(model)._meta.label
 
 
 def _model_for_label(label):
@@ -582,18 +595,28 @@ class Command(BaseCommand):
 
     def _flush(self):
         """
-        Remove what a previous run created.
+        Remove what a previous run created, and turn retention back off.
 
         Keyed on MARKER throughout, so a record this command did not create is never touched.
         """
+
         # Per model from `delete()[1]`, since `[0]` counts cascades too and would report 120 for 17 job
-        # results.
+        # results. Every period of each mirror: under a calendar granularity the mirror's own table is
+        # empty, so sweeping it alone would remove nothing and leave the demo history in place.
+        retained = [
+            period_model.objects.filter(**{f"{field}__startswith": MARKER})
+            for mirror, field in (
+                (ArchivedObjectChange, "change_context_detail"),
+                (ArchivedJobLogEntry, "message"),
+                (ArchivedJobConsoleEntry, "text"),
+                (ArchivedJobResult, "name"),
+            )
+            for period_model in period_models_for(mirror)
+        ]
+
         deleted = defaultdict(int)
         for queryset in (
-            ArchivedObjectChange.objects.filter(change_context_detail__startswith=MARKER),
-            ArchivedJobLogEntry.objects.filter(message__startswith=MARKER),
-            ArchivedJobConsoleEntry.objects.filter(text__startswith=MARKER),
-            ArchivedJobResult.objects.filter(name__startswith=MARKER),
+            *retained,
             ObjectChange.objects.filter(change_context_detail__startswith=MARKER),
             JobResult.objects.filter(name__startswith=MARKER),
             RetentionRule.objects.filter(name__startswith=MARKER),
@@ -606,7 +629,10 @@ class Command(BaseCommand):
                 # object types are stored, not something this command created.
                 if model is not None and model._meta.auto_created:
                     continue
-                deleted[model._meta.label if model else label] += count
+                # Reported against the mirror, not the period. `delete()` names the class it deleted
+                # through, which for a calendar period is `extras.ArchivedObjectChange2024`: a label for
+                # one table of one period, where what a reader wants is how many change records went.
+                deleted[_reported_label(model, label)] += count
 
         emptied = self._remove_empty_periods()
 
@@ -656,11 +682,13 @@ class Command(BaseCommand):
         """
         Drop the segment row for any period left holding nothing, and return how many went.
 
-        Only empty ones: the registry is the rotation job's to maintain.
+        Only empty ones: the registry is the rotation job's to maintain. The table stays, a row being cheaper
+        to recreate. A segment naming a table that does not exist is left alone, reading it to decide would
+        raise `UndefinedTable`.
         """
         removed = 0
         for mirror in registry["changelog_archive_models"].values():
-            if mirror.objects.exists():
-                continue
-            removed += ArchiveSegment.objects.filter(model_label=warm_model_for(mirror)._meta.label_lower).delete()[0]
+            warm_label = warm_model_for(mirror)._meta.label_lower
+            empty = [model.period_key_value for model in period_models_for(mirror) if not model.objects.exists()]
+            removed += ArchiveSegment.objects.filter(model_label=warm_label, period_key__in=empty).delete()[0]
         return removed

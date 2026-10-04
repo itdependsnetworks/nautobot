@@ -125,7 +125,7 @@ class ChangelogTruncationTestMixin:
 
 
 # Retention off unless a test says otherwise. Truncation stands alone, and with retention on it
-# withholds anything past the warm window that rotation has not moved -- correct, and not what
+# withholds anything past the warm window whose period is not closed yet -- correct, and not what
 # these tests are about. The interlock has its own tests below that turn it on deliberately.
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
 class ChangelogTruncationUnitTestCase(ChangelogTruncationTestMixin, TestCase):
@@ -467,6 +467,9 @@ class ChangelogTruncationUnitTestCase(ChangelogTruncationTestMixin, TestCase):
         self.assertFalse(self.logger.said("rotation job's to move"))
 
 
+# Retention off unless a test says otherwise. Truncation stands alone, and with retention on it
+# withholds anything past the warm window whose period is not closed yet -- correct, and not what
+# these tests are about. The interlock has its own tests below that turn it on deliberately.
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
 class ChangelogTruncationIntegrationTestCase(ChangelogTruncationTestMixin, TransactionTestCase):
     """

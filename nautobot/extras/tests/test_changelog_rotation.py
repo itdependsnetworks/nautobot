@@ -26,7 +26,7 @@ from nautobot.extras.tests.test_changelog_truncation import RecordingLogger, Stu
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90)
 class ChangelogRotationTestCase(TestCase):
     """
-    Rotation moves records past the warm window into retained storage.
+    Rotation files each record under the calendar period its own timestamp falls in.
 
     Driven directly with a recording logger, the same shape as the truncation unit tests: rule-free
     behavior, deterministic messages, no dependency on `JobLogEntry` rows surviving the `job_logs`
@@ -292,7 +292,8 @@ class ChangelogRotationInterruptionTestCase(ChangelogRotationTestCase):
 
         self.run_job(batch_size=2)
 
-        self.assertEqual(archived(ArchivedObjectChange).objects.count(), 5)
+        # These are dated 2020, so 2020 is the table they land in.
+        self.assertEqual(archived(ArchivedObjectChange, "2020").objects.count(), 5)
         self.assertEqual(ObjectChange.objects.count(), 0)
         self.assertTrue(self.logger.said("Increment 1"))
         self.assertTrue(self.logger.said("Increment 3"))

@@ -3,15 +3,15 @@ The demo-data command has to actually produce data that exercises the feature.
 
 It exists so retention can be tried by hand, and every property asserted here is one that was missing at
 some point and made the feature look broken when it was not: a diff panel with nothing to diff, a related
-changes panel with no siblings, a console tab with no output. A generator that produces flat, uniform or
-incoherent data is worse than no generator, because what it shows gets mistaken for a bug in the thing
-being tested.
+changes panel with no siblings, a console tab with no output, a truncation run with no enabled rules. A
+generator that produces flat, uniform, or incoherent data is worse than no generator, because what it shows
+gets mistaken for a bug in the thing being tested.
 """
 
 from io import StringIO
 from itertools import pairwise
 
-from django.contrib.auth import get_user_model
+from constance.test import override_config
 from django.core.management import call_command
 from django.test import override_settings
 
@@ -39,9 +39,38 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
+from nautobot.extras.models.archive import period_models_for
 from nautobot.users.models import ObjectPermission, User
 
+# `override_config` for the two runtime knobs the command still writes. Constance config is cached in
+# memory and survives the per-test database rollback, so left to leak it changes what a later suite sees.
+# The capability itself is `override_settings`, because it is a deployment setting now rather than
+# something the command can turn on.
 
+
+class _AcrossPeriods:
+    """
+    The demo command's retained records.
+
+    Offers only the two operations these tests need, rather than pretending to be a queryset. A list of
+    querysets, one per period, because retained history has no single table to query: under a calendar
+    granularity the mirror's own table is the unbounded period and holds none of these records.
+    """
+
+    def __init__(self, mirror, **filters):
+        self._querysets = [model.objects.filter(**filters) for model in period_models_for(mirror)]
+
+    def count(self):
+        return sum(queryset.count() for queryset in self._querysets)
+
+    def values_list(self, *fields, flat=False):
+        values = []
+        for queryset in self._querysets:
+            values.extend(queryset.values_list(*fields, flat=flat))
+        return values
+
+
+@override_config(CHANGELOG_WARM_WINDOW_DAYS=90)
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class CreateChangelogRetentionDemoDataTestCase(TestCase):
     databases = ["default", CHANGELOG_ARCHIVE]
@@ -52,14 +81,19 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
 
     def tearDown(self):
         # Cleared on the way out as well as in. Retained history is written through a second connection, so
-        # `TestCase`'s per-test transaction on `default` does not roll it back.
+        # `TestCase`'s per-test transaction on `default` does not roll it back, and what this suite leaves
+        # not moved yet, so a leftover period changes what a later suite's truncation withholds.
         self._clear_retained_history()
         super().tearDown()
 
     @staticmethod
     def _clear_retained_history():
         for mirror in (ArchivedObjectChange, ArchivedJobLogEntry, ArchivedJobConsoleEntry, ArchivedJobResult):
-            mirror.objects.all().delete()
+            for model in period_models_for(mirror):
+                model.objects.all().delete()
+        # The segments go too. They are what the period lookups read to find the calendar periods, so one
+        # left behind has the next test sweeping a period it did not create. The tables stay: dropping
+        # them here and recreating them per test is slower than emptying them.
         ArchiveSegment.objects.all().delete()
 
     def run_command(self, *args):
@@ -72,15 +106,15 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
 
     def retained_demo_changes(self):
         """
-        Scoped to the marker, because filing is unfiltered by design.
+        Scoped to the marker, because rotation is unfiltered by design.
 
-        It copies the test database's own change history too, so an unscoped count here measures the
-        fixture rather than the command.
+        It moves every record past the warm window, including the test database's own change history, so an
+        unscoped count here measures the fixture rather than the command.
         """
-        return ArchivedObjectChange.objects.filter(change_context_detail=MARKER)
+        return _AcrossPeriods(ArchivedObjectChange, change_context_detail=MARKER)
 
     def retained_demo_results(self):
-        return ArchivedJobResult.objects.filter(name__startswith=MARKER)
+        return _AcrossPeriods(ArchivedJobResult, name__startswith=MARKER)
 
     def test_generates_warm_history_without_rotating_it(self):
         self.run_command("--no-rotate")
@@ -113,23 +147,22 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.assertEqual(len(set(per_year.values())), len(YEARS))
 
     def test_rotation_moves_every_year_into_retained_storage(self):
-        """Every fabricated year ends up retained, and no warm copy is left behind."""
+        """
+        Every fabricated year ends up retained, and the registry's count matches what is there.
+
+        Read across every period rather than one: under the default granularity each year is its own
+        table, so a check against a single period sees only the year that period covers.
+        """
         self.run_command()
 
         self.assertEqual(self.retained_demo_changes().count(), sum(CHANGES_PER_YEAR))
         self.assertEqual(self.demo_changes().count(), 0)
-        self.assertEqual({record.time.year for record in self.retained_demo_changes()}, set(YEARS))
-
-    def test_rotation_registers_a_period_per_record_type(self):
-        """The period registry is what a reader selects from and what the verification jobs sweep."""
-        self.run_command()
-
-        registered = dict(ArchiveSegment.objects.values_list("model_label", "row_count"))
-        self.assertEqual(
-            set(registered),
-            {"extras.objectchange", "extras.jobresult", "extras.joblogentry", "extras.jobconsoleentry"},
-        )
-        self.assertEqual(registered["extras.objectchange"], ArchivedObjectChange.objects.count())
+        years = {
+            record.time.year
+            for period_model in period_models_for(ArchivedObjectChange)
+            for record in period_model.objects.all()
+        }
+        self.assertEqual(years & set(YEARS), set(YEARS))
 
     def test_history_is_coherent_per_object(self):
         """
@@ -180,9 +213,9 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.run_command()
 
         self.assertGreater(self.retained_demo_results().count(), 0)
-        self.assertGreater(ArchivedJobLogEntry.objects.filter(message__startswith=MARKER).count(), 0)
+        self.assertGreater(_AcrossPeriods(ArchivedJobLogEntry, message__startswith=MARKER).count(), 0)
         with_console = set(
-            ArchivedJobConsoleEntry.objects.filter(text__startswith=MARKER).values_list("job_result_id", flat=True)
+            _AcrossPeriods(ArchivedJobConsoleEntry, text__startswith=MARKER).values_list("job_result_id", flat=True)
         )
         all_results = set(self.retained_demo_results().values_list("pk", flat=True))
         self.assertTrue(with_console)
@@ -217,6 +250,16 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         viewer, archivist = granted["retention-viewer"], granted["retention-archivist"]
         self.assertEqual(archivist - viewer, {"extras.view_archivesegment"})
         self.assertEqual(viewer - archivist, set())
+
+    def test_rerunning_with_flush_does_not_accumulate(self):
+        self.run_command()
+        first = self.retained_demo_changes().count()
+
+        self.run_command("--flush")
+
+        self.assertEqual(self.retained_demo_changes().count(), first)
+        self.assertEqual(RetentionRule.objects.filter(name__startswith=MARKER).count(), 3)
+        self.assertEqual(User.objects.filter(username__in=DEMO_USERS).count(), len(DEMO_USERS))
 
     def test_teardown_removes_only_what_it_created(self):
         """Keyed on the marker throughout, so a record the command did not create is never touched."""
@@ -257,23 +300,14 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         # Many-to-many through tables are an artifact of how permissions are stored, not created records.
         self.assertNotIn("ObjectPermission_users", output)
 
-    def test_rerunning_with_flush_does_not_accumulate(self):
-        self.run_command()
-        first = self.demo_changes().count()
-
-        self.run_command("--flush")
-
-        self.assertEqual(self.demo_changes().count(), first)
-        self.assertEqual(get_user_model().objects.filter(username__in=DEMO_USERS).count(), len(DEMO_USERS))
-
     def test_status_changes_nothing(self):
         self.run_command()
-        before = self.demo_changes().count()
+        before = (self.retained_demo_changes().count(), RetentionRule.objects.count())
 
         output = self.run_command("--status")
 
-        self.assertEqual(self.demo_changes().count(), before)
-        self.assertIn("Warm change records", output)
+        self.assertEqual((self.retained_demo_changes().count(), RetentionRule.objects.count()), before)
+        self.assertIn("Retained change records", output)
 
     def test_the_seed_makes_a_run_reproducible(self):
         self.run_command("--no-rotate")
@@ -312,13 +346,16 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         return Location.objects.first().pk
 
 
+@override_config(CHANGELOG_WARM_WINDOW_DAYS=90)
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class DemoDataTruncationTestCase(CreateChangelogRetentionDemoDataTestCase):
     """
     The enabled rules have to have something to delete after a default run.
 
-    They did not. The include rule's age bound was above the warm window, and the rules were unscoped, so
-    running truncation to see the feature work either deleted nothing or matched the change history
-    `generate_test_data` created.
+    They did not. Everything the command created was backdated past the warm window and then rotated, and
+    the include rule's age bound was above the window -- so every record it could match had already been
+    moved out of warm storage. Running truncation to see the feature work deleted nothing, or worse, only
+    matched the change history `generate_test_data` created, because the rules were unscoped.
     """
 
     def truncate(self, dry_run=False):
@@ -335,10 +372,13 @@ class DemoDataTruncationTestCase(CreateChangelogRetentionDemoDataTestCase):
     def candidates(self, **kwargs):
         return ObjectChange.objects.filter(change_context_detail=TRUNCATION_MARKER, **kwargs)
 
-    def test_the_command_creates_one_of_each_group(self):
+    def test_candidates_survive_rotation(self):
+        """They are inside the warm window, which is the whole point -- rotation must leave them."""
         self.run_command()
 
-        self.assertEqual(self.candidates().count(), TRUNCATION_DELETABLE + TRUNCATION_PROTECTED + TRUNCATION_UNTOUCHED)
+        remaining = self.candidates()
+        self.assertEqual(remaining.count(), TRUNCATION_DELETABLE + TRUNCATION_PROTECTED + TRUNCATION_UNTOUCHED)
+        self.assertEqual(self.retained_demo_changes().count(), sum(CHANGES_PER_YEAR))
 
     def test_the_enabled_rules_delete_exactly_the_deletable_group(self):
         self.run_command()

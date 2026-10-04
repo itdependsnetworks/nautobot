@@ -49,8 +49,8 @@ class ArchiveAwareRetrieveGuardsTestCase(ArchiveReadFixtureMixin, TestCase):
             model_label="extras.jobresult",
             period_key=PERIOD,
             label=PERIOD,
-            time_start=datetime(2021, 1, 1, tzinfo=dt_timezone.utc),
-            time_end=datetime(2022, 1, 1, tzinfo=dt_timezone.utc),
+            time_start=datetime(int(PERIOD), 1, 1, tzinfo=dt_timezone.utc),
+            time_end=datetime(int(PERIOD) + 1, 1, 1, tzinfo=dt_timezone.utc),
             row_count=1,
             is_period_closed=True,
         )
@@ -58,7 +58,7 @@ class ArchiveAwareRetrieveGuardsTestCase(ArchiveReadFixtureMixin, TestCase):
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Archived Run",
-            date_created=datetime(2021, 6, 1, tzinfo=dt_timezone.utc),
+            date_created=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
             status=JobResultStatusChoices.STATUS_SUCCESS,
         )
 
@@ -115,8 +115,8 @@ class ArchivedRelatedChangesTestCase(ArchiveReadFixtureMixin, TestCase):
             model_label="extras.objectchange",
             period_key=PERIOD,
             label=PERIOD,
-            time_start=datetime(2021, 1, 1, tzinfo=dt_timezone.utc),
-            time_end=datetime(2022, 1, 1, tzinfo=dt_timezone.utc),
+            time_start=datetime(int(PERIOD), 1, 1, tzinfo=dt_timezone.utc),
+            time_end=datetime(int(PERIOD) + 1, 1, 1, tzinfo=dt_timezone.utc),
             row_count=3,
             is_period_closed=True,
         )
@@ -130,7 +130,7 @@ class ArchivedRelatedChangesTestCase(ArchiveReadFixtureMixin, TestCase):
         return archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
-            time=datetime(2021, 6, 1, 12, 0, second, tzinfo=dt_timezone.utc),
+            time=datetime(int(PERIOD), 6, 1, 12, 0, second, tzinfo=dt_timezone.utc),
             user_name="alice",
             request_id=request_id,
             action=action or ObjectChangeActionChoices.ACTION_UPDATE,
@@ -258,6 +258,23 @@ class ArchivedRecordDiffTestCase(ArchivedRelatedChangesTestCase):
     def test_neighbours_are_this_object_within_this_period(self):
         self.assertEqual(self.renamed.get_prev_change().pk, self.created.pk)
         self.assertEqual(self.renamed.get_next_change().pk, self.tagged.pk)
+        # A record in an adjacent period is not a neighbour: one period per query.
+        # In the adjacent period's own table, because the table is the period now. Writing it into this
+        # period's table with a different `period_key` would no longer be a record in another period.
+        other_period = archived(ArchivedObjectChange, str(int(PERIOD) - 1)).objects.create(
+            id=uuid.uuid4(),
+            period_key=str(int(PERIOD) - 1),
+            time=datetime(int(PERIOD) - 1, 12, 31, tzinfo=dt_timezone.utc),
+            user_name="alice",
+            request_id=self.request_id,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type_id=self.content_type.pk,
+            changed_object_id=self.object_id,
+            change_context="orm",
+            object_repr="Archived Widget",
+            object_data={},
+        )
+        self.assertNotIn(other_period.pk, {change.pk for change in self.created.get_related_changes()})
         # The earliest record in a period has no predecessor, which yields no diff rather than an error.
         self.assertIsNone(self.created.get_prev_change())
 
@@ -304,7 +321,7 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
                 log_level=LogLevelChoices.LOG_INFO,
                 grouping="run",
                 message=f"archived log line {index}",
-                created=datetime(2021, 6, 1, 12, 0, index, tzinfo=dt_timezone.utc),
+                created=datetime(int(PERIOD), 6, 1, 12, 0, index, tzinfo=dt_timezone.utc),
             )
             for index in range(3)
         ]
@@ -315,7 +332,7 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
                 job_result_id=self.archived.pk,
                 output_type=JobConsoleEntryOutputTypeChoices.TYPE_STDOUT,
                 text=f"archived console line {index}",
-                timestamp=datetime(2021, 6, 1, 12, 0, index, tzinfo=dt_timezone.utc),
+                timestamp=datetime(int(PERIOD), 6, 1, 12, 0, index, tzinfo=dt_timezone.utc),
             )
             for index in range(2)
         ]
@@ -324,7 +341,7 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Other Archived Run",
-            date_created=datetime(2021, 6, 2, tzinfo=dt_timezone.utc),
+            date_created=datetime(int(PERIOD), 6, 2, tzinfo=dt_timezone.utc),
             status=JobResultStatusChoices.STATUS_SUCCESS,
         )
         archived(ArchivedJobLogEntry).objects.create(
@@ -334,7 +351,7 @@ class ArchivedJobResultPanelsTestCase(ArchiveAwareRetrieveGuardsTestCase):
             log_level=LogLevelChoices.LOG_INFO,
             grouping="run",
             message="log line belonging to the other run",
-            created=datetime(2021, 6, 2, tzinfo=dt_timezone.utc),
+            created=datetime(int(PERIOD), 6, 2, tzinfo=dt_timezone.utc),
         )
 
     def _get(self, suffix, **kwargs):

@@ -51,7 +51,7 @@ class ArchiveChangedObjectLinkTestCase(ArchiveReadFixtureMixin, TestCase):
         return archived(ArchivedObjectChange).objects.create(
             id=uuid.uuid4(),
             period_key=PERIOD,
-            time=datetime(2021, 6, 1, tzinfo=dt_timezone.utc),
+            time=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
             user_name="alice",
             request_id=uuid.uuid4(),
             action=ObjectChangeActionChoices.ACTION_UPDATE,

@@ -15,6 +15,7 @@ whether or not any retention period exists.
 one, and the two share `CascadeDeleteMixin` rather than each carrying its own cascade walk.
 """
 
+from collections import defaultdict
 from datetime import timedelta
 
 from django.apps import apps
@@ -29,7 +30,7 @@ from nautobot.core.jobs.cleanup import CascadeDeleteMixin
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.core.utils.lookup import get_filterset_for_model
 from nautobot.extras.choices import RetentionRuleModeChoices
-from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS, CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD
+from nautobot.extras.constants import CHANGELOG_ARCHIVE_COVERED_MODELS
 from nautobot.extras.context_managers import without_delete_change_logging
 from nautobot.extras.jobs import BooleanVar, IntegerVar, Job, MultiChoiceVar
 from nautobot.extras.models import (
@@ -41,7 +42,14 @@ from nautobot.extras.models import (
     JobResult,
     RetentionRule,
 )
-from nautobot.extras.models.archive import build_mirror_instance
+from nautobot.extras.models.archive import (
+    build_mirror_instance,
+    ensure_period,
+    period_bounds_for,
+    period_key_for,
+    period_label_for,
+    period_models_for,
+)
 from nautobot.extras.registry import registry
 from nautobot.extras.utils import age_field_for
 
@@ -60,10 +68,10 @@ ROTATION_ORDER = (
 
 class ChangelogRotation(Job):
     """
-    Move change and job history out of warm storage into long-term retention.
+    Move change and job history out of warm storage into its calendar period.
 
-    A retained record keeps the primary key it had warm, so a second run writes the same records again and
-    the repeated keys conflict harmlessly.
+    A record's own timestamp determines its period, so a second run writes the same records to the same
+    period and the repeated primary keys conflict harmlessly. Period granularity is the size control.
     """
 
     record_types = MultiChoiceVar(
@@ -109,6 +117,9 @@ class ChangelogRotation(Job):
         if not settings.CHANGELOG_ARCHIVE_ENABLED:
             self.logger.warning("Changelog long-term retention is disabled (CHANGELOG_ARCHIVE_ENABLED); nothing to do.")
             return {}
+
+        # Periods this run has already opened, so the tables are created once rather than per batch.
+        self._opened_periods = {}
 
         if warm_window_days in (None, ""):
             warm_window_days = get_settings_or_config("CHANGELOG_WARM_WINDOW_DAYS", fallback=90)
@@ -230,53 +241,78 @@ class ChangelogRotation(Job):
 
         return queryset
 
+    def _open_period(self, period_key):
+        """
+        Every covered model's table for this period, creating them together on first use.
+
+        A period is one unit. Creating each mirror's table only when it has something to file leaves a period
+        with a job-result table and no console table, and reading that result's console tab then raises
+        `UndefinedTable`. Opened once per run, since `ensure_period` asks the database which tables exist.
+        """
+        if period_key not in self._opened_periods:
+            self._opened_periods[period_key] = ensure_period(period_key)
+        return self._opened_periods[period_key]
+
     def _move_batch(self, model, mirror, batch, age_field, cutoff):
         """
-        Copy a batch into retained storage, then delete the warm rows.
+        Copy a batch into its periods, then delete the warm rows.
 
-        Copy then delete, because a failure between the two leaves the record in both places, which the next
-        run resolves. It cannot be one transaction: the two sides are different connections.
+        A batch is ordered by age, so a period boundary can fall inside it; each group goes to its own period's
+        table. Copy then delete, because a failure between the two leaves the record in both places, which the
+        next run resolves. It cannot be one transaction: the two sides are different connections.
         """
-        pks = [warm_object.pk for warm_object in batch]
-        # PLACEHOLDER: everything still goes to the unbounded period. ABSTRACT-2 files each record under
-        # the period its own timestamp falls in.
-        instances = [
-            build_mirror_instance(warm_object, mirror, CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD) for warm_object in batch
-        ]
-        mirror.objects.bulk_create(instances, ignore_conflicts=True)
-        archived = set(mirror.objects.filter(pk__in=pks).values_list("pk", flat=True))
-        if len(archived) != len(pks):
-            self.logger.error(
-                "%d of %d %s records were not written to retained storage; leaving them in warm storage",
-                len(pks) - len(archived),
-                len(pks),
-                model._meta.label,
-            )
-        self._record_segment(model, mirror, batch, age_field, cutoff)
+        by_period = defaultdict(list)
+        for warm_object in batch:
+            by_period[period_key_for(getattr(warm_object, age_field))].append(warm_object)
+
+        archived = set()
+        for period_key, period_batch in by_period.items():
+            period_model = self._open_period(period_key)[model._meta.label_lower]
+            pks = [warm_object.pk for warm_object in period_batch]
+            instances = [build_mirror_instance(warm_object, period_model, period_key) for warm_object in period_batch]
+            period_model.objects.bulk_create(instances, ignore_conflicts=True)
+            written = set(period_model.objects.filter(pk__in=pks).values_list("pk", flat=True))
+            if len(written) != len(pks):
+                self.logger.error(
+                    "%d of %d %s records were not written to period %s; leaving them in warm storage",
+                    len(pks) - len(written),
+                    len(pks),
+                    model._meta.label,
+                    period_key,
+                )
+            archived |= written
+            self._record_segment(model, period_key, period_model, period_batch, age_field, cutoff)
 
         with transaction.atomic():
             deleted = model.objects.filter(pk__in=list(archived)).delete()[0]
-        self.logger.debug("Archived %d and removed %d warm rows", len(archived), deleted)
+        self.logger.debug(
+            "Archived %d across %d period(s) and removed %d warm rows", len(archived), len(by_period), deleted
+        )
         return len(archived)
 
     @staticmethod
-    def _record_segment(model, mirror, batch, age_field, cutoff):  # `cutoff` closes a period
+    def _record_segment(model, period_key, period_model, period_batch, age_field, cutoff):
         """
         Record that this period exists, and how much is in it.
 
-        Written after the rows, so a segment never claims a period that failed to write. `row_count` is read
-        back from the table instead of added to, so a re-run leaves it where it was.
+        Written after the period's rows, so a segment never claims a period that failed to write. `row_count`
+        is read back from the table instead of added to, so a re-run leaves it where it was.
         """
-        newest = max(getattr(warm_object, age_field) for warm_object in batch)
+        start, end = period_bounds_for(period_key)
+        newest = max(getattr(warm_object, age_field) for warm_object in period_batch)
         segment, _ = ArchiveSegment.objects.get_or_create(
             model_label=model._meta.label_lower,
-            period_key=CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD,
-            defaults={"label": "All time"},
+            period_key=period_key,
+            defaults={"label": period_label_for(period_key), "time_start": start, "time_end": end},
         )
-        segment.row_count = mirror.objects.count()
+        segment.row_count = period_model.objects.count()
         if segment.last_rotated_time is None or newest > segment.last_rotated_time:
             segment.last_rotated_time = newest
-        # The unbounded period never ends, so it is never closed: rotation can always file more into it.
+        # Closed once the period has ended and rotation has reached past it: every record that could
+        # belong to this period is older than the warm window, so none is still waiting to be moved. A
+        # closed period is one the selector can present without the "still being archived" caveat.
+        if end is not None and end <= cutoff:
+            segment.is_period_closed = True
         segment.save()
 
 
@@ -305,14 +341,15 @@ class ChangelogArchiveIntegrityCheck(Job):
             ("orphaned_console_entries", self._find_orphaned_console_entries),
             ("stale_content_types", self._find_stale_content_types),
         ):
-            queryset = finder()
-            count = queryset.count()
+            # One queryset per period table, since retained history has no single table to sweep.
+            querysets = list(finder())
+            count = sum(queryset.count() for queryset in querysets)
             result[name] = count
             if not count:
                 self.logger.info("%s: none found", name)
                 continue
             if repair:
-                deleted = queryset.delete()[0]
+                deleted = sum(queryset.delete()[0] for queryset in querysets)
                 self.logger.warning("%s: deleted %d records", name, deleted)
                 result[name] = deleted
             else:
@@ -324,17 +361,18 @@ class ChangelogArchiveIntegrityCheck(Job):
         return result
 
     def _find_orphaned_log_entries(self):
-        """Retained log entries whose job result is in neither warm storage nor retained storage."""
+        """Retained log entries whose job result is in neither warm storage nor retention, per period."""
         return self._orphans_for(ArchivedJobLogEntry)
 
     def _find_orphaned_console_entries(self):
         return self._orphans_for(ArchivedJobConsoleEntry)
 
     def _orphans_for(self, mirror):
-        """Entries whose job result is in neither warm storage nor retained storage."""
-        # Every table a job result could still be in: the warm one, and the retained one.
-        missing = self._missing_referents(mirror, "job_result_id", [JobResult, ArchivedJobResult])
-        return mirror.objects.filter(job_result_id__in=missing)
+        """Entries whose job result is in neither warm storage nor retained storage, one period at a time."""
+        # Every table a job result could still be in: the warm one, and each retained period.
+        missing = self._missing_referents(mirror, "job_result_id", [JobResult, *period_models_for(ArchivedJobResult)])
+        for period_model in period_models_for(mirror):
+            yield period_model.objects.filter(job_result_id__in=missing)
 
     def _find_stale_content_types(self):
         """
@@ -344,9 +382,10 @@ class ChangelogArchiveIntegrityCheck(Job):
         reason as `_missing_referents`.
         """
         known = list(ContentType.objects.values_list("pk", flat=True))
-        return ArchivedObjectChange.objects.filter(changed_object_type_id__isnull=False).exclude(
-            changed_object_type_id__in=known
-        )
+        for period_model in period_models_for(ArchivedObjectChange):
+            yield period_model.objects.filter(changed_object_type_id__isnull=False).exclude(
+                changed_object_type_id__in=known
+            )
 
     def _find_duplicate_records(self):
         """
@@ -361,14 +400,15 @@ class ChangelogArchiveIntegrityCheck(Job):
             # Chunked in Python for the same reason as `_missing_referents`: the two are stored on different
             # connections, so a subquery across them cannot be relied on.
             count = 0
-            offset = 0
-            retained_pks = mirror.objects.values_list("pk", flat=True)
-            while True:
-                chunk = list(retained_pks[offset : offset + 10000])
-                if not chunk:
-                    break
-                count += warm.objects.filter(pk__in=chunk).count()
-                offset += 10000
+            for period_model in period_models_for(mirror):
+                offset = 0
+                period_pks = period_model.objects.values_list("pk", flat=True)
+                while True:
+                    chunk = list(period_pks[offset : offset + 10000])
+                    if not chunk:
+                        break
+                    count += warm.objects.filter(pk__in=chunk).count()
+                    offset += 10000
             if count:
                 total += count
                 self.logger.warning(
@@ -388,24 +428,27 @@ class ChangelogArchiveIntegrityCheck(Job):
         Compared in chunks in Python instead of as a subquery, because the two sides are on different
         connections and may be on different hosts.
 
-        The caller passes every table a referent could be in, so a log entry is orphaned only once its job
-        result is in none of them.
+        Both sides span periods: the ids come from every period of `mirror`, and the caller passes every table
+        a referent could be in, so a log entry is orphaned only once its job result is in none of them.
         """
         CHUNK = 10000
         missing = []
-        distinct_ids = (
-            mirror.objects.exclude(**{f"{field_name}__isnull": True}).values_list(field_name, flat=True).distinct()
-        )
-        offset = 0
-        while True:
-            chunk = list(distinct_ids[offset : offset + CHUNK])
-            if not chunk:
-                break
-            found = set()
-            for table in referent_models:
-                found |= set(table.objects.filter(pk__in=chunk).values_list("pk", flat=True))
-            missing.extend(value for value in chunk if value not in found)
-            offset += CHUNK
+        for period_model in period_models_for(mirror):
+            distinct_ids = (
+                period_model.objects.exclude(**{f"{field_name}__isnull": True})
+                .values_list(field_name, flat=True)
+                .distinct()
+            )
+            offset = 0
+            while True:
+                chunk = list(distinct_ids[offset : offset + CHUNK])
+                if not chunk:
+                    break
+                found = set()
+                for table in referent_models:
+                    found |= set(table.objects.filter(pk__in=chunk).values_list("pk", flat=True))
+                missing.extend(value for value in chunk if value not in found)
+                offset += CHUNK
         return missing
 
 
@@ -611,11 +654,19 @@ class ChangelogTruncation(CascadeDeleteMixin, Job):
         age_field = age_field_for(model)
         mirror = registry["changelog_archive_models"].get(model._meta.label_lower)
 
-        # A list of keys, not a subquery: the two models are on different connections.
+        # A list of keys, not a subquery: the two models are on different connections. Asked of every
+        # period, because a boundary can fall inside the selection and looking only in the unbounded
+        # table would read every record rotated into a calendar period as never rotated, withholding it
+        # from deletion for good. Keys found drop out of the next period's query.
         rotated_pks = []
         if mirror is not None:
-            candidates = list(selected.filter(**{f"{age_field}__lt": cutoff}).values_list("pk", flat=True))
-            rotated_pks = list(mirror.objects.filter(pk__in=candidates).values_list("pk", flat=True))
+            remaining = set(selected.filter(**{f"{age_field}__lt": cutoff}).values_list("pk", flat=True))
+            for period_model in period_models_for(mirror):
+                if not remaining:
+                    break
+                found = set(period_model.objects.filter(pk__in=list(remaining)).values_list("pk", flat=True))
+                rotated_pks.extend(found)
+                remaining -= found
 
         withheld_q = Q(**{f"{age_field}__lt": cutoff}) & ~Q(pk__in=rotated_pks)
         withheld_count = selected.filter(withheld_q).count()
