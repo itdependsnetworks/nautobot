@@ -23,6 +23,7 @@ from django.utils.html import escape, format_html
 
 from nautobot.circuits.models import Circuit
 from nautobot.core.choices import ColorChoices
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.models.fields import slugify_dashes_to_underscores
 from nautobot.core.templatetags.helpers import bettertitle, HTML_NONE
 from nautobot.core.testing import (
@@ -5070,6 +5071,9 @@ class JobResultTestCase(
     ViewTestCases.BulkDeleteObjectsViewTestCase,
 ):
     model = JobResult
+    # The detail view falls back to retained history on a 404, so a miss queries the archive alias
+    # whenever CHANGELOG_ARCHIVE_ENABLED is on. See `ArchiveAwareRetrieveMixin`.
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     @classmethod
     def setUpTestData(cls):
@@ -7465,6 +7469,9 @@ class RetentionRuleScopeFilterTestCase(TestCase):
 # TODO: Convert to StandardTestCases.Views
 class ObjectChangeTestCase(TestCase):
     user_permissions = ("extras.view_objectchange",)
+    # The detail view falls back to retained history on a 404, so a miss queries the archive alias
+    # whenever CHANGELOG_ARCHIVE_ENABLED is on. See `ArchiveAwareRetrieveMixin`.
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     @classmethod
     def setUpTestData(cls):

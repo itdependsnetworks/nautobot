@@ -1,6 +1,7 @@
 import logging
 from typing import ClassVar, Optional, Type
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import AccessMixin
 from django.contrib.auth.models import AnonymousUser
@@ -9,12 +10,13 @@ from django.core.exceptions import (
     FieldDoesNotExist,
     ImproperlyConfigured,
     ObjectDoesNotExist,
+    PermissionDenied,
     ValidationError,
 )
 from django.db import transaction
 from django.db.models import CharField, ManyToManyField, Model, ProtectedError, Q, QuerySet
 from django.forms import Form, ModelMultipleChoiceField, MultipleHiddenInput
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import select_template, TemplateDoesNotExist
 from django.urls import resolve, reverse
@@ -856,6 +858,83 @@ class ObjectDetailViewMixin(NautobotViewSetMixin, mixins.RetrieveModelMixin):
         Retrieve a model instance.
         """
         return Response({})
+
+
+class ArchiveAwareRetrieveMixin:
+    """
+    Let a model's existing detail view serve its retained records too.
+
+    A retained record has the same primary key it had in warm storage, so a URL that worked before rotation
+    keeps working after it. That is the reason this is a fallback on the existing view rather than a
+    parallel set of routes: one URL space, and links do not rot when a record is moved.
+
+    A view using this must tolerate a mirror instance in `get_extra_context` and in its panels. Mirrors
+    resolve demoted relations to None, which covers most of it, but anything calling a method that only the
+    warm model has needs a guard.
+    """
+
+    #: Actions the retention fallback applies to. Read-only on purpose: handing an archived record to a
+    #: destroy or update view would offer a write against something with no write surface.
+    archive_aware_actions = ("retrieve",)
+
+    def get_object(self):
+        try:
+            return super().get_object()
+        except Http404:
+            record = self.get_archived_object(self.kwargs.get("pk"))
+            if record is None:
+                raise
+            return record
+
+    def get_archived_object(self, pk):
+        """
+        The retained record with this primary key, or None if the fallback does not apply.
+
+        Separate from `get_object` so the custom detail actions -- a job result's log table and console
+        output -- can resolve the same record the detail page did. Those actions look their instance up
+        themselves rather than through `get_object`, so without this they raise 404 on a record whose page
+        had just rendered, and the panel comes up empty.
+
+        Raises `PermissionDenied` where the record exists but the user may not read retained history, rather
+        than returning None: a 404 there would say the record does not exist.
+        """
+        from nautobot.extras.archive_reads import user_can_read_archive
+        from nautobot.extras.models.archive import archive_model_for
+
+        if self.action not in self.archive_aware_actions:
+            return None
+        # Skipped entirely while retention is off, so a miss costs no extra query and behaves exactly as
+        # it did before the capability existed.
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
+            return None
+        mirror = archive_model_for(type(self).queryset.model)
+        if mirror is None:
+            return None
+        record = mirror.objects.filter(pk=pk).first()
+        if record is None:
+            return None
+        # The warm view's own permission was already checked; reading retained history needs the
+        # cold-storage grant on top of it.
+        if not user_can_read_archive(self.request.user):
+            raise PermissionDenied("You do not have permission to read archived change history.")
+        self.archived_instance = record
+        return record
+
+    def is_archived(self, instance):
+        """Whether `instance` came from long-term retention rather than warm storage."""
+        return self._is_archive_mirror(type(instance))
+
+    def restrict_if_warm(self, queryset, action="view"):
+        """
+        Apply per-object restriction, except on retained history, which has no per-object permissions.
+
+        A mirror declares no permissions of its own -- reading it is gated once, on
+        `extras.view_archivesegment` -- so `restrict` there would resolve a permission that does not exist
+        and return nothing. Mirrors it to `NautobotViewSetMixin.get_queryset`.
+        """
+        if self._is_archive_mirror(queryset.model):
+            return queryset
+        return queryset.restrict(self.request.user, action)
 
 
 class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):

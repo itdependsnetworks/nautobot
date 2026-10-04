@@ -586,6 +586,13 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
     DATABASES["default"].setdefault("TEST", {})["CHARSET"] = "utf8mb4"
     DATABASES["default"]["TEST"]["COLLATION"] = "utf8mb4_0900_ai_ci"
 
+# Whether changelog long-term retention is available at all. Deliberately not a Constance setting:
+# turning it on commits an installation to a second connection, a set of retention tables, and two
+# scheduled jobs, so it is an administrator's deployment decision made once, not something to be toggled
+# from the UI. Changing it requires a restart.
+CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))
+
+
 # The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
 # alongside `job_logs`.
 DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]
