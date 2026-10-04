@@ -525,6 +525,17 @@ properties:
     environment_variable: "NAUTOBOT_CELERY_WORKER_REDIRECT_STDOUTS_LEVEL"
     type: "string"
     version_added: "2.0.0"
+  CHANGELOG_LEGACY_OBJECT_DATA:
+    default: true
+    description: >-
+      Whether to store the legacy `object_data` snapshot on each change record, alongside `object_data_v2`.
+      Deprecated: `object_data_v2` supersedes it and every reader prefers it, falling back to the legacy
+      snapshot only for records written before Nautobot 1.3. Turning this off halves the data each new change
+      record stores. Records written while it is off leave `object_data` empty, which is visible to REST API
+      clients reading that field directly.
+    is_constance_config: true
+    type: "boolean"
+    version_added: "3.3.0"
   CHANGELOG_RETENTION:
     default: 90
     description: >-

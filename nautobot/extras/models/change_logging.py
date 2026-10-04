@@ -41,11 +41,19 @@ class ChangeLoggedModel(models.Model):
 
         This will typically be called automatically by ChangeLoggingMiddleware.
         """
+        from nautobot.core.utils.config import get_settings_or_config
+
+        # The legacy snapshot is deprecated: `object_data_v2` supersedes it and every reader prefers it.
+        # Storing it is optional so a deployment can stop paying for two serializations of every record.
+        legacy_object_data = None
+        if get_settings_or_config("CHANGELOG_LEGACY_OBJECT_DATA", fallback=True):
+            legacy_object_data = serialize_object(self, extra=object_data_extra, exclude=object_data_exclude)
+
         return ObjectChange(
             changed_object=self,
             object_repr=str(self)[:CHANGELOG_MAX_OBJECT_REPR],
             action=action,
-            object_data=serialize_object(self, extra=object_data_extra, exclude=object_data_exclude),
+            object_data=legacy_object_data,
             object_data_v2=serialize_object_v2(self),
             related_object=related_object,
         )
@@ -108,7 +116,7 @@ class ObjectChange(SavedViewMixin, BaseModel):
     related_object_id = models.UUIDField(blank=True, null=True)
     related_object = GenericForeignKey(ct_field="related_object_type", fk_field="related_object_id")
     object_repr = models.CharField(max_length=CHANGELOG_MAX_OBJECT_REPR, editable=False)
-    object_data = models.JSONField(encoder=DjangoJSONEncoder, editable=False)
+    object_data = models.JSONField(encoder=DjangoJSONEncoder, editable=False, null=True, blank=True)
     object_data_v2 = models.JSONField(encoder=NautobotKombuJSONEncoder, editable=False, null=True, blank=True)
 
     documentation_static_path = "docs/user-guide/platform-functionality/change-logging.html"
@@ -174,6 +182,17 @@ class ObjectChange(SavedViewMixin, BaseModel):
             self.object_repr = str(self.changed_object)[:CHANGELOG_MAX_OBJECT_REPR]
 
         return super().save(*args, **kwargs)
+
+    @property
+    def snapshot_data(self):
+        """
+        This record's serialized copy of the object, whichever generation of it exists.
+
+        `object_data_v2` for anything written since Nautobot 1.3, and the legacy `object_data` for older
+        records or for records written with `CHANGELOG_LEGACY_OBJECT_DATA` on and v2 unavailable. Readers
+        want "the snapshot" rather than a particular generation of it.
+        """
+        return self.object_data_v2 or self.object_data
 
     def get_action_class(self):
         return ObjectChangeActionChoices.CSS_CLASSES.get(self.action)
@@ -250,9 +269,17 @@ class ObjectChange(SavedViewMixin, BaseModel):
                 postchange = self.object_data
 
         if prechange and postchange:
-            # A diff is only meaningful when both sides are the same generation. Only a prechange taken
-            # from a stored record can be out of date. A captured snapshot is always current.
-            if prior_change is not None and (self.object_data_v2 is None or prior_change.object_data_v2 is None):
+            # A diff is only meaningful when both sides are the same generation, so both fall back to the
+            # legacy snapshot when either lacks v2. Only a prechange taken from a stored record can be out
+            # of date; a captured snapshot is always current, which is why `prior_change` has to exist.
+            # Both legacy snapshots have to exist too, since they are absent on records written with
+            # CHANGELOG_LEGACY_OBJECT_DATA off.
+            if (
+                prior_change is not None
+                and (self.object_data_v2 is None or prior_change.object_data_v2 is None)
+                and self.object_data is not None
+                and prior_change.object_data is not None
+            ):
                 prechange = prior_change.object_data
                 postchange = self.object_data
             diff_added = shallow_compare_dict(prechange, postchange, exclude=["last_updated"])
