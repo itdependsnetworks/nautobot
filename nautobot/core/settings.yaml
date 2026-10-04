@@ -534,6 +534,25 @@ properties:
     is_constance_config: false
     type: "boolean"
     version_added: "3.3.0"
+  CHANGELOG_ARCHIVE_PERIOD:
+    default: "year"
+    description: >-
+      How retained history is divided into periods, each with its own table. A record's own timestamp
+      decides which period it is written to. A period is the unit retained history can be discarded in,
+      so `unbounded`, one period for everything, is the setting under which the archive only ever grows.
+      One setting applies to the whole archive, and changing it does not reshape the periods that already
+      exist, so set it before enabling retention.
+    enum:
+    - "unbounded"
+    - "year"
+    - "quarter"
+    - "month"
+    environment_variable: "NAUTOBOT_CHANGELOG_ARCHIVE_PERIOD"
+    is_constance_config: false
+    see_also:
+      "Changing the period granularity": "../../platform-functionality/change-logging.md#changing-the-period-granularity"
+    type: "string"
+    version_added: "3.3.0"
   CHANGELOG_LEGACY_OBJECT_DATA:
     default: true
     description: >-

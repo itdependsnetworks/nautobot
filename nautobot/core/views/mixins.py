@@ -687,11 +687,13 @@ class NautobotViewSetMixin(GenericViewSet, UIComponentsMixin, AccessMixin, GetRe
     @staticmethod
     def _is_archive_mirror(model):
         """Whether `model` is a retained-history model, and so is gated by the cold-storage permission instead."""
+        from nautobot.extras.models.archive import archive_base_of
         from nautobot.extras.registry import registry
 
         # Getting this wrong is silent: `restrict` on a model that declares no permissions returns an
-        # empty queryset instead of raising.
-        return model in registry["changelog_archive_models"].values()
+        # empty queryset instead of raising. Through `archive_base_of`, because a period of retained history is
+        # a generated class the registry holds under no key.
+        return archive_base_of(model) in registry["changelog_archive_models"].values()
 
     def get_action(self):
         """Helper method for retrieving action and if action not set defaulting to action name."""

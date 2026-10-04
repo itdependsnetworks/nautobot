@@ -592,6 +592,23 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
 # from the UI. Changing it requires a restart.
 CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))
 
+# How retained history is divided into periods: `unbounded`, `year`, `quarter`, or `month`. A record's own
+# timestamp decides which period it is written to.
+#
+# Yearly by default. A period is the unit retained history can be discarded in -- `DROP TABLE` returns a
+# period's disk at once, where deleting rows returns none -- so `unbounded`, one period for everything,
+# is the setting under which the archive only ever grows. That is the problem retention exists to
+# address, which makes it the wrong default even though it is the simplest arrangement.
+#
+# One granularity applies at a time, and this describes the whole archive, not the period written next.
+# Changing it does not reshape periods that already exist: an installation switching from `year` to
+# `month` keeps its year-long tables and writes month-long ones from then on, until an administrator
+# splits the old tables by hand. `change-logging.md` has the SQL for that.
+#
+# Deliberately not a Constance setting, for the same reason as the line above: the consequence of the
+# change outlives the change, and a restart is the point at which somebody reads the documentation.
+CHANGELOG_ARCHIVE_PERIOD = os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_PERIOD", "year")
+
 
 # The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
 # alongside `job_logs`.

@@ -1790,7 +1790,7 @@ class RoleFilterSet(NautobotFilterSet):
 #
 # Declared against the mirrors rather than derived from the warm filtersets, which would spend their
 # effort discovering which warm filters no longer resolve against an identifier column and removing
-# them. `period_key` is absent: the period is which storage a read opens, not a column to filter on.
+# them. `period_key` is absent: the period is which table a read opens, not a column to filter on.
 #
 # The cost is that a filter added to a warm filterset does not appear here until someone adds it.
 # `check_changelog_archive_schema` reports diverging fields, not filters.
@@ -1941,6 +1941,12 @@ def archive_filterset_for(mirror_model):
     """
     The filterset to apply within a retained period, or None if the mirror has none.
 
-    Keyed on the declared mirror, because the filterset describes the shape of retained history.
+    Keyed on the declared mirror, because the filterset describes the shape of retained history and every
+    period shares that shape. A read passing a per-period class resolves to the same key through
+    `archive_base_of`: a period model's own label is `extras.archivedobjectchange2024`, which is in this map
+    under no key, and looking it up directly would answer "this has no filterset" for a model that has
+    exactly the one its mirror has.
     """
-    return ARCHIVE_FILTERSETS.get(mirror_model._meta.label_lower)
+    from nautobot.extras.models.archive import archive_base_of
+
+    return ARCHIVE_FILTERSETS.get(archive_base_of(mirror_model)._meta.label_lower)

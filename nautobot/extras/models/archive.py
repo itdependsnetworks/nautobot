@@ -2,21 +2,28 @@
 Long-term retention of change and job history.
 
 Warm storage is the live `ObjectChange`, `JobResult`, `JobLogEntry` and `JobConsoleEntry` tables. The
-`Archived*` models here mirror them, one table each, with an `ArchiveSegment` row per (model, period).
-A read resolves against warm storage or against retained history, never both in one query, so ordering
-and pagination behave as they do warm.
+`Archived*` models here mirror them, one table per calendar period, with an `ArchiveSegment` row per
+(model, period). A record's own timestamp picks its period, and a read resolves against warm storage or
+exactly one period, so ordering and pagination behave as they do warm.
 
 The mirrors declare foreign keys as bare identifier columns, because real ones would couple retained
 rows to live records and block truncation. `ChangelogArchiveIntegrityCheck` stands in for CASCADE and
 PROTECT, and `check_changelog_archive_schema` for what migrations provided.
 """
 
+import calendar
+from datetime import datetime
+
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 
 from nautobot.core.celery import NautobotKombuJSONEncoder
-from nautobot.core.constants import CHARFIELD_MAX_LENGTH
+from nautobot.core.constants import (  # noqa: F401  # CHANGELOG_ARCHIVE re-exported
+    CHANGELOG_ARCHIVE,
+    CHARFIELD_MAX_LENGTH,
+    COLD_STORAGE_PERMISSION,
+)
 from nautobot.core.models import BaseModel
 from nautobot.extras.choices import (
     JobCancelTypeChoices,
@@ -39,14 +46,14 @@ from nautobot.extras.models.change_logging import ObjectChangeSnapshotsMixin
 from nautobot.extras.models.customfields import CustomFieldModel
 
 
-def build_mirror_instance(warm_object, mirror_model):
+def build_mirror_instance(warm_object, mirror_model, period_key):
     """
     Build an unsaved mirror instance with every retained field of `warm_object`.
 
     The primary key is copied unchanged, which is what makes rotation idempotent. A field present only on
     the mirror raises instead of taking a default, `user_name` below being the one exception.
     """
-    values = {"id": warm_object.pk, "period_key": CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD}
+    values = {"id": warm_object.pk, "period_key": period_key}
     for field in mirror_model._meta.fields:
         name = field.name
         if name in ("id", "period_key"):
@@ -68,15 +75,29 @@ def build_mirror_instance(warm_object, mirror_model):
     return mirror_model(**values)
 
 
-def archive_model_for(model):
+def archive_model_for(model, period_key=None):
     """
     The retention mirror for `model`'s history, or None if `model` has none.
 
-    Takes the warm model: `archive_model_for(ObjectChange)` is `ArchivedObjectChange`.
+    Takes the warm model: `archive_model_for(ObjectChange, "2024")` is the class for that year's table.
+    Without a period it is the declared mirror, which is the unbounded period.
     """
     from nautobot.extras.registry import registry
 
-    return registry["changelog_archive_models"].get(model._meta.label_lower)
+    mirror = registry["changelog_archive_models"].get(model._meta.label_lower)
+    if mirror is None or period_key is None:
+        return mirror
+    return period_model_for(mirror, period_key)
+
+
+def archive_base_of(model):
+    """
+    The declared mirror `model` stands for: itself, or the mirror a period model was generated from.
+
+    Every lookup keyed on a model class goes through this, because a period model is a different class and
+    compares equal to nothing. Getting it wrong is silent wherever the answer picks a database.
+    """
+    return getattr(model, "archive_base", model)
 
 
 def warm_model_for(model):
@@ -89,7 +110,8 @@ def warm_model_for(model):
 
     from nautobot.extras.registry import registry
 
-    label = next((warm for warm, mirror in registry["changelog_archive_models"].items() if mirror is model), None)
+    declared = archive_base_of(model)
+    label = next((warm for warm, mirror in registry["changelog_archive_models"].items() if mirror is declared), None)
     return apps.get_model(label) if label else None
 
 
@@ -217,6 +239,10 @@ class ArchivedRecord(BaseModel):
     hide_in_diff_view = True
     natural_key_field_names = ["id"]
 
+    # The period this model's table holds, overridden by `period_model_for` on each generated class, so
+    # a model handed around can say where it came from. The mirrors are the unbounded period.
+    period_key_value = CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD
+
     def __getattr__(self, name):
         """
         Resolve a demoted relation to None rather than raising.
@@ -236,7 +262,8 @@ class ArchivedRecord(BaseModel):
     # Retained records have their own pages, so these are the archived routes, not the warm ones. A
     # mirror with no page is absent, and `get_absolute_url` returns None so a linkified column renders
     # plain text instead of failing the row.
-    # A retained record opens at the URL it had before rotation.
+    # Keyed on the declared mirror: the route belongs to the kind of record, not to the period, and a
+    # retained record opens at the URL it had before rotation.
     DETAIL_ROUTES = {
         "extras.archivedobjectchange": "extras:objectchange",
         "extras.archivedjobresult": "extras:jobresult",
@@ -250,7 +277,7 @@ class ArchivedRecord(BaseModel):
         """
         from django.urls import NoReverseMatch, reverse
 
-        route = self.DETAIL_ROUTES.get(type(self)._meta.label_lower)
+        route = self.DETAIL_ROUTES.get(archive_base_of(type(self))._meta.label_lower)
         if route is None or api:
             return None
         try:
@@ -269,8 +296,8 @@ class ArchivedObjectChangeBase(ObjectChangeSnapshotsMixin, ArchivedRecord):
     """
     Every field and method of a retained `extras.ObjectChange`, shared by each period's table.
 
-    Abstract so a class per calendar period can be generated from it later. `ArchivedObjectChange` below
-    is the unbounded period, and the model the table, filterset, views and serializer declare.
+    Abstract so `period_model_for` can generate a class per calendar period from it. `ArchivedObjectChange`
+    below is the unbounded period, and the model the table, filterset, views and serializer declare.
     """
 
     time = models.DateTimeField(editable=False, db_index=True)
@@ -365,6 +392,8 @@ class ArchivedObjectChangeBase(ObjectChangeSnapshotsMixin, ArchivedRecord):
 
 class ArchivedObjectChange(ArchivedObjectChangeBase):
     """Retained mirror of `extras.ObjectChange`: the unbounded period's table."""
+
+    period_base = ArchivedObjectChangeBase
 
     class Meta(ArchivedObjectChangeBase.Meta):
         db_table = "extras_archivedobjectchange_unbounded"
@@ -472,12 +501,16 @@ class ArchivedJobResultBase(ArchivedRecord, CustomFieldModel):
         The warm model uses a reverse foreign key, which the mirrors do not have. Matching on the stored
         identifier gives the same answer, rotation moving children before parents.
         """
-        return ArchivedJobLogEntry.objects.filter(job_result_id=self.pk)
+
+        # This result's own period: a run's log and console entries belong to the same period the
+        # result is, because they share its timestamp.
+        return period_model_for(ArchivedJobLogEntry, self.period_key).objects.filter(job_result_id=self.pk)
 
     @property
     def job_console_entries(self):
         """This result's retained console output. See `job_log_entries`."""
-        return ArchivedJobConsoleEntry.objects.filter(job_result_id=self.pk)
+
+        return period_model_for(ArchivedJobConsoleEntry, self.period_key).objects.filter(job_result_id=self.pk)
 
     @property
     def queue(self):
@@ -524,6 +557,8 @@ class ArchivedJobResultBase(ArchivedRecord, CustomFieldModel):
 class ArchivedJobResult(ArchivedJobResultBase):
     """Retained mirror of `extras.JobResult`: the unbounded period's table."""
 
+    period_base = ArchivedJobResultBase
+
     class Meta(ArchivedJobResultBase.Meta):
         db_table = "extras_archivedjobresult_unbounded"
 
@@ -565,6 +600,8 @@ class ArchivedJobLogEntryBase(ArchivedRecord):
 class ArchivedJobLogEntry(ArchivedJobLogEntryBase):
     """Retained mirror of `extras.JobLogEntry`: the unbounded period's table."""
 
+    period_base = ArchivedJobLogEntryBase
+
     class Meta(ArchivedJobLogEntryBase.Meta):
         db_table = "extras_archivedjoblogentry_unbounded"
 
@@ -605,5 +642,222 @@ class ArchivedJobConsoleEntryBase(ArchivedRecord):
 class ArchivedJobConsoleEntry(ArchivedJobConsoleEntryBase):
     """Retained mirror of `extras.JobConsoleEntry`: the unbounded period's table."""
 
+    period_base = ArchivedJobConsoleEntryBase
+
     class Meta(ArchivedJobConsoleEntryBase.Meta):
         db_table = "extras_archivedjobconsoleentry_unbounded"
+
+
+# One concrete class per (mirror, period key), built on first use and reused after. Keyed on the mirror
+# class itself, so two record types never share an entry.
+_PERIOD_MODELS = {}
+
+
+#
+# Calendar periods. Everything below divides retained history by time: which period a record
+# belongs to, what that period covers, and the per-period class and table that hold it.
+#
+
+
+def period_key_for(timestamp, granularity=None):
+    """
+    The period key a record with this timestamp is written under.
+
+    The single definition of how records are assigned to periods, so rotation and truncation cannot
+    disagree about where a record went. `granularity` defaults to `CHANGELOG_ARCHIVE_PERIOD`.
+    """
+    from django.conf import settings
+
+    from nautobot.extras.choices import ChangelogArchivePeriodChoices
+
+    if granularity is None:
+        granularity = getattr(settings, "CHANGELOG_ARCHIVE_PERIOD", ChangelogArchivePeriodChoices.PERIOD_UNBOUNDED)
+    if granularity == ChangelogArchivePeriodChoices.PERIOD_UNBOUNDED:
+        return CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD
+    if granularity == ChangelogArchivePeriodChoices.PERIOD_MONTH:
+        return f"{timestamp.year}-{timestamp.month:02d}"
+    if granularity == ChangelogArchivePeriodChoices.PERIOD_QUARTER:
+        return f"{timestamp.year}-Q{(timestamp.month - 1) // 3 + 1}"
+    return str(timestamp.year)
+
+
+def period_bounds_for(period_key):
+    """
+    The inclusive start and exclusive end of a period, as timezone-aware datetimes.
+
+    Inverse of `period_key_for`. The unbounded period returns `(None, None)`, so every caller has to
+    handle it; a sentinel date would compare against a date no record was written under.
+    """
+    from django.utils import timezone
+
+    if period_key == CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD:
+        return None, None
+
+    tz = timezone.get_current_timezone()
+
+    def _at(year, month):
+        return datetime(year, month, 1, tzinfo=tz)
+
+    if "-Q" in period_key:
+        year, quarter = (int(part) for part in period_key.split("-Q"))
+        start_month = (quarter - 1) * 3 + 1
+        end_year, end_month = (year + 1, 1) if quarter == 4 else (year, start_month + 3)
+        return _at(year, start_month), _at(end_year, end_month)
+    if "-" in period_key:
+        year, month = (int(part) for part in period_key.split("-"))
+        end_year, end_month = (year + 1, 1) if month == 12 else (year, month + 1)
+        return _at(year, month), _at(end_year, end_month)
+    year = int(period_key)
+    return _at(year, 1), _at(year + 1, 1)
+
+
+def period_label_for(period_key):
+    """The name a period is listed under, for a reader choosing one."""
+    if period_key == CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD:
+        return "All time"
+    if "-Q" in period_key:
+        year, quarter = period_key.split("-Q")
+        return f"{year} Q{quarter}"
+    if "-" in period_key:
+        year, month = period_key.split("-")
+        return f"{calendar.month_name[int(month)]} {year}"
+    return period_key
+
+
+def period_table_name(mirror, period_key):
+    """
+    The table one period of `mirror` is stored in.
+
+    Built from the app label and model name, so the unbounded period resolves to the table migration 0149
+    created; `test_changelog_archive_periods` pins that. `2024-Q3` becomes `2024_q3`.
+    """
+    suffix = period_key.lower().replace("-", "_")
+    return f"{mirror._meta.app_label}_{mirror._meta.model_name}_{suffix}"
+
+
+def period_model_for(mirror, period_key):
+    """
+    The concrete model that reads and writes one period of `mirror`.
+
+    The unbounded period is `mirror` itself. Every other period is generated from `mirror.period_base`,
+    differing only in `db_table`, and taken out of the app registry by `_unregister`. All of them inherit
+    the same fields, which is what lets one table and one filterset serve every period.
+    """
+    if period_key == CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD:
+        return mirror
+    cached = _PERIOD_MODELS.get((mirror, period_key))
+    if cached is not None:
+        return cached
+    base = mirror.period_base
+    meta = type("Meta", (base.Meta,), {"db_table": period_table_name(mirror, period_key)})
+    model = type(
+        f"{mirror.__name__}{''.join(c for c in period_key.title() if c.isalnum())}",
+        (base,),
+        {
+            "__module__": mirror.__module__,
+            "Meta": meta,
+            "archive_base": mirror,
+            "period_key_value": period_key,
+        },
+    )
+    _unregister(model)
+    _PERIOD_MODELS[(mirror, period_key)] = model
+    return model
+
+
+def _unregister(model):
+    """
+    Take a period model back out of Django's app registry.
+
+    Defining a concrete model registers it, and `apps.get_models()` decides global search, the
+    searchable-fields artifact, and what `makemigrations` writes migrations for. Safe because
+    `period_model_for` is the only way to reach a period model.
+    """
+    from django.apps import apps
+
+    apps.all_models[model._meta.app_label].pop(model._meta.model_name, None)
+    apps.clear_cache()
+
+
+def period_table_exists(mirror, period_key, using=CHANGELOG_ARCHIVE):
+    """Whether this period's table has been created on `using`."""
+    from django.db import connections
+
+    connection = connections[using]
+    with connection.cursor() as cursor:
+        return period_table_name(mirror, period_key) in connection.introspection.table_names(cursor)
+
+
+def ensure_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Create this period's table if it does not exist yet, and return its model.
+
+    The unbounded period's table comes from migration 0149, so for that period this creates nothing.
+    """
+    from django.db import connections
+
+    model = period_model_for(mirror, period_key)
+    if period_table_exists(mirror, period_key, using=using):
+        return model
+    with connections[using].schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    return model
+
+
+def ensure_period(period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Open a period by creating every covered model's table for it, and return them.
+
+    A period is one unit. Creating them lazily leaves a period whose console table does not exist, and
+    reading a retained result's console tab then raises instead of showing an empty one.
+    """
+    from nautobot.extras.registry import registry
+
+    return {
+        label: ensure_period_table(mirror, period_key, using=using)
+        for label, mirror in registry["changelog_archive_models"].items()
+    }
+
+
+def drop_period_table(mirror, period_key, using=CHANGELOG_ARCHIVE):
+    """
+    Drop a whole period's table.
+
+    This is what the arrangement buys: `DROP TABLE` returns the space at once, where deleting the rows
+    leaves the table as large as it was.
+    """
+    from django.db import connections
+
+    if not period_table_exists(mirror, period_key, using=using):
+        return False
+    with connections[using].schema_editor() as schema_editor:
+        schema_editor.delete_model(period_model_for(mirror, period_key))
+    return True
+
+
+def period_models_for(mirror):
+    """
+    Every period of `mirror` holding retained history, newest first and the unbounded period last.
+
+    Anything sweeping retained history iterates this; `mirror.objects` alone reads the unbounded table.
+    That period is always included, which spares an upgrade from the single-period release a data
+    migration.
+
+    A period whose table is gone is left out, because querying it raises `UndefinedTable` and aborts the
+    sweep. Introspection is skipped when the unbounded period is the only one.
+    """
+    from django.db import connections
+
+    warm = warm_model_for(mirror)
+    keys = (
+        ArchiveSegment.objects.filter(model_label=warm._meta.label_lower)
+        .exclude(period_key=CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD)
+        .values_list("period_key", flat=True)
+    )
+    models_for_periods = [period_model_for(mirror, key) for key in keys]
+    if not models_for_periods:
+        return [mirror]
+    connection = connections[CHANGELOG_ARCHIVE]
+    with connection.cursor() as cursor:
+        existing = set(connection.introspection.table_names(cursor))
+    return [model for model in models_for_periods if model._meta.db_table in existing] + [mirror]

@@ -2,8 +2,8 @@
 Resolving a read against one period of retained history.
 
 The storage side is defined in `nautobot.extras.models.archive`; this is everything a request goes through to
-land on it. A read resolves against warm storage or against retained history, never both, which is what
-keeps ordering and pagination behaving as they do for a warm read.
+land on it. A read resolves against warm storage or against exactly one retained period, never both and
+never several, which is what keeps ordering and pagination behaving as they do for a warm read.
 
 Kept apart from the models so the read path can be followed without reading six model definitions first,
 and so a caller that only needs to resolve a period does not import the mirrors to get it.
@@ -72,11 +72,12 @@ def get_archive_queryset(model, period_key, user):
     """
     from django.core.exceptions import ValidationError
 
-    get_archive_segment(model, period_key, user)
-    mirror = archive_model_for(model)
+    segment = get_archive_segment(model, period_key, user)
+    mirror = archive_model_for(model, segment.period_key)
     if mirror is None:
         raise ValidationError(f"{model._meta.verbose_name} does not support archived history.")
-    # `period_key` stays on the row so reconciliation can find a record written to the wrong period.
+    # No period filter: the table is the period. `period_key` stays on the row so reconciliation can
+    # still find a record written to the wrong one.
     return mirror.objects.all()
 
 

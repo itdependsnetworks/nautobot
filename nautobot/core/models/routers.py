@@ -14,12 +14,15 @@ class ChangelogArchiveRouter:
     """
 
     def _is_archive_model(self, model):
-        """Whether `model` is a registered retention mirror."""
+        """Whether `model` is a registered retention mirror, or a period of one."""
         # Imported lazily: the registry is populated during app loading, and this module is imported from
         # settings before that finishes.
+        from nautobot.extras.models.archive import archive_base_of
         from nautobot.extras.registry import registry
 
-        return model in registry["changelog_archive_models"].values()
+        # Through `archive_base_of`: a period model is a generated class the registry holds under no key,
+        # and answering "no" would route its reads to `default`, where its table does not exist.
+        return archive_base_of(model) in registry["changelog_archive_models"].values()
 
     def db_for_read(self, model, **hints):
         return CHANGELOG_ARCHIVE if self._is_archive_model(model) else None

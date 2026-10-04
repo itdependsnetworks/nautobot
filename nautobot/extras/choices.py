@@ -7,6 +7,32 @@ from nautobot.core.choices import ChoiceSet
 #
 
 
+class ChangelogArchivePeriodChoices(ChoiceSet):
+    """
+    How retained history is divided into periods.
+
+    The calendar granularities divide retained history by the timestamp each record carries, which is what
+    makes a period droppable: `DROP TABLE` on a period's table returns its disk, where deleting rows
+    returns none.
+
+    `unbounded` is one period for everything, and is the default. It is also the period an installation
+    that later adopts calendar periods keeps beside the new ones. It holds the history written before the
+    change, and nothing has to be migrated for it to go on being readable.
+    """
+
+    PERIOD_UNBOUNDED = "unbounded"
+    PERIOD_YEAR = "year"
+    PERIOD_QUARTER = "quarter"
+    PERIOD_MONTH = "month"
+
+    CHOICES = (
+        (PERIOD_UNBOUNDED, "All time"),
+        (PERIOD_YEAR, "Year"),
+        (PERIOD_QUARTER, "Quarter"),
+        (PERIOD_MONTH, "Month"),
+    )
+
+
 class RetentionRuleModeChoices(ChoiceSet):
     """Whether a retention rule selects records for deletion or protects them from it."""
 

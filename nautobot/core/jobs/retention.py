@@ -238,7 +238,11 @@ class ChangelogRotation(Job):
         run resolves. It cannot be one transaction: the two sides are different connections.
         """
         pks = [warm_object.pk for warm_object in batch]
-        instances = [build_mirror_instance(warm_object, mirror) for warm_object in batch]
+        # PLACEHOLDER: everything still goes to the unbounded period. ABSTRACT-2 files each record under
+        # the period its own timestamp falls in.
+        instances = [
+            build_mirror_instance(warm_object, mirror, CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD) for warm_object in batch
+        ]
         mirror.objects.bulk_create(instances, ignore_conflicts=True)
         archived = set(mirror.objects.filter(pk__in=pks).values_list("pk", flat=True))
         if len(archived) != len(pks):
