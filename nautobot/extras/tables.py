@@ -59,6 +59,7 @@ from .models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -956,6 +957,19 @@ class StaticGroupAssociationTable(BaseTable):
         model = StaticGroupAssociation
         fields = ["pk", "dynamic_group", "associated_object", "actions"]
         default_columns = ["pk", "dynamic_group", "associated_object", "actions"]
+
+
+class RetentionRuleTable(BaseTable):
+    pk = ToggleColumn()
+    name = tables.Column(linkify=True)
+    content_type = tables.Column(verbose_name="Object Type")
+    mode = ChoiceFieldColumn()
+    enabled = BooleanColumn()
+
+    class Meta(BaseTable.Meta):
+        model = RetentionRule
+        fields = ("pk", "name", "content_type", "mode", "max_age_days", "weight", "enabled", "description")
+        default_columns = ("pk", "name", "content_type", "mode", "max_age_days", "enabled")
 
 
 class ExportTemplateTable(BaseTable):

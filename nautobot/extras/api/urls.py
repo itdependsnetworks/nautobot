@@ -97,6 +97,7 @@ router.register("object-metadata", views.ObjectMetadataViewSet)
 router.register("notes", views.NoteViewSet)
 
 # Change logging
+router.register("retention-rules", views.RetentionRuleViewSet)
 router.register("object-changes", views.ObjectChangeViewSet)
 
 # Relationships

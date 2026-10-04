@@ -43,6 +43,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
 )
 from nautobot.extras.constants import (
+    CHANGELOG_ARCHIVE_COVERED_MODELS,
     CHANGELOG_MAX_CHANGE_CONTEXT_DETAIL,
     EXTRAS_FEATURES,
     JOB_MAX_NAME_LENGTH,
@@ -125,6 +126,20 @@ class FeaturedQueryMixin:
 
     def get_choices(self):
         return [(f"{ct.app_label}.{ct.model}", ct.pk) for ct in self.as_queryset()]
+
+
+@deconstructible
+class ChangelogArchiveCoveredModelsQuery(FeaturedQueryMixin):
+    """
+    Helper class to get ContentTypes of the models changelog long-term retention covers.
+
+    Derived from `CHANGELOG_ARCHIVE_COVERED_MODELS`, so the retention rule form, its filter, and the
+    advanced filter's field lookup cannot drift from the set the rotation and truncation jobs act on.
+    """
+
+    def list_subclasses(self):
+        """The covered models themselves, named by the constant the jobs read."""
+        return [apps.get_model(label) for label in CHANGELOG_ARCHIVE_COVERED_MODELS]
 
 
 @deconstructible

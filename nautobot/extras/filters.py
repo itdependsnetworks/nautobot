@@ -97,6 +97,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -111,6 +112,7 @@ from nautobot.extras.models import (
     Webhook,
 )
 from nautobot.extras.utils import (
+    ChangelogArchiveCoveredModelsQuery,
     ChangeLoggedModelsQuery,
     FeatureQuery,
     get_pending_approval_workflow_stages,
@@ -937,6 +939,28 @@ class StaticGroupAssociationFilterSet(NautobotFilterSet):
 #
 # Export Templates
 #
+
+
+class RetentionRuleFilterSet(NautobotFilterSet):
+    q = SearchFilter(
+        filter_predicates={
+            "name": "icontains",
+            "description": "icontains",
+            "content_type__app_label": "icontains",
+            "content_type__model": "icontains",
+        },
+    )
+    # Multi-value and OR-joined: the filter form offers several object types, and a rule has exactly one,
+    # so the default conjoined behaviour would AND them and match nothing.
+    content_type = ContentTypeMultipleChoiceFilter(
+        choices=ChangelogArchiveCoveredModelsQuery().get_choices,
+        conjoined=False,
+        label="Object Type",
+    )
+
+    class Meta:
+        model = RetentionRule
+        fields = ["id", "name", "description", "enabled", "content_type", "mode", "max_age_days", "weight"]
 
 
 class ExportTemplateFilterSet(BaseFilterSet):

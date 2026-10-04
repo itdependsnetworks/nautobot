@@ -1,6 +1,14 @@
 # Webhook content types
 HTTP_CONTENT_TYPE_JSON = "application/json"
 
+# Models whose history changelog long-term retention covers.
+CHANGELOG_ARCHIVE_COVERED_MODELS = (
+    "extras.objectchange",
+    "extras.jobresult",
+    "extras.joblogentry",
+    "extras.jobconsoleentry",
+)
+
 # Registerable extras features
 EXTRAS_FEATURES = [
     "cable_terminations",

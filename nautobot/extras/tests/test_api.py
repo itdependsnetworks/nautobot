@@ -53,6 +53,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     ObjectChangeEventContextChoices,
     RelationshipTypeChoices,
+    RetentionRuleModeChoices,
     SecretsGroupAccessTypeChoices,
     SecretsGroupSecretTypeChoices,
     WebhookHttpMethodChoices,
@@ -92,6 +93,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -5129,6 +5131,47 @@ class NoteTest(APIViewTestCases.APIViewTestCase):
             assigned_object_type=self.location_ct,
             assigned_object_id=self.location1.pk,
         )
+
+
+class RetentionRuleTest(APIViewTestCases.APIViewTestCase):
+    model = RetentionRule
+    choices_fields = ["content_type", "mode"]
+    bulk_update_data = {"enabled": False, "description": "Bulk updated"}
+
+    @classmethod
+    def setUpTestData(cls):
+        content_type = ContentType.objects.get_for_model(ObjectChange)
+        RetentionRule.objects.create(
+            name="Rule 1", content_type=content_type, scope_filter={"action": ["delete"]}, max_age_days=30
+        )
+        RetentionRule.objects.create(name="Rule 2", content_type=content_type, max_age_days=60)
+        RetentionRule.objects.create(
+            name="Rule 3",
+            content_type=content_type,
+            mode=RetentionRuleModeChoices.MODE_EXCLUDE,
+            scope_filter={"user_name": ["admin"]},
+        )
+        cls.create_data = [
+            {
+                "name": "Rule 4",
+                "content_type": "extras.objectchange",
+                "scope_filter": {"action": ["create"]},
+                "max_age_days": 90,
+            },
+            {
+                "name": "Rule 5",
+                "content_type": "extras.jobresult",
+                "mode": RetentionRuleModeChoices.MODE_EXCLUDE,
+                "scope_filter": {"status": [JobResultStatusChoices.STATUS_FAILURE]},
+            },
+            {
+                "name": "Rule 6",
+                "content_type": "extras.joblogentry",
+                "max_age_days": 7,
+                "weight": 50,
+            },
+        ]
+        cls.update_data = {"name": "Renamed rule", "description": "Updated", "enabled": False}
 
 
 class ObjectChangeTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):

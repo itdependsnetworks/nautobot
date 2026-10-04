@@ -3,6 +3,29 @@ from celery import states
 from nautobot.core.choices import ChoiceSet
 
 #
+# Changelog long-term retention
+#
+
+
+class RetentionRuleModeChoices(ChoiceSet):
+    """Whether a retention rule selects records for deletion or protects them from it."""
+
+    MODE_INCLUDE = "include"
+    MODE_EXCLUDE = "exclude"
+
+    CHOICES = (
+        (MODE_INCLUDE, "Include (select for deletion)"),
+        (MODE_EXCLUDE, "Exclude (protect from deletion)"),
+    )
+    # An include rule selects records to delete; an exclude rule protects them. Worth telling apart at a
+    # glance in a list, since the two have opposite consequences.
+    CSS_CLASSES = {
+        MODE_INCLUDE: "danger",
+        MODE_EXCLUDE: "success",
+    }
+
+
+#
 # Approval Workflows
 #
 

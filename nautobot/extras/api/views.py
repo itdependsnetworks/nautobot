@@ -80,6 +80,7 @@ from nautobot.extras.models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -1467,6 +1468,14 @@ class NoteViewSet(ModelViewSet):
 #
 # Change logging
 #
+
+
+class RetentionRuleViewSet(NautobotModelViewSet):
+    """Manage the filter rules that drive changelog truncation."""
+
+    queryset = RetentionRule.objects.select_related("content_type")
+    serializer_class = serializers.RetentionRuleSerializer
+    filterset_class = filters.RetentionRuleFilterSet
 
 
 class ObjectChangeViewSet(ReadOnlyModelViewSet):
