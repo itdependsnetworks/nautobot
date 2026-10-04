@@ -1020,6 +1020,12 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
                 self.hide_hierarchy_ui = True
         return queryset
 
+    def get_archive_context(self, queryset):
+        """Context for the period selector, empty-but-present when there is nothing to offer."""
+        from nautobot.extras.archive_reads import archive_context
+
+        return archive_context(queryset.model, self.request)
+
     def _apply_archive_period(self, queryset):
         """
         The queryset for one retained-history period, or None when the request names no period.
@@ -1138,9 +1144,11 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
             if global_saved_view:
                 return redirect(reverse("extras:savedview", kwargs={"pk": global_saved_view.pk}))
 
-        response = Response(
-            {"user_default_saved_view": user_default_saved_view, "global_saved_view": global_saved_view}
-        )
+        context = {"user_default_saved_view": user_default_saved_view, "global_saved_view": global_saved_view}
+        # Empty-but-present keys when there is nothing to offer, so the template includes the period
+        # selector unconditionally.
+        context.update(self.get_archive_context(self.get_queryset()))
+        response = Response(context)
         patch_vary_headers(response, ["HX-Request"])
         return response
 
@@ -1729,11 +1737,17 @@ class ObjectChangeLogViewMixin(NautobotViewSetMixin):
         detail=True, custom_view_base_action="view", custom_view_additional_permissions=["extras.view_objectchange"]
     )
     def changelog(self, request, *args, **kwargs):
+        from nautobot.extras.archive_reads import archive_context
+        from nautobot.extras.models import ObjectChange
+
         model = self.get_queryset().model
         data = {
             "base_template": get_base_template(self.base_template, model),
             "active_tab": "changelog",
         }
+        # The selector on an object's changelog tab offers ObjectChange periods, not periods of the object's
+        # own model, which has no retained history of its own.
+        data.update(archive_context(ObjectChange, request, show_counts=False))
         return Response(data)
 
 

@@ -15,6 +15,8 @@ from django.urls import reverse
 
 from nautobot.core.testing import APITestCase, TestCase
 from nautobot.extras.archive_reads import (
+    get_archive_freshness,
+    get_archive_periods,
     get_archive_queryset,
     requested_archive_period,
     user_can_read_archive,
@@ -54,6 +56,26 @@ class ArchiveReadHelperTestCase(ArchiveReadFixtureMixin, TestCase):
         self.grant_cold_storage()
         self.assertTrue(user_can_read_archive(self.user))
 
+    def test_periods_are_hidden_without_the_permission(self):
+        """The selector offers nothing, so a caller renders it from this alone."""
+        self.build_period()
+        self.assertEqual(list(get_archive_periods(ObjectChange, self.user)), [])
+
+    def test_periods_are_listed_with_the_permission(self):
+        self.build_period(period_key="2020")
+        self.build_period(period_key="2021")
+        self.grant_cold_storage()
+
+        periods = get_archive_periods(ObjectChange, self.user)
+
+        self.assertEqual([segment.period_key for segment in periods], ["2021", "2020"], "newest first")
+
+    @override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
+    def test_periods_are_hidden_when_the_capability_is_off(self):
+        self.build_period()
+        self.grant_cold_storage()
+        self.assertEqual(list(get_archive_periods(ObjectChange, self.user)), [])
+
     def test_reading_without_the_permission_is_denied(self):
         self.build_period()
         with self.assertRaises(PermissionDenied):
@@ -64,11 +86,31 @@ class ArchiveReadHelperTestCase(ArchiveReadFixtureMixin, TestCase):
         with self.assertRaises(ValidationError):
             get_archive_queryset(ObjectChange, "1999", self.user)
 
+    def test_reading_a_period_returns_only_that_period(self):
+        self.build_period(period_key="2020", rows=2)
+        self.build_period(period_key="2021", rows=3)
+        self.grant_cold_storage()
+
+        self.assertEqual(get_archive_queryset(ObjectChange, "2020", self.user).count(), 2)
+        self.assertEqual(get_archive_queryset(ObjectChange, "2021", self.user).count(), 3)
+
+    def test_freshness_reports_a_closed_period_as_complete(self):
+        segment = self.build_period(closed=True)
+        freshness = get_archive_freshness(segment)
+        self.assertTrue(freshness["is_period_closed"])
+        self.assertEqual(freshness["period_label"], PERIOD)
+
+    def test_freshness_reports_an_open_period_with_its_progress(self):
+        segment = self.build_period(closed=False)
+        freshness = get_archive_freshness(segment)
+        self.assertFalse(freshness["is_period_closed"])
+        self.assertIsNotNone(freshness["last_rotated_time"])
+
     def test_requested_period_reads_the_query_parameter(self):
         class _Request:
-            GET = {"archive_period": PERIOD}
+            GET = {"archive_period": "2021"}
 
-        self.assertEqual(requested_archive_period(_Request()), PERIOD)
+        self.assertEqual(requested_archive_period(_Request()), "2021")
         self.assertIsNone(requested_archive_period(None))
 
         class _Empty:
@@ -186,10 +228,13 @@ class ArchivedRecordsAreReadOnlyTestCase(ArchiveReadFixtureMixin, TestCase):
         self.user.is_superuser = True
         self.user.save()
         self.client.force_login(self.user)
+        segment_start = datetime(int(PERIOD), 1, 1, tzinfo=dt_timezone.utc)
         ArchiveSegment.objects.create(
             model_label="extras.jobresult",
             period_key=PERIOD,
             label=PERIOD,
+            time_start=segment_start,
+            time_end=datetime(int(PERIOD) + 1, 1, 1, tzinfo=dt_timezone.utc),
             row_count=1,
             is_period_closed=True,
         )
@@ -197,7 +242,7 @@ class ArchivedRecordsAreReadOnlyTestCase(ArchiveReadFixtureMixin, TestCase):
             id=uuid.uuid4(),
             period_key=PERIOD,
             name="Archived Run",
-            date_created=datetime(2021, 6, 1, tzinfo=dt_timezone.utc),
+            date_created=datetime(int(PERIOD), 6, 1, tzinfo=dt_timezone.utc),
             status=JobResultStatusChoices.STATUS_SUCCESS,
         )
 

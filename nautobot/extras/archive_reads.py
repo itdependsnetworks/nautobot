@@ -9,6 +9,7 @@ Kept apart from the models so the read path can be followed without reading six 
 and so a caller that only needs to resolve a period does not import the mirrors to get it.
 """
 
+from django.conf import settings
 from django.db import models
 
 from nautobot.core.constants import COLD_STORAGE_PERMISSION
@@ -45,6 +46,23 @@ def user_can_read_archive(user):
     return bool(user and user.is_authenticated and user.has_perm(COLD_STORAGE_PERMISSION))
 
 
+def get_archive_periods(model, user):
+    """
+    The periods offered in the period selector for `model`, newest first.
+
+    Empty when retention is off, the model has no mirror, or the user lacks the cold-storage permission --
+    so a caller can render the selector from this alone without repeating the checks.
+    """
+
+    if not settings.CHANGELOG_ARCHIVE_ENABLED:
+        return ArchiveSegment.objects.none()
+    if archive_model_for(model) is None:
+        return ArchiveSegment.objects.none()
+    if not user_can_read_archive(user):
+        return ArchiveSegment.objects.none()
+    return ArchiveSegment.objects.filter(model_label=model._meta.label_lower).order_by("-period_key")
+
+
 def get_archive_segment(model, period_key, user):
     """
     Resolve one requested period, or raise.
@@ -70,15 +88,101 @@ def get_archive_queryset(model, period_key, user):
     keeps ordering and pagination identical to a warm read, and it is why `ObjectChange` having no
     time-sortable primary key never becomes a problem.
     """
-    from django.core.exceptions import ValidationError
-
     segment = get_archive_segment(model, period_key, user)
     mirror = archive_model_for(model, segment.period_key)
     if mirror is None:
+        from django.core.exceptions import ValidationError
+
         raise ValidationError(f"{model._meta.verbose_name} does not support archived history.")
     # No period filter: the table is the period. `period_key` stays on the row so reconciliation can
     # still find a record written to the wrong one.
     return mirror.objects.all()
+
+
+# Query parameters that are not filters, and so are carried across a period switch untouched. Sorting and
+# page size are preferences about presentation, not about which records are shown.
+_NON_FILTER_CARRYOVER = (
+    "sort",
+    "per_page",
+    "saved_view",
+    "table_changes_pending",
+    "all_filters_removed",
+    "clear_view",
+)
+
+
+def period_switch_url(request, period_key, model):
+    """
+    Where a period selector entry should link, preserving the reader's current view.
+
+    Switching period means "show me the same thing, for that period", so filters and sorting carry over.
+    Two things do not:
+
+    - `page`, because a different period has a different number of records and page 40 may not exist.
+    - Any filter the target does not support. A few warm filters follow relationships a mirror holds as
+      identifier columns, and carrying one into a period yields "invalid filters" and an empty table --
+      confusing when the reader only meant to change period. Those are dropped, and returned so the caller
+      can say which.
+
+    Returns `(url, dropped_param_names)`.
+    """
+    from nautobot.extras.filters import archive_filterset_for
+
+    params = request.GET.copy()
+    params.pop("page", None)
+    params.pop("archive_period", None)
+
+    dropped = []
+    if period_key:
+        mirror = archive_model_for(model)
+        filterset_class = archive_filterset_for(mirror) if mirror else None
+        if filterset_class is not None:
+            allowed = set(filterset_class.base_filters)
+            for name in list(params.keys()):
+                if name in _NON_FILTER_CARRYOVER or name in allowed:
+                    continue
+                params.pop(name)
+                dropped.append(name)
+        params["archive_period"] = period_key
+
+    query = params.urlencode()
+    return (f"{request.path}?{query}" if query else request.path), sorted(dropped)
+
+
+def archive_context(model, request, show_counts=True):
+    """
+    The context the period selector renders from.
+
+    Returns empty-but-present keys when retention is off or the viewer lacks the permission, so a template
+    can include the selector unconditionally and a view needs no conditional of its own.
+
+    `show_counts=False` for a view scoped to one object. A period's record count is for the whole period,
+    so showing it beside an object's own history invites reading it as that object's count.
+    """
+    period_key = requested_archive_period(request)
+    periods = get_archive_periods(model, getattr(request, "user", None))
+    segment = None
+    if period_key and periods:
+        segment = periods.filter(period_key=period_key).first()
+    # URLs are built here instead of in the template because deciding what to preserve needs both
+    # filtersets, which a template cannot see.
+    periods = list(periods)
+    dropped_any = set()
+    # Deliberately not named `segment`: that name is the selected period, which `get_archive_freshness` below
+    # still needs. Reusing the name reported the last period in the list as the selected one.
+    for entry in periods:
+        entry.switch_url, dropped = period_switch_url(request, entry.period_key, model)
+        dropped_any.update(dropped)
+    warm_url, _ = period_switch_url(request, None, model)
+
+    return {
+        "archive_periods": periods,
+        "archive_period": period_key if segment is not None else None,
+        "archive_freshness": get_archive_freshness(segment),
+        "archive_show_counts": show_counts,
+        "archive_warm_url": warm_url,
+        "archive_dropped_filters": sorted(dropped_any),
+    }
 
 
 def filter_archive_queryset(queryset, params):
@@ -150,3 +254,19 @@ def object_change_history(obj, content_type, request, user=None):
         ),
         None,
     )
+
+
+def get_archive_freshness(segment):
+    """
+    How current a period is, for display beside the selector.
+
+    A closed period is complete and no staleness claim applies to it; an open one reports how far rotation has
+    gotten into it.
+    """
+    if segment is None:
+        return {}
+    return {
+        "period_label": segment.label,
+        "last_rotated_time": segment.last_rotated_time,
+        "is_period_closed": segment.is_period_closed,
+    }

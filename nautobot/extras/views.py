@@ -101,7 +101,10 @@ from nautobot.dcim.tables import (
     RackTable,
     VirtualDeviceContextTable,
 )
-from nautobot.extras.archive_reads import object_change_history
+from nautobot.extras.archive_reads import (
+    archive_context,
+    object_change_history,
+)
 from nautobot.extras.conditions.forms import ConditionRowForm, errors_by_row_and_control
 from nautobot.extras.conditions.model_fields import addressable_fields
 from nautobot.extras.constants import PENDING_WORKFLOWS_ERROR_CODE
@@ -4496,6 +4499,7 @@ class ObjectChangeLogView(generic.GenericView):
 
         # Gather all changes for this object (and its related objects)
         content_type = ContentType.objects.get_for_model(model)
+        archive = archive_context(ObjectChange, request, show_counts=False)
         # One period at a time: the selected period replaces warm storage rather than adding to it.
         objectchanges, _period_key = object_change_history(obj, content_type, request)
         objectchanges_table = tables.ObjectChangeTable(data=objectchanges, orderable=False)
@@ -4523,6 +4527,7 @@ class ObjectChangeLogView(generic.GenericView):
                 "view_titles": self.get_view_titles(obj, view_type=""),
                 "detail": True,
                 "view_action": "changelog",
+                **archive,
             },
         )
 
