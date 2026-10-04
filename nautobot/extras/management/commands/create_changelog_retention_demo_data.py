@@ -2,12 +2,12 @@
 Generate everything needed to exercise changelog long-term retention by hand.
 
 Retention only acts on records older than the warm window, so a fresh install has nothing to show until
-history has had months to accumulate. This fabricates that history with backdated timestamps, adds rules
-for the truncation job with records it can actually delete, and creates a user who may read retained
-history and one who may not.
+history has had months to accumulate. This fabricates that history with backdated timestamps, files it
+into retained storage, adds rules for the truncation job with records it can actually delete, and creates
+a user who may read retained history and one who may not.
 
-# PLACEHOLDER: later stories extend this command. CONCRETE-5 puts records into the archive, ROTATE-1
-# replaces that with the real job, and ABSTRACT-5 adds --period.
+# PLACEHOLDER: `_archive` writes the retained rows itself. ROTATE-1 replaces it with the real rotation
+# job, and ABSTRACT-5 adds --period.
 
 Everything it creates is tagged with MARKER, in `change_context_detail` for change records and in the name or text
 for everything else, so `--flush` can find and remove all of it. It never touches a record it did not
@@ -24,6 +24,7 @@ import random
 import uuid
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand, CommandError
@@ -38,13 +39,21 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     RetentionRuleModeChoices,
 )
+from nautobot.extras.constants import CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD
 from nautobot.extras.models import (
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
+    ArchiveSegment,
     JobConsoleEntry,
     JobLogEntry,
     JobResult,
     ObjectChange,
     RetentionRule,
 )
+from nautobot.extras.models.archive import build_mirror_instance, warm_model_for
+from nautobot.extras.registry import registry
 from nautobot.users.models import ObjectPermission
 
 MARKER = "retention-demo"
@@ -124,12 +133,18 @@ class Command(BaseCommand):
         if options["flush"]:
             self._flush()
 
+        self._require_retention_enabled()
+
         with transaction.atomic():
             self._object_changes(random.Random(options["seed"]))  # noqa: S311  # not cryptographic
             self._job_history(random.Random(options["seed"] + 1))  # noqa: S311  # not cryptographic
             self._truncation_candidates(random.Random(options["seed"] + 2))  # noqa: S311  # not cryptographic
             self._retention_rules()
             self._users()
+
+        # Outside the transaction above on purpose: filing runs in bounded increments, which is the
+        # behaviour this command exists to demonstrate, and wrapping it would undo that.
+        self._archive()
 
         self._report()
         self.stdout.write(
@@ -140,6 +155,56 @@ class Command(BaseCommand):
         )
 
     # Setup
+
+    def _require_retention_enabled(self):
+        """Retention is a deployment setting, so this command cannot turn it on; it says so and stops."""
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
+            raise CommandError(
+                "Changelog long-term retention is off. It is a deployment setting rather than a runtime "
+                "toggle, so this command cannot turn it on. Set CHANGELOG_ARCHIVE_ENABLED = True in "
+                "nautobot_config.py (or NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED=True), restart, and run again."
+            )
+
+    # Filing into retained storage
+
+    def _archive(self):
+        """
+        Copy this command's backdated history into retained storage, and register the period.
+
+        PLACEHOLDER: this writes the retained rows itself, which is enough to have something to read.
+        ROTATE-1 replaces it with the real rotation job, which also removes the warm copies and files
+        each record under the period its own timestamp falls in.
+
+        Children before parents, so a retained job result always has its retained log and console entries.
+        """
+        filed = {}
+        for warm_queryset, mirror in (
+            (JobLogEntry.objects.filter(message__startswith=MARKER), ArchivedJobLogEntry),
+            (JobConsoleEntry.objects.filter(text__startswith=MARKER), ArchivedJobConsoleEntry),
+            (JobResult.objects.filter(name__startswith=MARKER), ArchivedJobResult),
+            (ObjectChange.objects.filter(change_context_detail=MARKER), ArchivedObjectChange),
+        ):
+            warm_model = warm_model_for(mirror)
+            existing = set(mirror.objects.values_list("pk", flat=True))
+            records = [
+                build_mirror_instance(warm_object, mirror)
+                for warm_object in warm_queryset.iterator()
+                if warm_object.pk not in existing
+            ]
+            mirror.objects.bulk_create(records, batch_size=500)
+            total = mirror.objects.count()
+            ArchiveSegment.objects.update_or_create(
+                model_label=warm_model._meta.label_lower,
+                period_key=CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD,
+                defaults={
+                    "label": "All time",
+                    "row_count": total,
+                    "last_rotated_time": timezone.now(),
+                    "is_period_closed": False,
+                },
+            )
+            filed[warm_model._meta.label] = len(records)
+        self.stdout.write(self.style.NOTICE(f"Filed into retained storage: {filed}"))
 
     def _targets(self, rng):
         """
@@ -432,12 +497,13 @@ class Command(BaseCommand):
 
     def _users(self):
         """
-        Two users to read the fabricated history as.
+        Two users, so the cold-storage permission can be tried from both sides.
 
-        They differ in nothing yet. CONCRETE-2 gives one of them the cold-storage permission, which is
-        the only difference between them and the reason there are two.
+        The difference is only visible by comparing a user holding `extras.view_archivesegment` against one
+        who does not.
         """
         for username in DEMO_USERS:
+            cold_storage = username == "retention-archivist"
             user, _ = User.objects.get_or_create(username=username, defaults={"is_active": True})
             user.set_password(DEMO_PASSWORD)
             user.is_active = True
@@ -450,13 +516,15 @@ class Command(BaseCommand):
                 "extras.view_jobresult",
                 "extras.view_joblogentry",
                 "extras.view_jobconsoleentry",
-                # Both users get to see the rules: the point of these accounts is that the *only*
-                # difference between them is whether they may read retained history.
-                # PLACEHOLDER: CONCRETE-2 adds `extras.view_archivesegment` for one of the two.
+                # Both users get to see the rules: without this the retention rule UI is a 403, and the
+                # point of these accounts is that the *only* difference between them is whether they may
+                # read retained history.
                 "extras.view_retentionrule",
                 "dcim.view_device",
                 "dcim.view_location",
             ]
+            if cold_storage:
+                permissions.append("extras.view_archivesegment")
             for name in permissions:
                 app_label, codename = name.split(".")
                 action, model = codename.split("_", 1)
@@ -475,6 +543,10 @@ class Command(BaseCommand):
             (f"  of which {MARKER}", ObjectChange.objects.filter(change_context_detail__startswith=MARKER).count()),
             ("Warm job results", JobResult.objects.count()),
             (f"  of which {MARKER}", JobResult.objects.filter(name__startswith=MARKER).count()),
+            ("Retained change records", ArchivedObjectChange.objects.count()),
+            ("Retained job results", ArchivedJobResult.objects.count()),
+            ("Retained job log entries", ArchivedJobLogEntry.objects.count()),
+            ("Retained console entries", ArchivedJobConsoleEntry.objects.count()),
             ("Retention rules", RetentionRule.objects.count()),
             # Truncation deletes these, so they are used up by the first real run. Reported so a tester can
             # see when there is nothing left for the rules to act on and re-run with --flush.
@@ -495,6 +567,8 @@ class Command(BaseCommand):
         for label, count in rows:
             self.stdout.write(f"{label:28} {count}")
 
+        self._report_storage()
+
     def _flush(self):
         """
         Remove what a previous run created.
@@ -505,6 +579,10 @@ class Command(BaseCommand):
         # results.
         deleted = defaultdict(int)
         for queryset in (
+            ArchivedObjectChange.objects.filter(change_context_detail__startswith=MARKER),
+            ArchivedJobLogEntry.objects.filter(message__startswith=MARKER),
+            ArchivedJobConsoleEntry.objects.filter(text__startswith=MARKER),
+            ArchivedJobResult.objects.filter(name__startswith=MARKER),
             ObjectChange.objects.filter(change_context_detail__startswith=MARKER),
             JobResult.objects.filter(name__startswith=MARKER),
             RetentionRule.objects.filter(name__startswith=MARKER),
@@ -519,7 +597,60 @@ class Command(BaseCommand):
                     continue
                 deleted[model._meta.label if model else label] += count
 
+        emptied = self._remove_empty_periods()
+
         for label, count in sorted(deleted.items()):
             self.stdout.write(f"Removed {count:6} {label}")
-        if not deleted:
+        if emptied:
+            self.stdout.write(f"Removed {emptied:6} empty retention period(s)")
+        if not deleted and not emptied:
             self.stdout.write("Nothing to remove")
+        # The capability itself is a deployment setting, so this leaves it alone and says so.
+        self.stdout.write(self.style.NOTICE("Demo data removed. CHANGELOG_ARCHIVE_ENABLED is unchanged."))
+
+    def _report_storage(self):
+        """
+        Where retained history is being written, which is what a tester most often needs to check.
+
+        The archive sharing the primary database and the archive on its own host look identical from the UI.
+        """
+        from django.conf import settings
+
+        from nautobot.core.constants import CHANGELOG_ARCHIVE
+        from nautobot.core.utils.config import changelog_archive_is_separate
+
+        archive = settings.DATABASES.get(CHANGELOG_ARCHIVE, {})
+        if changelog_archive_is_separate():
+            host = archive.get("HOST") or "localhost"
+            target = f"{archive.get('NAME', '?')} on {host}:{archive.get('PORT') or 'default'}"
+        else:
+            target = f"{archive.get('NAME', '?')} (same database as default)"
+        self.stdout.write("")
+        self.stdout.write(f"{'Retained history connection':28} {CHANGELOG_ARCHIVE} -> {target}")
+
+        periods = ArchiveSegment.objects.all()
+        if not periods.exists():
+            return
+        self.stdout.write("")
+        self.stdout.write(f"{'Period':16} {'Record type':28} {'Records':>8}  Covers")
+        for segment in periods:
+            covers = (
+                "all time"
+                if segment.time_start is None
+                else f"{segment.time_start:%Y-%m-%d} to {segment.time_end:%Y-%m-%d}"
+            )
+            self.stdout.write(f"{segment.period_key:16} {segment.model_label:28} {segment.row_count:>8}  {covers}")
+
+    @staticmethod
+    def _remove_empty_periods():
+        """
+        Drop the segment row for any period left holding nothing, and return how many went.
+
+        Only empty ones: the registry is the rotation job's to maintain.
+        """
+        removed = 0
+        for mirror in registry["changelog_archive_models"].values():
+            if mirror.objects.exists():
+                continue
+            removed += ArchiveSegment.objects.filter(model_label=warm_model_for(mirror)._meta.label_lower).delete()[0]
+        return removed

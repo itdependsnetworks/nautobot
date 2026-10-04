@@ -13,10 +13,14 @@ from itertools import pairwise
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.test import override_settings
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
 from nautobot.extras.choices import JobResultStatusChoices, ObjectChangeActionChoices
 from nautobot.extras.management.commands.create_changelog_retention_demo_data import (
+    CHANGES_PER_YEAR,
+    Command,
     DEMO_USERS,
     MARKER,
     TRUNCATION_DELETABLE,
@@ -24,12 +28,43 @@ from nautobot.extras.management.commands.create_changelog_retention_demo_data im
     TRUNCATION_MARKER,
     TRUNCATION_PROTECTED,
     TRUNCATION_UNTOUCHED,
+    YEARS,
 )
-from nautobot.extras.models import JobConsoleEntry, JobLogEntry, JobResult, ObjectChange, RetentionRule
+from nautobot.extras.models import (
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
+    ArchiveSegment,
+    JobConsoleEntry,
+    JobLogEntry,
+    JobResult,
+    ObjectChange,
+    RetentionRule,
+)
 from nautobot.users.models import ObjectPermission, User
 
 
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class CreateChangelogRetentionDemoDataTestCase(TestCase):
+    databases = ["default", CHANGELOG_ARCHIVE]
+
+    def setUp(self):
+        super().setUp()
+        self._clear_retained_history()
+
+    def tearDown(self):
+        # Cleared on the way out as well as in. Retained history is written through a second connection, so
+        # `TestCase`'s per-test transaction on `default` does not roll it back.
+        self._clear_retained_history()
+        super().tearDown()
+
+    @staticmethod
+    def _clear_retained_history():
+        for mirror in (ArchivedObjectChange, ArchivedJobLogEntry, ArchivedJobConsoleEntry, ArchivedJobResult):
+            mirror.objects.all().delete()
+        ArchiveSegment.objects.all().delete()
+
     def run_command(self, *args):
         output = StringIO()
         call_command("create_changelog_retention_demo_data", *args, stdout=output, stderr=output)
@@ -37,6 +72,55 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
 
     def demo_changes(self):
         return ObjectChange.objects.filter(change_context_detail=MARKER)
+
+    def retained_demo_changes(self):
+        """
+        Scoped to the marker, because filing is unfiltered by design.
+
+        It copies the test database's own change history too, so an unscoped count here measures the
+        fixture rather than the command.
+        """
+        return ArchivedObjectChange.objects.filter(change_context_detail=MARKER)
+
+    def retained_demo_results(self):
+        return ArchivedJobResult.objects.filter(name__startswith=MARKER)
+
+    def refile(self):
+        """Run the filing step on its own, writing to stdout nobody reads."""
+        command = Command()
+        command.stdout = StringIO()
+        command._archive()
+
+    def test_filing_copies_every_fabricated_record(self):
+        self.run_command()
+
+        self.assertEqual(self.retained_demo_changes().count(), sum(CHANGES_PER_YEAR))
+        self.assertEqual({record.time.year for record in self.retained_demo_changes()}, set(YEARS))
+
+    def test_filing_registers_a_period_per_record_type(self):
+        """The period registry is what a reader selects from and what the verification jobs sweep."""
+        self.run_command()
+
+        registered = dict(ArchiveSegment.objects.values_list("model_label", "row_count"))
+        self.assertEqual(
+            set(registered),
+            {"extras.objectchange", "extras.jobresult", "extras.joblogentry", "extras.jobconsoleentry"},
+        )
+        self.assertEqual(registered["extras.objectchange"], ArchivedObjectChange.objects.count())
+
+    def test_filing_again_does_not_duplicate(self):
+        """
+        A retained record keeps its warm primary key, which is what makes filing idempotent.
+
+        Filing is re-run directly rather than through the whole command, which without `--flush` would
+        fabricate a second set of warm records and grow the count for a different reason.
+        """
+        self.run_command()
+        first = self.retained_demo_changes().count()
+
+        self.refile()
+
+        self.assertEqual(self.retained_demo_changes().count(), first)
 
     def test_history_is_coherent_per_object(self):
         """
@@ -123,9 +207,47 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
             }
 
         viewer, archivist = granted["retention-viewer"], granted["retention-archivist"]
-        # PLACEHOLDER: CONCRETE-2 adds `extras.view_archivesegment` to the archivist, which is the
-        # difference this asserts on. Until then the two are deliberately identical.
-        self.assertEqual(archivist, viewer)
+        self.assertEqual(archivist - viewer, {"extras.view_archivesegment"})
+        self.assertEqual(viewer - archivist, set())
+
+    def test_teardown_removes_only_what_it_created(self):
+        """Keyed on the marker throughout, so a record the command did not create is never touched."""
+        keeper = ObjectChange.objects.create(
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type=self.changed_object_type(),
+            changed_object_id=self.some_object_id(),
+            object_repr="Not demo data",
+            object_data={},
+            request_id="11111111-1111-1111-1111-111111111111",
+            user_name="someone-else",
+            change_context="orm",
+        )
+        keeper_result = JobResult.objects.create(name="A real job result")
+        self.run_command()
+
+        self.run_command("--teardown")
+
+        self.assertTrue(ObjectChange.objects.filter(pk=keeper.pk).exists())
+        self.assertTrue(JobResult.objects.filter(pk=keeper_result.pk).exists())
+        self.assertEqual(self.retained_demo_changes().count(), 0)
+        self.assertEqual(self.retained_demo_results().count(), 0)
+        self.assertEqual(RetentionRule.objects.filter(name__startswith=MARKER).count(), 0)
+        self.assertEqual(User.objects.filter(username__in=DEMO_USERS).count(), 0)
+
+    def test_teardown_reports_counts_that_are_not_inflated_by_cascades(self):
+        """
+        `delete()[0]` counts cascaded rows too, so deleting 17 job results reported 120.
+
+        The whole feature is about counts a reader can trust, so its own tooling should not overstate them.
+        """
+        self.run_command()
+        results = self.retained_demo_results().count()
+
+        output = self.run_command("--teardown")
+
+        self.assertIn(f"{results:6} extras.ArchivedJobResult", output)
+        # Many-to-many through tables are an artifact of how permissions are stored, not created records.
+        self.assertNotIn("ObjectPermission_users", output)
 
     def test_rerunning_with_flush_does_not_accumulate(self):
         self.run_command()
@@ -157,6 +279,18 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         )
 
         self.assertEqual(first, second)
+
+    def changed_object_type(self):
+        from django.contrib.contenttypes.models import ContentType
+
+        from nautobot.dcim.models import Location
+
+        return ContentType.objects.get_for_model(Location)
+
+    def some_object_id(self):
+        from nautobot.dcim.models import Location
+
+        return Location.objects.first().pk
 
     def test_a_different_seed_makes_different_history(self):
         self.run_command()
