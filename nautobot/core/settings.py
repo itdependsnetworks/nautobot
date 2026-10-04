@@ -928,6 +928,12 @@ CONSTANCE_CONFIG = {
         help_text="Number of days to retain object changelog history.\nSet this to 0 to retain changes indefinitely.",
         field_type=int,
     ),
+    "CHANGELOG_TRUNCATION_BATCH_SIZE": ConstanceConfigItem(
+        default=10000,
+        help_text="Number of records the truncation job deletes per increment.\n"
+        "Truncation always runs in bounded increments, never as a single delete statement.",
+        field_type=int,
+    ),
     "DEVICE_UNIQUENESS": ConstanceConfigItem(
         default="location_tenant_name",
         help_text=(
@@ -1067,7 +1073,11 @@ CONSTANCE_CONFIG = {
 
 CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
-    "Change Logging": ["CHANGELOG_RETENTION", "CHANGELOG_LEGACY_OBJECT_DATA"],
+    "Change Logging": [
+        "CHANGELOG_RETENTION",
+        "CHANGELOG_LEGACY_OBJECT_DATA",
+        "CHANGELOG_TRUNCATION_BATCH_SIZE",
+    ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],
     "Installation Metrics": ["DEPLOYMENT_ID"],
     "Natural Keys": ["DEVICE_UNIQUENESS", "LOCATION_NAME_AS_NATURAL_KEY"],

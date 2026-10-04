@@ -9,6 +9,15 @@ CHANGELOG_ARCHIVE_COVERED_MODELS = (
     "extras.jobconsoleentry",
 )
 
+# The timestamp field that means "when this record happened", per covered model. Stated explicitly rather
+# than probed for, because getting it wrong silently files records under the wrong period.
+CHANGELOG_ARCHIVE_AGE_FIELDS = {
+    "extras.objectchange": "time",
+    "extras.jobresult": "date_created",
+    "extras.joblogentry": "created",
+    "extras.jobconsoleentry": "timestamp",
+}
+
 # Registerable extras features
 EXTRAS_FEATURES = [
     "cable_terminations",

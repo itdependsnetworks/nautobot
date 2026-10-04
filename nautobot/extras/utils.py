@@ -43,6 +43,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
 )
 from nautobot.extras.constants import (
+    CHANGELOG_ARCHIVE_AGE_FIELDS,
     CHANGELOG_ARCHIVE_COVERED_MODELS,
     CHANGELOG_MAX_CHANGE_CONTEXT_DETAIL,
     EXTRAS_FEATURES,
@@ -126,6 +127,14 @@ class FeaturedQueryMixin:
 
     def get_choices(self):
         return [(f"{ct.app_label}.{ct.model}", ct.pk) for ct in self.as_queryset()]
+
+
+def age_field_for(model):
+    """The timestamp field that determines how old a record of `model` is."""
+    try:
+        return CHANGELOG_ARCHIVE_AGE_FIELDS[model._meta.label_lower]
+    except KeyError:
+        raise ValueError(f"{model._meta.label} is not covered by changelog retention") from None
 
 
 @deconstructible

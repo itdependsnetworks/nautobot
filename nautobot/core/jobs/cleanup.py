@@ -2,14 +2,13 @@ from datetime import timedelta
 
 from django.core.exceptions import PermissionDenied
 from django.db.models import CASCADE, PROTECT
-from django.db.models.signals import pre_delete
 from django.utils import timezone
 
 from nautobot.core.choices import ChoiceSet
 from nautobot.core.utils.config import get_settings_or_config
+from nautobot.extras.context_managers import without_delete_change_logging
 from nautobot.extras.jobs import IntegerVar, Job, MultiChoiceVar
 from nautobot.extras.models import JobResult, ObjectChange
-from nautobot.extras.signals import _handle_deleted_object
 
 name = "System Jobs"
 
@@ -24,30 +23,15 @@ class CleanupTypes(ChoiceSet):
     )
 
 
-class LogsCleanup(Job):
+class CascadeDeleteMixin:
     """
-    System job to clean up ObjectChange and/or JobResult (and JobLogEntry) records older than a given age.
+    Bulk deletion that walks CASCADE relationships itself and refuses to break PROTECT ones.
+
+    Shared by `LogsCleanup` and `ChangelogTruncation`: both delete high-volume log records with signals
+    detached for speed, which means Django's own collector is not doing the walk for them.
+
+    Expects `self.logger`, so it is mixed into a `Job`.
     """
-
-    cleanup_types = MultiChoiceVar(
-        choices=CleanupTypes.CHOICES,
-        required=True,
-    )
-
-    max_age = IntegerVar(
-        description=(
-            "Maximum age of records to retain, in days. "
-            "Leave empty to use the CHANGELOG_RETENTION setting as the maximum."
-        ),
-        label="Max Age",
-        min_value=0,
-        required=False,
-    )
-
-    class Meta:
-        name = "Logs Cleanup"
-        description = "Delete ObjectChange and/or JobResult/JobLogEntry records older than a specified cutoff."
-        has_sensitive_variables = False
 
     def recursive_delete_with_cascade(self, queryset, deletion_summary):
         """
@@ -95,6 +79,32 @@ class LogsCleanup(Job):
             deletion_summary.update({queryset.model._meta.label: deleted_count})
         return deletion_summary
 
+
+class LogsCleanup(CascadeDeleteMixin, Job):
+    """
+    System job to clean up ObjectChange and/or JobResult (and JobLogEntry) records older than a given age.
+    """
+
+    cleanup_types = MultiChoiceVar(
+        choices=CleanupTypes.CHOICES,
+        required=True,
+    )
+
+    max_age = IntegerVar(
+        description=(
+            "Maximum age of records to retain, in days. "
+            "Leave empty to use the CHANGELOG_RETENTION setting as the maximum."
+        ),
+        label="Max Age",
+        min_value=0,
+        required=False,
+    )
+
+    class Meta:
+        name = "Logs Cleanup"
+        description = "Delete ObjectChange and/or JobResult/JobLogEntry records older than a specified cutoff."
+        has_sensitive_variables = False
+
     def run(self, *, cleanup_types, max_age=None):  # pylint: disable=arguments-differ
         if max_age in (None, ""):
             max_age = get_settings_or_config("CHANGELOG_RETENTION", fallback=90)
@@ -113,12 +123,7 @@ class LogsCleanup(Job):
             self.logger.error('User "%s" does not have permission to delete ObjectChange records', self.user)
             raise PermissionDenied("User does not have delete permissions for ObjectChange records")
 
-        # Bulk delete goes much faster if Django doesn't have signals to process.
-        # Temporarily detach the ones we *know* to be irrelevant.
-        self.logger.debug("Temporarily disconnecting some signals for performance")
-        pre_delete.disconnect(_handle_deleted_object)
-
-        try:
+        with without_delete_change_logging(self.logger):
             cutoff = timezone.now() - timedelta(days=max_age)
             result = {}
 
@@ -155,7 +160,3 @@ class LogsCleanup(Job):
                         modelname,
                     )
             return result
-        finally:
-            # Be sure to clean up after ourselves!
-            self.logger.debug("Re-connecting signals")
-            pre_delete.connect(_handle_deleted_object)
