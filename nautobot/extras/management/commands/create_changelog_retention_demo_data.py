@@ -2,12 +2,12 @@
 Generate everything needed to exercise changelog long-term retention by hand.
 
 Retention only acts on records older than the warm window, so a fresh install has nothing to show until
-history has had months to accumulate. This fabricates that history with backdated timestamps, and creates
-a user who may read retained history and one who may not.
+history has had months to accumulate. This fabricates that history with backdated timestamps, adds rules
+for the truncation job with records it can actually delete, and creates a user who may read retained
+history and one who may not.
 
-# PLACEHOLDER: later stories extend this command. TRUNCATE-5 adds the retention rules and the records
-# truncation deletes, CONCRETE-5 puts records into the archive, ROTATE-1 replaces that with the real job,
-# and ABSTRACT-5 adds --period.
+# PLACEHOLDER: later stories extend this command. CONCRETE-5 puts records into the archive, ROTATE-1
+# replaces that with the real job, and ABSTRACT-5 adds --period.
 
 Everything it creates is tagged with MARKER, in `change_context_detail` for change records and in the name or text
 for everything else, so `--flush` can find and remove all of it. It never touches a record it did not
@@ -28,6 +28,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from nautobot.dcim.models import Device, Location
 from nautobot.extras.choices import (
@@ -35,21 +36,38 @@ from nautobot.extras.choices import (
     JobResultStatusChoices,
     LogLevelChoices,
     ObjectChangeActionChoices,
+    RetentionRuleModeChoices,
 )
 from nautobot.extras.models import (
     JobConsoleEntry,
     JobLogEntry,
     JobResult,
     ObjectChange,
+    RetentionRule,
 )
 from nautobot.users.models import ObjectPermission
 
 MARKER = "retention-demo"
+#: The truncation candidates get their own marker. They are the one group that must be dated relative to
+#: *now* rather than to a fixed year, so they are neither reproducible from the seed nor part of the
+#: backdated history -- and every count and invariant over that history has to be able to exclude them.
+TRUNCATION_MARKER = f"{MARKER}-truncation"
+
 #: Years to fabricate history for.
 YEARS = (2022, 2023, 2024, 2025)
 #: One entry per year in YEARS. Uneven so a count in the UI can be traced to what it is counting.
 CHANGES_PER_YEAR = (17, 63, 41, 28)
 JOB_RESULTS_PER_YEAR = (3, 7, 5, 2)
+
+#: Warm records the truncation rules can actually act on, and what each group is for. These are *inside*
+#: the warm window, so rotation leaves them where truncation can reach them -- anything older than the
+#: window is rotated first, which is why an age bound above it can never match.
+TRUNCATION_DELETABLE = 7  # delete-action, not carol: what an include rule selects
+TRUNCATION_PROTECTED = 3  # delete-action by carol: selected by include, saved by the exclude rule
+TRUNCATION_UNTOUCHED = 5  # update-action: proves the filter is selective
+TRUNCATION_FAILED_RESULTS = 4  # failed job results the third rule selects, once enabled
+TRUNCATION_PASSED_RESULTS = 2  # succeeded: left alone, so the status filter is visibly doing something
+TRUNCATION_AGE_DAYS = 14  # the age bound the rules use; the records are older than this and still warm
 
 DEFAULT_SEED = 20260820
 #: Dev instances only. The command says so on every run.
@@ -109,6 +127,8 @@ class Command(BaseCommand):
         with transaction.atomic():
             self._object_changes(random.Random(options["seed"]))  # noqa: S311  # not cryptographic
             self._job_history(random.Random(options["seed"] + 1))  # noqa: S311  # not cryptographic
+            self._truncation_candidates(random.Random(options["seed"] + 2))  # noqa: S311  # not cryptographic
+            self._retention_rules()
             self._users()
 
         self._report()
@@ -297,6 +317,119 @@ class Command(BaseCommand):
 
     # Truncation candidates
 
+    def _truncation_candidates(self, rng):
+        """
+        Warm change records the enabled truncation rules can actually delete.
+
+        Everything else here is backdated past the warm window and rotated, which leaves truncation nothing to
+        do. These sit between `TRUNCATION_AGE_DAYS` and the window, so rotation leaves them and the rules
+        still match.
+
+        Three groups, so a dry run reports a number a tester can reason about: selected by the include rule,
+        selected and then saved by the exclude rule, and untouched.
+        """
+        targets, weights = self._targets(rng)
+        made = {}
+        groups = (
+            ("deletable", TRUNCATION_DELETABLE, ObjectChangeActionChoices.ACTION_DELETE, ("alice", "bob", "dave")),
+            ("protected", TRUNCATION_PROTECTED, ObjectChangeActionChoices.ACTION_DELETE, ("carol",)),
+            ("untouched", TRUNCATION_UNTOUCHED, ObjectChangeActionChoices.ACTION_UPDATE, ("alice", "bob")),
+        )
+        for label, count, action, user_names in groups:
+            for index in range(count):
+                content_type, obj = rng.choices(targets, weights=weights, k=1)[0]
+                # Comfortably older than the age bound and comfortably inside the warm window, so neither
+                # boundary is being tested by accident.
+                when = timezone.now() - timedelta(days=rng.randrange(TRUNCATION_AGE_DAYS + 6, 80), minutes=index)
+                change = ObjectChange.objects.create(
+                    action=action,
+                    changed_object_type=content_type,
+                    changed_object_id=obj.pk,
+                    object_repr=str(obj),
+                    object_data={"name": str(obj), "note": f"{MARKER} truncation candidate"},
+                    object_data_v2={"name": str(obj), "note": f"{MARKER} truncation candidate"},
+                    request_id=uuid.uuid4(),
+                    user_name=rng.choice(user_names),
+                    change_context="orm",
+                    change_context_detail=TRUNCATION_MARKER,
+                )
+                ObjectChange.objects.filter(pk=change.pk).update(time=when)
+            made[label] = count
+
+        for index in range(TRUNCATION_FAILED_RESULTS + TRUNCATION_PASSED_RESULTS):
+            failed = index < TRUNCATION_FAILED_RESULTS
+            when = timezone.now() - timedelta(days=rng.randrange(TRUNCATION_AGE_DAYS + 6, 80), minutes=index)
+            result = JobResult.objects.create(
+                name=f"{MARKER}: Recent Run {index}",
+                status=JobResultStatusChoices.STATUS_FAILURE if failed else JobResultStatusChoices.STATUS_SUCCESS,
+            )
+            JobResult.objects.filter(pk=result.pk).update(date_created=when, date_started=when, date_done=when)
+        made["failed job results"] = TRUNCATION_FAILED_RESULTS
+
+        self.stdout.write(
+            self.style.NOTICE(
+                f"Created warm truncation candidates: {made['deletable']} deletable, "
+                f"{made['protected']} protected by the exclude rule, {made['untouched']} untouched, "
+                f"{made['failed job results']} failed job results"
+            )
+        )
+
+    # Rules and users
+
+    def _retention_rules(self):
+        """
+        Rules for the truncation job, including one of each mode.
+
+        The include/exclude pair is enabled because truncation applies every enabled rule and nothing else, so
+        with none enabled a run reads as broken. It still defaults to a dry run. The third stays disabled so
+        that state is visible too.
+        """
+        change_ct = ContentType.objects.get_for_model(ObjectChange)
+        result_ct = ContentType.objects.get_for_model(JobResult)
+        rules = [
+            {
+                "name": f"{MARKER}: delete old deletions",
+                "content_type": change_ct,
+                "mode": RetentionRuleModeChoices.MODE_INCLUDE,
+                # Scoped to this command's own records. Unscoped, the rule would also select the change
+                # history `generate_test_data` created, and running truncation to see it work would delete
+                # data the tester did not mean to lose.
+                "scope_filter": {
+                    "action": [ObjectChangeActionChoices.ACTION_DELETE],
+                    "change_context_detail": [TRUNCATION_MARKER],
+                },
+                "max_age_days": TRUNCATION_AGE_DAYS,
+                "weight": 100,
+                "description": (f"Selects this command's delete-action changes older than {TRUNCATION_AGE_DAYS} days."),
+                "enabled": True,
+            },
+            {
+                "name": f"{MARKER}: protect carol's changes",
+                "content_type": change_ct,
+                "mode": RetentionRuleModeChoices.MODE_EXCLUDE,
+                "scope_filter": {"user_name": ["carol"], "change_context_detail": [TRUNCATION_MARKER]},
+                "weight": 200,
+                "description": "Protects one user's changes from any include rule.",
+                "enabled": True,
+            },
+            {
+                "name": f"{MARKER}: delete failed job results",
+                "content_type": result_ct,
+                "mode": RetentionRuleModeChoices.MODE_INCLUDE,
+                "scope_filter": {"status": [JobResultStatusChoices.STATUS_FAILURE], "name__isw": [MARKER]},
+                "max_age_days": TRUNCATION_AGE_DAYS,
+                "weight": 100,
+                "description": (f"Selects this command's failed job results older than {TRUNCATION_AGE_DAYS} days."),
+                "enabled": False,
+            },
+        ]
+        for spec in rules:
+            RetentionRule.objects.update_or_create(name=spec.pop("name"), defaults=spec)
+        enabled = RetentionRule.objects.filter(name__startswith=MARKER, enabled=True).count()
+        self.stdout.write(
+            self.style.NOTICE(f"Created {len(rules)} retention rules ({enabled} enabled, {len(rules) - enabled} not)")
+        )
+
     def _users(self):
         """
         Two users to read the fabricated history as.
@@ -317,8 +450,10 @@ class Command(BaseCommand):
                 "extras.view_jobresult",
                 "extras.view_joblogentry",
                 "extras.view_jobconsoleentry",
-                # PLACEHOLDER: TRUNCATE-3 adds `extras.view_retentionrule` and CONCRETE-2 adds
-                # `extras.view_archivesegment` for one of the two users.
+                # Both users get to see the rules: the point of these accounts is that the *only*
+                # difference between them is whether they may read retained history.
+                # PLACEHOLDER: CONCRETE-2 adds `extras.view_archivesegment` for one of the two.
+                "extras.view_retentionrule",
                 "dcim.view_device",
                 "dcim.view_location",
             ]
@@ -340,6 +475,21 @@ class Command(BaseCommand):
             (f"  of which {MARKER}", ObjectChange.objects.filter(change_context_detail__startswith=MARKER).count()),
             ("Warm job results", JobResult.objects.count()),
             (f"  of which {MARKER}", JobResult.objects.filter(name__startswith=MARKER).count()),
+            ("Retention rules", RetentionRule.objects.count()),
+            # Truncation deletes these, so they are used up by the first real run. Reported so a tester can
+            # see when there is nothing left for the rules to act on and re-run with --flush.
+            (
+                "Warm truncation candidates",
+                ObjectChange.objects.filter(change_context_detail=TRUNCATION_MARKER).count(),
+            ),
+            (
+                "  of which deletable",
+                ObjectChange.objects.filter(
+                    change_context_detail=TRUNCATION_MARKER, action=ObjectChangeActionChoices.ACTION_DELETE
+                )
+                .exclude(user_name="carol")
+                .count(),
+            ),
         ]
         self.stdout.write("")
         for label, count in rows:
@@ -357,6 +507,8 @@ class Command(BaseCommand):
         for queryset in (
             ObjectChange.objects.filter(change_context_detail__startswith=MARKER),
             JobResult.objects.filter(name__startswith=MARKER),
+            RetentionRule.objects.filter(name__startswith=MARKER),
+            ObjectPermission.objects.filter(name__startswith=MARKER),
             User.objects.filter(username__in=DEMO_USERS),
         ):
             for label, count in queryset.delete()[1].items():
