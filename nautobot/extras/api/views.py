@@ -59,6 +59,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1525,6 +1526,19 @@ class RetentionRuleViewSet(NautobotModelViewSet):
     queryset = RetentionRule.objects.select_related("content_type")
     serializer_class = serializers.RetentionRuleSerializer
     filterset_class = filters.RetentionRuleFilterSet
+
+
+class ArchiveSegmentViewSet(ReadOnlyModelViewSet):
+    """
+    List the retention periods available to read.
+
+    This is how a client discovers valid `archive_period` values. Read-only: periods are created and
+    maintained by the rotation job.
+    """
+
+    queryset = ArchiveSegment.objects.all()
+    serializer_class = serializers.ArchiveSegmentSerializer
+    filterset_class = filters.ArchiveSegmentFilterSet
 
 
 class ObjectChangeViewSet(ArchiveReadViewSetMixin, ReadOnlyModelViewSet):

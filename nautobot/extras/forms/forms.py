@@ -71,6 +71,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -150,6 +151,7 @@ __all__ = (
     "ApprovalWorkflowStageDefinitionFormSet",
     "ApprovalWorkflowStageFilterForm",
     "ApprovalWorkflowStageResponseFilterForm",
+    "ArchiveSegmentFilterForm",
     "BaseDynamicGroupMembershipFormSet",
     "ComputedFieldBulkEditForm",
     "ComputedFieldFilterForm",
@@ -2532,9 +2534,13 @@ class ObjectChangeFilterForm(BootstrapMixin, forms.Form):
     )
 
 
-#
-# Relationship
-#
+class ArchiveSegmentFilterForm(BootstrapMixin, forms.Form):
+    """Filter form for the list of periods."""
+
+    model = ArchiveSegment
+    q = forms.CharField(required=False, label="Search")
+    model_label = forms.CharField(required=False, label="Record Type")
+    period_key = forms.CharField(required=False, label="Period Key")
 
 
 class RelationshipBulkEditForm(BootstrapMixin, CustomFieldModelBulkEditFormMixin, NoteModelBulkEditFormMixin):

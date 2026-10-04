@@ -278,6 +278,17 @@ menu_items = (
                         buttons=(),
                     ),
                     NavMenuItem(
+                        link="extras:archivesegment_list",
+                        name="Archive Periods",
+                        weight=185,
+                        # The same permission, and on this page it is the model's own `view` permission
+                        # rather than one borrowed from it.
+                        permissions=[
+                            "extras.view_archivesegment",
+                        ],
+                        buttons=(),
+                    ),
+                    NavMenuItem(
                         link="extras:retentionrule_list",
                         name="Retention Rules",
                         weight=200,

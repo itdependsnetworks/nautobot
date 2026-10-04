@@ -211,6 +211,20 @@ class ArchiveReadAPITestCase(ArchiveReadFixtureMixin, APITestCase):
         self.assertHttpStatus(response, 200)
         self.assertEqual(response.data["results"][0]["changed_object"], "Archived Widget")
 
+    def test_archive_segments_endpoint_lists_the_available_periods(self):
+        """How a client discovers valid `archive_period` values."""
+        self.add_permissions("extras.view_archivesegment")
+        self.build_period(period_key="2020")
+        self.build_period(period_key="2021")
+
+        response = self.client.get(reverse("extras-api:archivesegment-list"), **self.header)
+
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(
+            {entry["period_key"] for entry in response.data["results"]},
+            {"2020", "2021"},
+        )
+
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class ArchivedRecordsAreReadOnlyTestCase(ArchiveReadFixtureMixin, TestCase):

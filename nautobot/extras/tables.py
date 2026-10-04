@@ -34,6 +34,7 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -969,6 +970,25 @@ class RetentionRuleTable(BaseTable):
         model = RetentionRule
         fields = ("pk", "name", "content_type", "mode", "max_age_days", "weight", "enabled", "description")
         default_columns = ("pk", "name", "content_type", "mode", "max_age_days", "enabled")
+
+
+class ArchiveSegmentTable(BaseTable):
+    label = tables.Column(linkify=True)
+    is_period_closed = BooleanColumn(verbose_name="Closed")
+
+    class Meta(BaseTable.Meta):
+        model = ArchiveSegment
+        fields = (
+            "label",
+            "model_label",
+            "period_key",
+            "row_count",
+            "last_rotated_time",
+            "is_period_closed",
+            "time_start",
+            "time_end",
+        )
+        default_columns = ("label", "model_label", "row_count", "last_rotated_time", "is_period_closed")
 
 
 class ExportTemplateTable(BaseTable):

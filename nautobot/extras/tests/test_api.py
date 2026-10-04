@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 import tempfile
 from unittest import mock, skip
 from urllib.parse import urlencode
@@ -66,6 +66,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -5172,6 +5173,24 @@ class RetentionRuleTest(APIViewTestCases.APIViewTestCase):
             },
         ]
         cls.update_data = {"name": "Renamed rule", "description": "Updated", "enabled": False}
+
+
+class ArchiveSegmentTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
+    """Read-only: retention periods are created by the rotation job, never through the API."""
+
+    model = ArchiveSegment
+
+    @classmethod
+    def setUpTestData(cls):
+        for year in (2022, 2023, 2024):
+            ArchiveSegment.objects.create(
+                model_label="extras.objectchange",
+                period_key=str(year),
+                label=str(year),
+                time_start=datetime(year, 1, 1, tzinfo=dt_timezone.utc),
+                time_end=datetime(year + 1, 1, 1, tzinfo=dt_timezone.utc),
+                row_count=year,
+            )
 
 
 class ObjectChangeTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):

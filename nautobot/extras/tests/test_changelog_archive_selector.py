@@ -464,6 +464,16 @@ class ArchivedRelationRenderingTestCase(ArchiveReadFixtureMixin, TestCase):
         self.assertEqual(data["job_result"]["id"], str(job_result_id))
         self.assertEqual(data["job_result"]["object_type"], "extras.jobresult")
 
+    def test_uncovered_model_ignores_the_parameter(self):
+        """
+        A stray `archive_period` carried over from another page must not error.
+
+        ArchiveSegment has no retained history of its own, and this 500'd before.
+        """
+        self.add_permissions("extras.view_archivesegment")
+        response = self.client.get(f"{reverse('extras:archivesegment_list')}?archive_period={PERIOD}")
+        self.assertHttpStatus(response, 200)
+
     def test_unknown_period_on_a_covered_model_is_reported_not_a_server_error(self):
         self.add_permissions("extras.view_objectchange", COLD_STORAGE_PERMISSION)
         response = self.client.get(f"{reverse('extras:objectchange_list')}?archive_period=1999")

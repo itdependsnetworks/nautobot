@@ -54,6 +54,7 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1215,6 +1216,20 @@ class RetentionRuleSerializer(NautobotModelSerializer):
         extra_kwargs = {
             "scope_filter": {"read_only": False, "required": False},
         }
+
+
+class ArchiveSegmentSerializer(BaseModelSerializer):
+    """
+    One period of retained history.
+
+    Here to serve the UI viewset, which needs a serializer. There is no REST route for it: a period is
+    created by rotation and changed by nothing, so an API client reading one would learn only what
+    reading the retained records themselves already says.
+    """
+
+    class Meta:
+        model = ArchiveSegment
+        fields = "__all__"
 
 
 class ObjectChangeSerializer(ArchivedRelationSerializerMixin, BaseModelSerializer):
