@@ -127,6 +127,11 @@ CHARFIELD_MAX_LENGTH = 255
 # it without pulling in a models module before the app registry is ready.
 CHANGELOG_ARCHIVE = "changelog_archive"
 
+# The single permission gating every read of retained change history. One grant covering all covered
+# models, rather than one per model: the default view permission on the period registry, so it appears in
+# the existing object-permission UI and API with no new machinery.
+COLD_STORAGE_PERMISSION = "extras.view_archivesegment"
+
 # Default values for pagination settings.
 MAX_PAGE_SIZE_DEFAULT = 1000
 PAGINATE_COUNT_DEFAULT = 50
@@ -139,6 +144,13 @@ GLOBAL_SEARCH_EXCLUDE_LIST = [
     "approvalworkflowstage",
     "approvalworkflowstagedefinition",
     "approvalworkflowstageresponse",
+    # Retained change history is reached one period at a time from the change log views, not through
+    # global search, and the period registry is bookkeeping rather than something to search for.
+    "archivedjobconsoleentry",
+    "archivedjoblogentry",
+    "archivedjobresult",
+    "archivedobjectchange",
+    "archivesegment",
     "cablepath",
     "cabletocabletermination",
     "circuittermination",
