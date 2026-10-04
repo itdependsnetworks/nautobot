@@ -674,7 +674,22 @@ class NautobotViewSetMixin(GenericViewSet, UIComponentsMixin, AccessMixin, GetRe
         Override the original `get_queryset()` to apply permission specific to the user and action.
         """
         queryset = super().get_queryset()
+        if self._is_archive_mirror(queryset.model):
+            # A retention mirror declares no permissions of its own, so `restrict` would resolve
+            # `view_archived<model>` -- a permission nobody is granted -- and return nothing at all. Access to
+            # retained history is gated once, on the cold-storage permission, at the point the queryset is
+            # built. Per-record restriction against retained history is explicitly out of scope (TRD §2).
+            return queryset
         return queryset.restrict(self.request.user, self.get_action())
+
+    @staticmethod
+    def _is_archive_mirror(model):
+        """Whether `model` is a retained-history model, and so is gated by the cold-storage permission instead."""
+        from nautobot.extras.registry import registry
+
+        # Getting this wrong is silent: `restrict` on a model that declares no permissions returns an
+        # empty queryset instead of raising.
+        return model in registry["changelog_archive_models"].values()
 
     def get_action(self):
         """Helper method for retrieving action and if action not set defaulting to action name."""
@@ -858,6 +873,27 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
         """
         Filter a query with request querystrings.
         """
+        try:
+            archived = self._apply_archive_period(queryset)
+        except ValidationError as error:
+            # A period that does not exist is a bad URL. Report it and show nothing, rather than falling
+            # back to warm records the reader would read as archived.
+            messages.error(self.request, format_html("{}", "; ".join(error.messages)))
+            self.filter_params = {}
+            return queryset.none()
+        if archived is not None:
+            # Filtered through the mirror's own filterset, not the warm one: a few warm filters traverse
+            # relations the mirror declares as identifier columns.
+            from nautobot.extras.archive_reads import filter_archive_queryset
+
+            # The renderer reads `filter_params` to show which filters are active, so it has to be set on
+            # this path too -- returning early without it renders as a NoneType error.
+            self.filter_params = self.get_filter_params(self.request) if self.filterset_class is not None else {}
+            archived, filterset = filter_archive_queryset(archived, self.request.GET)
+            if filterset is not None and not filterset.is_valid():
+                messages.error(self.request, format_html("Invalid filters were specified: {}", filterset.errors))
+                return archived.none()
+            return archived
         if self.filterset_class is not None:
             self.filter_params = self.get_filter_params(self.request)
             self.filterset = self.filterset_class(self.filter_params, queryset)
@@ -875,6 +911,31 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
             if self.filterset.is_valid() and self.filterset.data:
                 self.hide_hierarchy_ui = True
         return queryset
+
+    def _apply_archive_period(self, queryset):
+        """
+        The queryset for one retained-history period, or None when the request names no period.
+
+        One period per query, never merged with warm storage, so the filterset, table, and paginator all
+        behave exactly as they do for a warm read. Absent the parameter this is a no-op, which is what
+        keeps the default path unchanged.
+        """
+        from nautobot.extras.archive_reads import (
+            get_archive_queryset,
+            requested_archive_period,
+        )
+        from nautobot.extras.models.archive import archive_model_for
+
+        period_key = requested_archive_period(self.request)
+        if not period_key:
+            return None
+        if archive_model_for(queryset.model) is None:
+            # This model has no retained history, so the parameter means nothing here. Ignoring it beats
+            # erroring on a stray parameter carried over from another page.
+            return None
+        # PermissionDenied is deliberately not caught: silently serving warm rows would let a reader
+        # mistake them for archived ones.
+        return get_archive_queryset(queryset.model, period_key, self.request.user)
 
     # 3.0 TODO: remove, irrelevant after #4746
     def check_for_export(self, request, model, content_type):

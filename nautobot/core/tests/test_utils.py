@@ -274,6 +274,37 @@ class NormalizeQueryDictTest(TestCase):
     Validate normalize_querydict() utility function.
     """
 
+    def test_a_single_valued_form_field_is_de_listed(self):
+        """
+        What binds a filter form to a view's resolved filter parameters.
+
+        `get_filterable_params_from_filter_params` returns a list for every filter the filterset treats
+        as multi-valued, which is most of them. A filter form declaring the same name as a single field
+        then received a list: `time__gte` is a `MultiValueDateTimeFilter` on the filterset and a
+        `DateTimeField` on the form, and `DateTimeField.to_python` raised
+        `AttributeError: 'list' object has no attribute 'strip'`, 500ing every list view reached with a
+        date filter in the query string.
+        """
+        from nautobot.extras.forms import ObjectChangeFilterForm
+
+        self.assertDictEqual(
+            requests.normalize_querydict(
+                {"time__gte": ["2026-10-03 12:00:00"], "change_context": ["orm", "web"]},
+                form_class=ObjectChangeFilterForm,
+            ),
+            {"time__gte": "2026-10-03 12:00:00", "change_context": ["orm", "web"]},
+        )
+
+    def test_a_filter_form_binds_and_cleans_what_it_returns(self):
+        """The failure above, end to end through a real form."""
+        from nautobot.extras.forms import ObjectChangeFilterForm
+
+        params = {"time__gte": ["2026-10-03 12:00:00"], "change_context": ["orm", "web"]}
+        form = ObjectChangeFilterForm(requests.normalize_querydict(params, form_class=ObjectChangeFilterForm))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNotNone(form.cleaned_data["time__gte"])
+        self.assertEqual(form.cleaned_data["change_context"], ["orm", "web"])
+
     def test_normalize_querydict(self):
         self.assertDictEqual(
             requests.normalize_querydict(QueryDict("foo=1&bar=2&bar=3&baz=")),

@@ -1,8 +1,10 @@
+import contextlib
 import logging
 import re
 from textwrap import dedent
 
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import QuerySet
 from django.utils.html import format_html, format_html_join
 import django_tables2 as tables
 from django_tables2.utils import Accessor
@@ -74,6 +76,7 @@ from .models import (
     Webhook,
 )
 from .registry import registry
+from .utils import resolve_object_urls
 
 logger = logging.getLogger(__name__)
 
@@ -214,14 +217,6 @@ JOB_RESULT_BUTTONS = """
 
 SCHEDULED_JOB_BUTTONS = """
 <li><a href="{% url 'extras:jobresult_list' %}?scheduled_job={{ record.name | urlencode }}" class="dropdown-item"><span class="mdi mdi-format-list-bulleted" aria-hidden="true"></span>Job Results</a></li>
-"""
-
-OBJECTCHANGE_OBJECT = """
-{% if record.changed_object and record.changed_object.get_absolute_url %}
-    <a href="{{ record.changed_object.get_absolute_url }}">{{ record.object_repr }}</a>
-{% else %}
-    {{ record.object_repr }}
-{% endif %}
 """
 
 OBJECTCHANGE_REQUEST_ID = """
@@ -1634,11 +1629,34 @@ class ScheduledJobApprovalQueueTable(BaseTable):
         fields = ("name", "job_model", "interval", "user", "start_time", "actions")
 
 
+class ChangedObjectColumn(tables.Column):
+    """
+    The change log's Object column: the record's `object_repr`, linked to the object where one resolves.
+
+    A warm record reaches its object through a generic foreign key, which the table prefetches. A retained
+    record has no such relation -- rotation demotes it to a content type id and an object id -- so the link
+    is resolved from those instead, in one batch for the whole page. Either way the fallback is the same:
+    the stored `object_repr` as plain text, which is all there is once the object itself is gone.
+    """
+
+    def render(self, record, table):
+        url = None
+        changed_object = getattr(record, "changed_object", None)
+        if changed_object is not None:
+            with contextlib.suppress(AttributeError):
+                url = changed_object.get_absolute_url()
+        else:
+            url = table.changed_object_urls().get((record.changed_object_type_id, record.changed_object_id))
+        if url:
+            return format_html('<a href="{}">{}</a>', url, record.object_repr)
+        return record.object_repr
+
+
 class ObjectChangeTable(BaseTable):
     time = tables.DateTimeColumn(linkify=True, short=True)
     action = ChoiceFieldColumn()
     changed_object_type = tables.Column(verbose_name="Type")
-    object_repr = tables.TemplateColumn(template_code=OBJECTCHANGE_OBJECT, verbose_name="Object")
+    object_repr = ChangedObjectColumn(verbose_name="Object")
     request_id = tables.TemplateColumn(template_code=OBJECTCHANGE_REQUEST_ID, verbose_name="Request ID")
 
     class Meta(BaseTable.Meta):
@@ -1654,7 +1672,9 @@ class ObjectChangeTable(BaseTable):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Only prefetch if all content types are valid
+        self._changed_object_urls = None
+        # Only prefetch if all content types are valid. `add_conditional_prefetch` skips the field on a
+        # retention mirror, which has no `changed_object` relation to follow.
         if all(ct.model_class() is not None for ct in ContentType.objects.all()):
             self.add_conditional_prefetch("object_repr", "changed_object")
         else:
@@ -1679,6 +1699,31 @@ class ObjectChangeTable(BaseTable):
                             Please ensure you fully understand the implications of these actions before proceeding.
                             """)
             logger.warning(error_message)
+
+    def changed_object_urls(self):
+        """
+        Resolve every retained record on this page to its object's URL, once.
+
+        Only retained records need this. A warm record's generic foreign key is already prefetched, so
+        asking for one row at a time there would be the N+1 this exists to avoid.
+        """
+        if self._changed_object_urls is None:
+            if not self._renders_retained_history():
+                self._changed_object_urls = {}
+            else:
+                rows = self.paginated_rows
+                data = getattr(rows, "data", None)
+                data = getattr(data, "data", data)
+                # Evaluate the page's queryset before walking it. It is the same object the renderer
+                # iterates immediately afterwards, so filling its result cache here makes this scan free
+                # instead of running the page query a second time.
+                if isinstance(data, QuerySet):
+                    len(data)
+                self._changed_object_urls = resolve_object_urls(
+                    (record.changed_object_type_id, record.changed_object_id)
+                    for record in (getattr(row, "record", row) for row in rows)
+                )
+        return self._changed_object_urls
 
 
 #

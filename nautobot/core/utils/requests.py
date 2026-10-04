@@ -15,6 +15,7 @@ from nautobot.core.utils.filtering import get_filterset_field
 
 NON_FILTER_PARAMS = (
     "all_filters_removed",  # indicator for if all filters have been removed from the saved view
+    "archive_period",  # selects one period of retained history; see nautobot.extras.models.archive
     "clear_view",  # indicator for if the clear view button is clicked or not
     "export",  # trigger for CSV/export-template/YAML export # 3.0 TODO: remove, irrelevant after #4746
     "page",  # used by django-tables2.RequestConfig

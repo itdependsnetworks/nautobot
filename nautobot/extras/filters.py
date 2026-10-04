@@ -67,6 +67,10 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1779,3 +1783,164 @@ class RoleFilterSet(NautobotFilterSet):
             "created",
             "last_updated",
         ]
+
+
+#
+# Changelog long-term retention
+#
+# Declared against the mirrors rather than derived from the warm filtersets, which would spend their
+# effort discovering which warm filters no longer resolve against an identifier column and removing
+# them. `period_key` is absent: the period is which storage a read opens, not a column to filter on.
+#
+# The cost is that a filter added to a warm filterset does not appear here until someone adds it.
+# `check_changelog_archive_schema` reports diverging fields, not filters.
+
+
+class ArchiveSegmentFilterSet(BaseFilterSet):
+    """
+    Filters on the list of periods.
+
+    `model_label` and `period_key` are text, not choices. The record types a deployment covers can grow,
+    and a period key is whatever granularity was in effect when the period was created, so a fixed choice
+    set here would stop naming periods that exist.
+
+    """
+
+    q = SearchFilter(
+        filter_predicates={
+            "label": "icontains",
+            "model_label": "icontains",
+            "period_key": "icontains",
+        },
+    )
+
+    class Meta:
+        model = ArchiveSegment
+        fields = [
+            "id",
+            "model_label",
+            "period_key",
+            "label",
+            "time_start",
+            "time_end",
+            "row_count",
+            "last_rotated_time",
+        ]
+
+
+class ArchivedContentTypeFilter(django_filters.CharFilter):
+    """
+    Filter a retention mirror's bare content-type id column by `app_label.model`.
+
+    The mirrors declare content types as identifier columns instead of relations, so `ContentTypeFilter`
+    has nothing to traverse. This keeps the same `?changed_object_type=dcim.device` spelling working
+    against a retained period.
+    """
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        try:
+            app_label, model = value.lower().strip().split(".")
+        except ValueError:
+            return qs.none()
+        content_type_id = (
+            ContentType.objects.filter(app_label=app_label, model=model).values_list("pk", flat=True).first()
+        )
+        if content_type_id is None:
+            return qs.none()
+        return qs.filter(**{self.field_name: content_type_id})
+
+
+class ArchivedObjectChangeFilterSet(BaseFilterSet):
+    """Filters offered on a retained period of `ObjectChange` history."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "user_name": "icontains",
+            "object_repr": "icontains",
+        },
+    )
+    # `user` is absent on purpose: the mirror records `user_name` as text and has no relation to a live
+    # user, which may since have been renamed or deleted. Searching the recorded name is what remains true.
+    changed_object_type = ArchivedContentTypeFilter(field_name="changed_object_type_id")
+    change_context = MultipleChoiceFilter(label="Change Context", choices=ObjectChangeEventContextChoices)
+    change_context_detail = MultiValueCharFilter(label="Change Context Detail")
+
+    class Meta:
+        model = ArchivedObjectChange
+        fields = [
+            "id",
+            "user_name",
+            "change_context",
+            "change_context_detail",
+            "request_id",
+            "action",
+            "changed_object_type_id",
+            "changed_object_id",
+            "object_repr",
+            "time",
+        ]
+
+
+class ArchivedJobResultFilterSet(BaseFilterSet):
+    """Filters offered on a retained period of `JobResult` history."""
+
+    q = SearchFilter(filter_predicates={"name": "icontains"})
+    # `job_model`, `scheduled_job`, `user` and `canceled_by` are identifier columns on the mirror with no
+    # relation to traverse, and `has_job_console_entries` has no reverse relation to test. The job's name
+    # is copied onto `name` at rotation, so searching by name still works.
+    status = MultipleChoiceFilter(choices=JobResultStatusChoices, null_value=None)
+
+    class Meta:
+        model = ArchivedJobResult
+        fields = [
+            "id",
+            "date_created",
+            "date_started",
+            "date_done",
+            "date_canceled",
+            "name",
+            "status",
+        ]
+
+
+class ArchivedJobLogEntryFilterSet(BaseFilterSet):
+    """Filters offered on a retained period of `JobLogEntry` history."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "grouping": "icontains",
+            "message": "icontains",
+            "log_level": "icontains",
+        },
+    )
+
+    class Meta:
+        model = ArchivedJobLogEntry
+        fields = [
+            "id",
+            "created",
+            "grouping",
+            "log_level",
+            "log_object",
+            "message",
+            "absolute_url",
+            "job_result_id",
+        ]
+
+
+ARCHIVE_FILTERSETS = {
+    "extras.archivedobjectchange": ArchivedObjectChangeFilterSet,
+    "extras.archivedjobresult": ArchivedJobResultFilterSet,
+    "extras.archivedjoblogentry": ArchivedJobLogEntryFilterSet,
+}
+
+
+def archive_filterset_for(mirror_model):
+    """
+    The filterset to apply within a retained period, or None if the mirror has none.
+
+    Keyed on the declared mirror, because the filterset describes the shape of retained history.
+    """
+    return ARCHIVE_FILTERSETS.get(mirror_model._meta.label_lower)

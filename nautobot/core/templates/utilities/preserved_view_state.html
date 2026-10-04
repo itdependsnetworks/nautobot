@@ -1,0 +1,10 @@
+{% comment %}
+Carries view-state query parameters through a GET form.
+
+A plain GET form submits only its own fields, so a parameter that selects what the page is showing -- as
+opposed to filtering it -- is lost on submit unless it is repeated here. See
+`nautobot.core.templatetags.form_helpers.PRESERVED_VIEW_STATE_PARAMS`.
+{% endcomment %}
+{% for name, value in preserved_params %}
+    <input type="hidden" name="{{ name }}" value="{{ value }}">
+{% endfor %}
