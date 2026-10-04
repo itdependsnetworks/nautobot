@@ -8,8 +8,10 @@ generator that produces flat, uniform, or incoherent data is worse than no gener
 gets mistaken for a bug in the thing being tested.
 """
 
+from datetime import datetime, timezone as dt_timezone
 from io import StringIO
 from itertools import pairwise
+import uuid
 
 from constance.test import override_config
 from django.core.management import call_command
@@ -39,7 +41,8 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
-from nautobot.extras.models.archive import period_models_for
+from nautobot.extras.models.archive import period_model_for, period_models_for, period_table_name
+from nautobot.extras.registry import registry
 from nautobot.users.models import ObjectPermission, User
 
 # `override_config` for the two runtime knobs the command still writes. Constance config is cached in
@@ -444,3 +447,133 @@ class DemoDataTruncationTestCase(CreateChangelogRetentionDemoDataTestCase):
         self.truncate()
 
         self.assertEqual(failed.count(), 0)
+
+
+@override_config(CHANGELOG_WARM_WINDOW_DAYS=90)
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class DemoDataCalendarPeriodTestCase(CreateChangelogRetentionDemoDataTestCase):
+    """
+    `--period`, which is how a demo instance shows calendar periods without being restarted.
+
+    `CHANGELOG_ARCHIVE_PERIOD` needs a restart to change, so without this the command could only ever
+    produce the granularity the instance was started on, and the period selector would have one entry
+    whatever the feature can do.
+    """
+
+    def tearDown(self):
+        """Drop the period tables, so the next test is not reading a table this one created."""
+        super().tearDown()
+        from django.db import connections
+
+        for mirror in (ArchivedObjectChange, ArchivedJobLogEntry, ArchivedJobConsoleEntry, ArchivedJobResult):
+            for year in YEARS:
+                table = period_table_name(mirror, str(year))
+                with connections[CHANGELOG_ARCHIVE].cursor() as cursor:
+                    cursor.execute(f'DROP TABLE IF EXISTS "{table}"')
+
+    def test_a_period_per_year_of_fabricated_history(self):
+        """The history spans `YEARS`, so yearly rotation gives one period for each."""
+        self.run_command("--period", "year")
+
+        keys = set(
+            ArchiveSegment.objects.filter(model_label="extras.objectchange").values_list("period_key", flat=True)
+        )
+        self.assertEqual({str(year) for year in YEARS}, keys)
+
+    def test_each_year_holds_the_records_fabricated_for_it(self):
+        """
+        A record's own timestamp picks its period, so the per-year counts the command fabricates are the
+        per-period counts that come out.
+        """
+        self.run_command("--period", "year")
+
+        for year, expected in zip(YEARS, CHANGES_PER_YEAR):
+            with self.subTest(year=year):
+                period_model = period_model_for(ArchivedObjectChange, str(year))
+                self.assertEqual(expected, period_model.objects.filter(change_context_detail=MARKER).count())
+
+    def test_nothing_is_written_to_the_unbounded_period(self):
+        """A calendar granularity stops writing there entirely."""
+        self.run_command("--period", "year")
+
+        self.assertEqual(0, ArchivedObjectChange.objects.filter(change_context_detail=MARKER).count())
+
+    def test_the_setting_is_restored_afterwards(self):
+        """`--period` applies to this command's rotation, not to the scheduled job that follows it."""
+        from django.conf import settings
+
+        before = settings.CHANGELOG_ARCHIVE_PERIOD
+        self.run_command("--period", "year")
+        self.assertEqual(before, settings.CHANGELOG_ARCHIVE_PERIOD)
+
+    def test_flush_sweeps_every_period(self):
+        """
+        A flush reading only the mirrors' own tables would report nothing removed and leave the whole
+        demo history in place, because under a calendar granularity those tables are empty.
+        """
+        self.run_command("--period", "year")
+        self.assertTrue(self.retained_demo_changes().count())
+
+        self.run_command("--teardown")
+
+        self.assertEqual(0, self.retained_demo_changes().count())
+
+    def test_flush_removes_the_periods_it_emptied(self):
+        """
+        No segment survives naming a period that holds nothing.
+
+        Which periods those are is not pinned. Rotation is unfiltered by design, so it also moves the
+        test database's own backdated change records, and whichever year those fall in keeps its records
+        and its segment through a flush. That is correct: they are not this command's to remove.
+        """
+        self.run_command("--period", "year")
+        before = ArchiveSegment.objects.count()
+        self.assertTrue(before)
+
+        self.run_command("--teardown")
+
+        self.assertLess(ArchiveSegment.objects.count(), before, "the flush emptied periods and removed no segment")
+        for segment in ArchiveSegment.objects.all():
+            mirror = registry["changelog_archive_models"][segment.model_label]
+            with self.subTest(segment=str(segment)):
+                self.assertTrue(
+                    period_model_for(mirror, segment.period_key).objects.exists(),
+                    "a segment survived naming a period with nothing in it",
+                )
+
+    def test_flush_keeps_a_period_that_still_holds_records(self):
+        """
+        The registry is the rotation job's to maintain, and a period holding records this command did not
+        create is not this command's to remove.
+        """
+        self.run_command("--period", "year")
+        kept = period_model_for(ArchivedObjectChange, str(YEARS[0]))
+        kept.objects.create(
+            id=uuid.uuid4(),
+            period_key=str(YEARS[0]),
+            time=datetime(YEARS[0], 6, 1, tzinfo=dt_timezone.utc),
+            user_name="someone else",
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_id=uuid.uuid4(),
+            change_context="orm",
+            object_repr="not the demo's",
+            object_data={},
+        )
+
+        self.run_command("--teardown")
+
+        self.assertTrue(ArchiveSegment.objects.filter(period_key=str(YEARS[0])).exists())
+        self.assertEqual(1, kept.objects.count())
+
+    def test_flush_leaves_a_period_whose_table_is_gone(self):
+        """
+        A segment naming a table an operator dropped is their own doing, and reading it to decide would
+        raise `UndefinedTable` and abort the transaction the whole flush runs in.
+        """
+        self.run_command("--period", "year")
+        orphan = ArchiveSegment.objects.create(model_label="extras.objectchange", period_key="1999", row_count=1)
+
+        self.run_command("--teardown")
+
+        self.assertTrue(ArchiveSegment.objects.filter(pk=orphan.pk).exists())

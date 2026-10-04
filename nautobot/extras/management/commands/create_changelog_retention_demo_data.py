@@ -1,12 +1,11 @@
 """
 Generate everything needed to exercise changelog long-term retention by hand.
 
-Retention only acts on records older than the warm window, so a fresh install has nothing to show until
-history has had months to accumulate. This fabricates that history with backdated timestamps, then
-rotates it, adds rules for the truncation job with records it can actually delete, and creates
-a user who may read retained history and one who may not.
-
-# PLACEHOLDER: ABSTRACT-5 adds --period, which rotates this history under a chosen granularity.
+Retention is hard to try out on a fresh install: it only does anything to records older than the warm
+window, so there is nothing to rotate until history has had months to accumulate. This fabricates that
+history with backdated timestamps, then optionally rotates it, leaving an instance where every part of the
+feature has something real to show -- retained records to browse and filter, a rule to run truncation
+with, and a user who may read retained history and one who may not.
 
 Everything it creates is tagged with MARKER, in `change_context_detail` for change records and in the name or text
 for everything else, so `--flush` can find and remove all of it. It never touches a record it did not
@@ -33,6 +32,7 @@ from django.utils import timezone
 
 from nautobot.dcim.models import Device, Location
 from nautobot.extras.choices import (
+    ChangelogArchivePeriodChoices,
     JobConsoleEntryOutputTypeChoices,
     JobResultStatusChoices,
     LogLevelChoices,
@@ -61,7 +61,8 @@ MARKER = "retention-demo"
 #: backdated history -- and every count and invariant over that history has to be able to exclude them.
 TRUNCATION_MARKER = f"{MARKER}-truncation"
 
-#: Years to fabricate history for.
+#: Years to fabricate history for. Under the default `unbounded` granularity all four are written to the
+#: one period; under a calendar granularity each year becomes one or more periods of its own.
 YEARS = (2022, 2023, 2024, 2025)
 #: One entry per year in YEARS. Uneven so a count in the UI can be traced to what it is counting.
 CHANGES_PER_YEAR = (17, 63, 41, 28)
@@ -129,7 +130,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--teardown",
             action="store_true",
-            help="Remove what a previous run created and generate nothing.",
+            help="Remove what a previous run created, turn retention off, and generate nothing.",
         )
         parser.add_argument(
             "--no-rotate",
@@ -150,6 +151,16 @@ class Command(BaseCommand):
             type=int,
             default=DEFAULT_SEED,
             help="Random seed, so a re-run reproduces the same history. Change it for a different shape.",
+        )
+        parser.add_argument(
+            "--period",
+            choices=[value for value, _ in ChangelogArchivePeriodChoices.CHOICES],
+            help=(
+                "Granularity to rotate this history under, for the duration of this command only. Without "
+                "it, CHANGELOG_ARCHIVE_PERIOD decides, as it does for the scheduled job. Pass `year` to "
+                f"get a period per year in {YEARS}, so the period selector has something to select, "
+                "without restarting the instance on a different setting."
+            ),
         )
 
     def handle(self, *args, **options):
@@ -175,7 +186,7 @@ class Command(BaseCommand):
         # Outside the transaction above on purpose: rotation manages its own per-increment transactions,
         # and wrapping it would undo the bounded-increment behaviour this command exists to demonstrate.
         if options["rotate"]:
-            self._rotate()
+            self._rotate(options["period"])
 
         self._report()
         self.stdout.write(
@@ -190,6 +201,7 @@ class Command(BaseCommand):
     def _configure(self):
         """Set the runtime tuning this fabricated history is shaped for, and check the capability is on."""
         from constance import config
+        from django.conf import settings
 
         if not settings.CHANGELOG_ARCHIVE_ENABLED:
             raise CommandError(
@@ -322,7 +334,7 @@ class Command(BaseCommand):
     # Job history
 
     def _job_history(self, rng):
-        """Backdated job results with log and console output, so job history is old enough to retain too."""
+        """Backdated job results with log and console output, so job history has something to rotate too."""
         made = defaultdict(int)
         for year, total in zip(YEARS, JOB_RESULTS_PER_YEAR):
             for index in range(total):
@@ -532,11 +544,14 @@ class Command(BaseCommand):
 
     # Rotation
 
-    def _rotate(self):
+    def _rotate(self, period=None):
         """
         Run the rotation job in-process, so no worker is needed to get retained history to look at.
 
         Its log goes to stdout, there being no real `JobResult` behind it.
+
+        `period` overrides `CHANGELOG_ARCHIVE_PERIOD` for this run only. That setting needs a restart, so
+        without this a demo instance could only show the granularity it was started on.
         """
         from nautobot.core.jobs.retention import ChangelogRotation
 
@@ -554,20 +569,25 @@ class Command(BaseCommand):
         job.logger = logger
         job.job_result = _StubJobResult(User.objects.filter(is_superuser=True).first())
 
-        self.stdout.write(self.style.NOTICE("Running Changelog Rotation in-process"))
-        result = job.run(record_types=None, warm_window_days=90, batch_size=500, dry_run=False)
+        granularity = period or settings.CHANGELOG_ARCHIVE_PERIOD
+        self.stdout.write(self.style.NOTICE(f"Running Changelog Rotation in-process, period `{granularity}`"))
+        previous = settings.CHANGELOG_ARCHIVE_PERIOD
+        settings.CHANGELOG_ARCHIVE_PERIOD = granularity
+        try:
+            result = job.run(record_types=None, warm_window_days=90, batch_size=500, dry_run=False)
+        finally:
+            settings.CHANGELOG_ARCHIVE_PERIOD = previous
         self.stdout.write(self.style.SUCCESS(f"Rotated: {result}"))
 
     # Reporting and teardown
 
     def _report(self):
-        """What exists now, so a run can be checked without opening the UI."""
+        """What exists now, warm and retained, so a run can be checked without opening the UI."""
         rows = [
             ("Warm change records", ObjectChange.objects.count()),
             (f"  of which {MARKER}", ObjectChange.objects.filter(change_context_detail__startswith=MARKER).count()),
-            ("Warm job results", JobResult.objects.count()),
-            (f"  of which {MARKER}", JobResult.objects.filter(name__startswith=MARKER).count()),
             ("Retained change records", ArchivedObjectChange.objects.count()),
+            ("Warm job results", JobResult.objects.count()),
             ("Retained job results", ArchivedJobResult.objects.count()),
             ("Retained job log entries", ArchivedJobLogEntry.objects.count()),
             ("Retained console entries", ArchivedJobConsoleEntry.objects.count()),
@@ -592,6 +612,44 @@ class Command(BaseCommand):
             self.stdout.write(f"{label:28} {count}")
 
         self._report_storage()
+
+        from nautobot.extras.registry import registry
+
+        for warm_label, mirror in sorted(registry["changelog_archive_models"].items()):
+            self.stdout.write(f"  {warm_label:32} {mirror.objects.count():6} rows  {mirror._meta.db_table}")
+
+    def _report_storage(self):
+        """
+        Where retained history is being written, which is what a tester most often needs to check.
+
+        The archive sharing the primary database and the archive on its own host look identical from the UI.
+        """
+        from django.conf import settings
+
+        from nautobot.core.constants import CHANGELOG_ARCHIVE
+        from nautobot.core.utils.config import changelog_archive_is_separate
+
+        archive = settings.DATABASES.get(CHANGELOG_ARCHIVE, {})
+        if changelog_archive_is_separate():
+            host = archive.get("HOST") or "localhost"
+            target = f"{archive.get('NAME', '?')} on {host}:{archive.get('PORT') or 'default'}"
+        else:
+            target = f"{archive.get('NAME', '?')} (same database as default)"
+        self.stdout.write("")
+        self.stdout.write(f"{'Retained history connection':28} {CHANGELOG_ARCHIVE} -> {target}")
+
+        periods = ArchiveSegment.objects.all()
+        if not periods.exists():
+            return
+        self.stdout.write("")
+        self.stdout.write(f"{'Period':16} {'Record type':28} {'Records':>8}  Covers")
+        for segment in periods:
+            covers = (
+                "all time"
+                if segment.time_start is None
+                else f"{segment.time_start:%Y-%m-%d} to {segment.time_end:%Y-%m-%d}"
+            )
+            self.stdout.write(f"{segment.period_key:16} {segment.model_label:28} {segment.row_count:>8}  {covers}")
 
     def _flush(self):
         """
@@ -644,38 +702,6 @@ class Command(BaseCommand):
             self.stdout.write("Nothing to remove")
         # The capability itself is a deployment setting, so this leaves it alone and says so.
         self.stdout.write(self.style.NOTICE("Demo data removed. CHANGELOG_ARCHIVE_ENABLED is unchanged."))
-
-    def _report_storage(self):
-        """
-        Where retained history is being written, which is what a tester most often needs to check.
-
-        The archive sharing the primary database and the archive on its own host look identical from the UI.
-        """
-
-        from nautobot.core.constants import CHANGELOG_ARCHIVE
-        from nautobot.core.utils.config import changelog_archive_is_separate
-
-        archive = settings.DATABASES.get(CHANGELOG_ARCHIVE, {})
-        if changelog_archive_is_separate():
-            host = archive.get("HOST") or "localhost"
-            target = f"{archive.get('NAME', '?')} on {host}:{archive.get('PORT') or 'default'}"
-        else:
-            target = f"{archive.get('NAME', '?')} (same database as default)"
-        self.stdout.write("")
-        self.stdout.write(f"{'Retained history connection':28} {CHANGELOG_ARCHIVE} -> {target}")
-
-        periods = ArchiveSegment.objects.all()
-        if not periods.exists():
-            return
-        self.stdout.write("")
-        self.stdout.write(f"{'Period':16} {'Record type':28} {'Records':>8}  Covers")
-        for segment in periods:
-            covers = (
-                "all time"
-                if segment.time_start is None
-                else f"{segment.time_start:%Y-%m-%d} to {segment.time_end:%Y-%m-%d}"
-            )
-            self.stdout.write(f"{segment.period_key:16} {segment.model_label:28} {segment.row_count:>8}  {covers}")
 
     @staticmethod
     def _remove_empty_periods():
