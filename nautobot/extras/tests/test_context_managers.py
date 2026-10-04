@@ -588,13 +588,13 @@ class WithoutDeleteChangeLoggingTestCase(TestCase):
         )
 
     def test_the_job_callers_use_it(self):
-        """The call sites had the same `try`/`finally`; none should still be hand-rolling it."""
+        """Three call sites had the same `try`/`finally`; none should still be hand-rolling it."""
         import inspect
 
         from nautobot.core.jobs.cleanup import LogsCleanup
-        from nautobot.core.jobs.retention import ChangelogTruncation
+        from nautobot.core.jobs.retention import ChangelogRotation, ChangelogTruncation
 
-        for job in (LogsCleanup, ChangelogTruncation):
+        for job in (LogsCleanup, ChangelogRotation, ChangelogTruncation):
             with self.subTest(job=job.__name__):
                 source = inspect.getsource(job)
                 self.assertIn("without_delete_change_logging", source)

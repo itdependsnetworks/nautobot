@@ -17,7 +17,9 @@ import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.test import override_settings
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.jobs.retention import ChangelogTruncation
 from nautobot.core.testing import create_job_result_and_run_job, TestCase, TransactionTestCase
 from nautobot.dcim.models import Location
@@ -26,7 +28,8 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     RetentionRuleModeChoices,
 )
-from nautobot.extras.models import JobResult, ObjectChange, RetentionRule
+from nautobot.extras.models import ArchivedObjectChange, JobResult, ObjectChange, RetentionRule
+from nautobot.extras.tests.test_changelog_archive_base import PERIOD
 from nautobot.users.models import ObjectPermission
 
 MODULE = "nautobot.core.jobs.retention"
@@ -121,8 +124,15 @@ class ChangelogTruncationTestMixin:
         permission.object_types.add(self.content_type)
 
 
+# Retention off unless a test says otherwise. Truncation stands alone, and with retention on it
+# withholds anything past the warm window that rotation has not moved -- correct, and not what
+# these tests are about. The interlock has its own tests below that turn it on deliberately.
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
 class ChangelogTruncationUnitTestCase(ChangelogTruncationTestMixin, TestCase):
     """Rule resolution, increment sizing, and operator messaging, driven directly."""
+
+    # Truncation asks retained storage whether a record has been moved before deleting its warm copy.
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def setUp(self):
         super().setUp()
@@ -394,7 +404,70 @@ class ChangelogTruncationUnitTestCase(ChangelogTruncationTestMixin, TestCase):
 
         self.assertTrue(self.logger.said("not covered by changelog retention"))
 
+    @override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
+    def test_works_with_rotation_unconfigured(self):
+        """With retention off, truncation deletes what it selects and consults no period at all."""
+        change = self.make_object_change()
+        self.make_rule(scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]}, max_age_days=30)
 
+        self.run_job()
+
+        self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
+
+    @override_settings(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90)
+    def test_withholds_records_rotation_has_not_moved_yet(self):
+        """
+        A record old enough to rotate, in a period that is not closed, is rotation's to move.
+
+        Deleting it first would lose it permanently, so truncation withholds it and says why. This is what
+        makes the two jobs safe to run in either order.
+        """
+        change = self.make_object_change()
+        self.make_rule(scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]}, max_age_days=30)
+
+        self.run_job()
+
+        self.assertTrue(ObjectChange.objects.filter(pk=change.pk).exists())
+        self.assertTrue(self.logger.said("rotation has not moved them"))
+
+    @override_settings(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90)
+    def test_deletes_a_record_rotation_has_already_moved(self):
+        """Once the record exists in retained storage, deleting the warm copy loses nothing."""
+        change = self.make_object_change()
+        self.make_rule(scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]}, max_age_days=30)
+        ArchivedObjectChange.objects.create(
+            id=change.pk,
+            period_key=PERIOD,
+            time=change.time,
+            user_name=change.user_name,
+            request_id=change.request_id,
+            action=change.action,
+            changed_object_type_id=change.changed_object_type_id,
+            changed_object_id=change.changed_object_id,
+            change_context=change.change_context,
+            object_repr=change.object_repr,
+            object_data={},
+        )
+
+        self.run_job()
+
+        self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
+
+    @override_settings(CHANGELOG_ARCHIVE_ENABLED=True, CHANGELOG_WARM_WINDOW_DAYS=90)
+    def test_records_inside_the_warm_window_are_never_withheld(self):
+        """Rotation only moves records past the warm window, so newer ones are truncation's alone."""
+        change = self.make_object_change(time=datetime.now(dt_timezone.utc) - timedelta(days=2))
+        # No age bound, or the rule would not select a two-day-old record and this would pass for the
+        # wrong reason.
+        self.make_rule(scope_filter={"action": [ObjectChangeActionChoices.ACTION_DELETE]})
+
+        self.run_job()
+
+        self.assertFalse(ObjectChange.objects.filter(pk=change.pk).exists())
+        self.assertFalse(self.logger.said("rotation job's to move"))
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
 class ChangelogTruncationIntegrationTestCase(ChangelogTruncationTestMixin, TransactionTestCase):
     """
     The job runs end to end through the real Celery path.

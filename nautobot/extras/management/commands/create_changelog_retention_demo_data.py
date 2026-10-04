@@ -2,12 +2,11 @@
 Generate everything needed to exercise changelog long-term retention by hand.
 
 Retention only acts on records older than the warm window, so a fresh install has nothing to show until
-history has had months to accumulate. This fabricates that history with backdated timestamps, files it
-into retained storage, adds rules for the truncation job with records it can actually delete, and creates
+history has had months to accumulate. This fabricates that history with backdated timestamps, then
+rotates it, adds rules for the truncation job with records it can actually delete, and creates
 a user who may read retained history and one who may not.
 
-# PLACEHOLDER: `_archive` writes the retained rows itself. ROTATE-1 replaces it with the real rotation
-# job, and ABSTRACT-5 adds --period.
+# PLACEHOLDER: ABSTRACT-5 adds --period, which rotates this history under a chosen granularity.
 
 Everything it creates is tagged with MARKER, in `change_context_detail` for change records and in the name or text
 for everything else, so `--flush` can find and remove all of it. It never touches a record it did not
@@ -20,6 +19,7 @@ invisible. The seed makes a re-run reproduce the same data.
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone as dt_timezone
+import logging
 import random
 import uuid
 
@@ -39,7 +39,6 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
     RetentionRuleModeChoices,
 )
-from nautobot.extras.constants import CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD
 from nautobot.extras.models import (
     ArchivedJobConsoleEntry,
     ArchivedJobLogEntry,
@@ -52,7 +51,7 @@ from nautobot.extras.models import (
     ObjectChange,
     RetentionRule,
 )
-from nautobot.extras.models.archive import build_mirror_instance, warm_model_for
+from nautobot.extras.models.archive import warm_model_for
 from nautobot.extras.registry import registry
 from nautobot.users.models import ObjectPermission
 
@@ -87,6 +86,16 @@ DEMO_USERS = ("retention-viewer", "retention-archivist")
 User = get_user_model()
 
 
+class _StubJobResult:
+    """Stands in for the `JobResult` a running job reads its user from.
+
+    Rotation is run in-process here rather than through a worker, so there is no real `JobResult` to read.
+    """
+
+    def __init__(self, user):
+        self.user = user
+
+
 def _model_for_label(label):
     """The model a `delete()` result is keyed by, or None where it is not a registered model."""
     try:
@@ -108,6 +117,15 @@ class Command(BaseCommand):
             "--teardown",
             action="store_true",
             help="Remove what a previous run created and generate nothing.",
+        )
+        parser.add_argument(
+            "--no-rotate",
+            action="store_false",
+            dest="rotate",
+            help=(
+                "Stop after creating the warm history, without rotating it. Use this to see the state before "
+                "rotation, or to run the Changelog Rotation job yourself from the UI."
+            ),
         )
         parser.add_argument(
             "--status",
@@ -133,18 +151,18 @@ class Command(BaseCommand):
         if options["flush"]:
             self._flush()
 
-        self._require_retention_enabled()
-
         with transaction.atomic():
+            self._configure()
             self._object_changes(random.Random(options["seed"]))  # noqa: S311  # not cryptographic
             self._job_history(random.Random(options["seed"] + 1))  # noqa: S311  # not cryptographic
             self._truncation_candidates(random.Random(options["seed"] + 2))  # noqa: S311  # not cryptographic
             self._retention_rules()
             self._users()
 
-        # Outside the transaction above on purpose: filing runs in bounded increments, which is the
-        # behaviour this command exists to demonstrate, and wrapping it would undo that.
-        self._archive()
+        # Outside the transaction above on purpose: rotation manages its own per-increment transactions,
+        # and wrapping it would undo the bounded-increment behaviour this command exists to demonstrate.
+        if options["rotate"]:
+            self._rotate()
 
         self._report()
         self.stdout.write(
@@ -156,55 +174,18 @@ class Command(BaseCommand):
 
     # Setup
 
-    def _require_retention_enabled(self):
-        """Retention is a deployment setting, so this command cannot turn it on; it says so and stops."""
+    def _configure(self):
+        """Set the runtime tuning this fabricated history is shaped for, and check the capability is on."""
+        from constance import config
+
         if not settings.CHANGELOG_ARCHIVE_ENABLED:
             raise CommandError(
                 "Changelog long-term retention is off. It is a deployment setting rather than a runtime "
                 "toggle, so this command cannot turn it on. Set CHANGELOG_ARCHIVE_ENABLED = True in "
                 "nautobot_config.py (or NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED=True), restart, and run again."
             )
-
-    # Filing into retained storage
-
-    def _archive(self):
-        """
-        Copy this command's backdated history into retained storage, and register the period.
-
-        PLACEHOLDER: this writes the retained rows itself, which is enough to have something to read.
-        ROTATE-1 replaces it with the real rotation job, which also removes the warm copies and files
-        each record under the period its own timestamp falls in.
-
-        Children before parents, so a retained job result always has its retained log and console entries.
-        """
-        filed = {}
-        for warm_queryset, mirror in (
-            (JobLogEntry.objects.filter(message__startswith=MARKER), ArchivedJobLogEntry),
-            (JobConsoleEntry.objects.filter(text__startswith=MARKER), ArchivedJobConsoleEntry),
-            (JobResult.objects.filter(name__startswith=MARKER), ArchivedJobResult),
-            (ObjectChange.objects.filter(change_context_detail=MARKER), ArchivedObjectChange),
-        ):
-            warm_model = warm_model_for(mirror)
-            existing = set(mirror.objects.values_list("pk", flat=True))
-            records = [
-                build_mirror_instance(warm_object, mirror)
-                for warm_object in warm_queryset.iterator()
-                if warm_object.pk not in existing
-            ]
-            mirror.objects.bulk_create(records, batch_size=500)
-            total = mirror.objects.count()
-            ArchiveSegment.objects.update_or_create(
-                model_label=warm_model._meta.label_lower,
-                period_key=CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD,
-                defaults={
-                    "label": "All time",
-                    "row_count": total,
-                    "last_rotated_time": timezone.now(),
-                    "is_period_closed": False,
-                },
-            )
-            filed[warm_model._meta.label] = len(records)
-        self.stdout.write(self.style.NOTICE(f"Filed into retained storage: {filed}"))
+        config.CHANGELOG_WARM_WINDOW_DAYS = 90
+        self.stdout.write(self.style.NOTICE("Warm window 90 days"))
 
     def _targets(self, rng):
         """
@@ -536,6 +517,36 @@ class Command(BaseCommand):
                 permission.object_types.add(content_type)
         self.stdout.write(self.style.NOTICE(f"Created users {', '.join(DEMO_USERS)}"))
 
+    # Rotation
+
+    def _rotate(self):
+        """
+        Run the rotation job in-process, so no worker is needed to get retained history to look at.
+
+        Its log goes to stdout, there being no real `JobResult` behind it.
+        """
+        from nautobot.core.jobs.retention import ChangelogRotation
+
+        logger = logging.getLogger(f"nautobot.{MARKER}")
+        logger.setLevel(logging.INFO)
+        # Not propagated: Nautobot's root handler would print every line a second time, with its own
+        # timestamped prefix, which makes the rotation log twice as long and half as readable.
+        logger.propagate = False
+        if not logger.handlers:
+            handler = logging.StreamHandler(self.stdout)
+            handler.setFormatter(logging.Formatter("  %(message)s"))
+            logger.addHandler(handler)
+
+        job = ChangelogRotation()
+        job.logger = logger
+        job.job_result = _StubJobResult(User.objects.filter(is_superuser=True).first())
+
+        self.stdout.write(self.style.NOTICE("Running Changelog Rotation in-process"))
+        result = job.run(record_types=None, warm_window_days=90, batch_size=500, dry_run=False)
+        self.stdout.write(self.style.SUCCESS(f"Rotated: {result}"))
+
+    # Reporting and teardown
+
     def _report(self):
         """What exists now, so a run can be checked without opening the UI."""
         rows = [
@@ -614,7 +625,6 @@ class Command(BaseCommand):
 
         The archive sharing the primary database and the archive on its own host look identical from the UI.
         """
-        from django.conf import settings
 
         from nautobot.core.constants import CHANGELOG_ARCHIVE
         from nautobot.core.utils.config import changelog_archive_is_separate

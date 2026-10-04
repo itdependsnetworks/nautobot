@@ -944,10 +944,24 @@ CONSTANCE_CONFIG = {
         help_text="Number of days to retain object changelog history.\nSet this to 0 to retain changes indefinitely.",
         field_type=int,
     ),
+    "CHANGELOG_ROTATION_BATCH_SIZE": ConstanceConfigItem(
+        default=1000,
+        help_text="Number of records the rotation job moves per increment.\n"
+        "Lower than the truncation batch size because rotation loads each record into memory to copy it, "
+        "twice over -- the warm record and the retained copy built from it -- while truncation only "
+        "needs their keys. Reduce this if rotation runs out of memory on records with large data.",
+        field_type=int,
+    ),
     "CHANGELOG_TRUNCATION_BATCH_SIZE": ConstanceConfigItem(
         default=10000,
         help_text="Number of records the truncation job deletes per increment.\n"
         "Truncation always runs in bounded increments, never as a single delete statement.",
+        field_type=int,
+    ),
+    "CHANGELOG_WARM_WINDOW_DAYS": ConstanceConfigItem(
+        default=90,
+        help_text="Number of days of change and job history kept in warm storage.\n"
+        "Records older than this are eligible for the rotation job to move into long-term retention.",
         field_type=int,
     ),
     "DEVICE_UNIQUENESS": ConstanceConfigItem(
@@ -1091,7 +1105,9 @@ CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
     "Change Logging": [
         "CHANGELOG_RETENTION",
+        "CHANGELOG_WARM_WINDOW_DAYS",
         "CHANGELOG_LEGACY_OBJECT_DATA",
+        "CHANGELOG_ROTATION_BATCH_SIZE",
         "CHANGELOG_TRUNCATION_BATCH_SIZE",
     ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],

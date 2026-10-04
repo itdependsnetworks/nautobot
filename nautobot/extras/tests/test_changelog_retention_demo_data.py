@@ -20,7 +20,6 @@ from nautobot.core.testing import TestCase
 from nautobot.extras.choices import JobResultStatusChoices, ObjectChangeActionChoices
 from nautobot.extras.management.commands.create_changelog_retention_demo_data import (
     CHANGES_PER_YEAR,
-    Command,
     DEMO_USERS,
     MARKER,
     TRUNCATION_DELETABLE,
@@ -36,8 +35,6 @@ from nautobot.extras.models import (
     ArchivedJobResult,
     ArchivedObjectChange,
     ArchiveSegment,
-    JobConsoleEntry,
-    JobLogEntry,
     JobResult,
     ObjectChange,
     RetentionRule,
@@ -85,19 +82,45 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
     def retained_demo_results(self):
         return ArchivedJobResult.objects.filter(name__startswith=MARKER)
 
-    def refile(self):
-        """Run the filing step on its own, writing to stdout nobody reads."""
-        command = Command()
-        command.stdout = StringIO()
-        command._archive()
+    def test_generates_warm_history_without_rotating_it(self):
+        self.run_command("--no-rotate")
 
-    def test_filing_copies_every_fabricated_record(self):
+        self.assertEqual(self.demo_changes().count(), sum(CHANGES_PER_YEAR))
+        # Deliberately not `archived()`, which opens a period and registers it the way rotation does.
+        # Nothing was rotated, so there is no period to look in and no period registered.
+        self.assertEqual(self.retained_demo_changes().count(), 0)
+
+    def test_history_is_backdated_into_every_period(self):
+        """Records dated inside the warm window would never rotate, so the whole thing would show nothing."""
+        self.run_command("--no-rotate")
+
+        years = {change.time.year for change in self.demo_changes()}
+        self.assertEqual(years, set(YEARS))
+
+    def test_counts_differ_per_period(self):
+        """
+        Equal counts make the UI unreadable rather than wrong.
+
+        When a period's total, an object's own history, and the page size are the same number, a
+        disagreement between them is invisible -- which is how a real off-by-three went unnoticed.
+        """
+        self.run_command("--no-rotate")
+
+        per_year = {}
+        for change in self.demo_changes():
+            per_year[change.time.year] = per_year.get(change.time.year, 0) + 1
+
+        self.assertEqual(len(set(per_year.values())), len(YEARS))
+
+    def test_rotation_moves_every_year_into_retained_storage(self):
+        """Every fabricated year ends up retained, and no warm copy is left behind."""
         self.run_command()
 
         self.assertEqual(self.retained_demo_changes().count(), sum(CHANGES_PER_YEAR))
+        self.assertEqual(self.demo_changes().count(), 0)
         self.assertEqual({record.time.year for record in self.retained_demo_changes()}, set(YEARS))
 
-    def test_filing_registers_a_period_per_record_type(self):
+    def test_rotation_registers_a_period_per_record_type(self):
         """The period registry is what a reader selects from and what the verification jobs sweep."""
         self.run_command()
 
@@ -108,20 +131,6 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         )
         self.assertEqual(registered["extras.objectchange"], ArchivedObjectChange.objects.count())
 
-    def test_filing_again_does_not_duplicate(self):
-        """
-        A retained record keeps its warm primary key, which is what makes filing idempotent.
-
-        Filing is re-run directly rather than through the whole command, which without `--flush` would
-        fabricate a second set of warm records and grow the count for a different reason.
-        """
-        self.run_command()
-        first = self.retained_demo_changes().count()
-
-        self.refile()
-
-        self.assertEqual(self.retained_demo_changes().count(), first)
-
     def test_history_is_coherent_per_object(self):
         """
         The difference panel diffs a record against the previous change to the same object.
@@ -129,7 +138,7 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         So an object cannot be created twice, and consecutive payloads have to actually differ, or every
         diff on the instance reads "No changes" and the panel looks broken.
         """
-        self.run_command()
+        self.run_command("--no-rotate")
 
         by_object = {}
         for change in self.demo_changes().order_by("time"):
@@ -152,7 +161,7 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
 
     def test_some_requests_touch_an_object_more_than_once(self):
         """Related changes means siblings in the same request; without any, that panel is always empty."""
-        self.run_command()
+        self.run_command("--no-rotate")
 
         grouped = {}
         for change in self.demo_changes():
@@ -170,13 +179,12 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         """
         self.run_command()
 
-        results = JobResult.objects.filter(name__startswith=MARKER)
-        self.assertGreater(results.count(), 0)
-        self.assertGreater(JobLogEntry.objects.filter(message__startswith=MARKER).count(), 0)
+        self.assertGreater(self.retained_demo_results().count(), 0)
+        self.assertGreater(ArchivedJobLogEntry.objects.filter(message__startswith=MARKER).count(), 0)
         with_console = set(
-            JobConsoleEntry.objects.filter(text__startswith=MARKER).values_list("job_result_id", flat=True)
+            ArchivedJobConsoleEntry.objects.filter(text__startswith=MARKER).values_list("job_result_id", flat=True)
         )
-        all_results = set(results.values_list("pk", flat=True))
+        all_results = set(self.retained_demo_results().values_list("pk", flat=True))
         self.assertTrue(with_console)
         self.assertTrue(all_results - with_console, "every result has console output, so the empty case is unseen")
 
@@ -268,17 +276,28 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         self.assertIn("Warm change records", output)
 
     def test_the_seed_makes_a_run_reproducible(self):
-        self.run_command()
+        self.run_command("--no-rotate")
         first = sorted(
             (change.time, change.user_name, change.action, change.object_repr) for change in self.demo_changes()
         )
 
-        self.run_command("--flush")
+        self.run_command("--flush", "--no-rotate")
         second = sorted(
             (change.time, change.user_name, change.action, change.object_repr) for change in self.demo_changes()
         )
 
         self.assertEqual(first, second)
+
+    def test_a_different_seed_makes_different_history(self):
+        self.run_command("--no-rotate")
+        first = sorted((change.time, change.user_name) for change in self.demo_changes())
+
+        self.run_command("--flush", "--no-rotate", "--seed", "1234")
+        second = sorted((change.time, change.user_name) for change in self.demo_changes())
+
+        self.assertNotEqual(first, second)
+
+    # Helpers
 
     def changed_object_type(self):
         from django.contrib.contenttypes.models import ContentType
@@ -291,15 +310,6 @@ class CreateChangelogRetentionDemoDataTestCase(TestCase):
         from nautobot.dcim.models import Location
 
         return Location.objects.first().pk
-
-    def test_a_different_seed_makes_different_history(self):
-        self.run_command()
-        first = sorted((change.time, change.user_name) for change in self.demo_changes())
-
-        self.run_command("--flush", "--seed", "1234")
-        second = sorted((change.time, change.user_name) for change in self.demo_changes())
-
-        self.assertNotEqual(first, second)
 
 
 class DemoDataTruncationTestCase(CreateChangelogRetentionDemoDataTestCase):
