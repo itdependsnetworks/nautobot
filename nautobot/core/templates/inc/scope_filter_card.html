@@ -1,0 +1,101 @@
+{% load form_helpers %}
+{% comment %}
+The scope filter card, shared by every model whose scope is a stored filter over another model -- custom
+fields and retention rules today. Rendered here rather than per model so the two cannot drift apart.
+
+`unavailable_message` renders instead of the filter form where the model itself rules a scope filter out;
+`prompt_message` renders before a target model has been selected, since the available filters depend on it.
+{% endcomment %}
+<div class="card" id="nb-scope-filter-form-container" data-nb-scope-filter-trigger="{{ scope_filter_trigger }}" hx-on::after-settle="initializeScopeFilter(event)">
+    <div class="card-header"><strong>{{ scope_filter_label|default:"Scope filter" }}</strong></div>
+    {% if unavailable_message %}
+        <div class="card-body text-center text-secondary p-20">
+            {{ unavailable_message }}
+        </div>
+    {% elif content_type_selected %}
+            <div class="card-body">
+                {% comment %}
+                Above the tabs, not inside the Advanced one: what the scope currently is should not depend
+                on which tab happens to be open. These badges carry the hidden inputs that are submitted --
+                the Basic tab's inputs have their names stripped on submit to avoid duplicating them -- so
+                they have to stay inside the form either way.
+                {% endcomment %}
+                <div class="pb-20">
+                    {% include "inc/dynamic_filter_items.html" %}
+                </div>
+                <ul id="filter-tabs" class="nav nav-tabs">
+                    {% if filter_form %}
+                        <li role="presentation" class="nav-item">
+                            <a class="nav-link{% if filter_form %} active{% endif %}"  href="#default-filter" role="tab" data-bs-toggle="tab">
+                                Basic
+                            </a>
+                        </li>
+                    {% endif %}
+                    {% if dynamic_filter_form %}
+                        <li role="presentation" class="nav-item">
+                            <a class="nav-link position-relative{% if not filter_form %} active{% endif %}" href="#advanced-filter" role="tab" data-bs-toggle="tab">
+                                Advanced
+                            </a>
+                        </li>
+                    {% endif %}
+                </ul>
+                <div class="tab-content h-100">
+                    {% if filter_form %}
+                        <div id="default-filter" role="tabpanel" class="tab-pane fade{% if filter_form %} show active{% endif %} h-100 p-20">
+                            <div class="h-100 vstack">
+                                <div class="align-content-start flex-fill pb-20">
+                                    {% for field in filter_form.hidden_fields %}
+                                        {{ field }}
+                                    {% endfor %}
+                                    {% for field in filter_form.visible_fields %}
+                                        {% if field.name == "q" %}
+                                            <!--  Skip q field -->
+                                        {% else %}
+                                            {% render_field field %}
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
+                    {% if dynamic_filter_form %}
+                        <div id="advanced-filter" role="tabpanel" class="tab-pane fade{% if not filter_form %} show active{% endif %} h-100 p-20">
+                            <div class="align-content-start flex-fill pb-20">
+                                {{ dynamic_filter_form.management_form }}
+                                <div id="nb-add-filter-form">
+                                    {% for field in dynamic_filter_form.0.visible_fields %}
+                                        {% render_field field container_class="nb-add-filter-form-field" %}
+                                    {% endfor %}
+                                </div>
+                                <button class="nb-dynamic-filter-add btn btn-primary d-block ms-auto my-20" type="button">
+                                    <span aria-hidden="true" class="mdi mdi-plus me-4"></span><!--
+                                -->Add Filter
+                                </button>
+                            </div>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+    {% else %}
+        <div class="card-body text-center text-secondary p-20">
+            {{ prompt_message|default:"Select an object type first to load the available filter fields." }}
+        </div>
+    {% endif %}
+</div>
+
+{% comment %}
+The card's own scripts, loaded here rather than by each template that includes it, so a caller gets a
+working card from one `{% include %}`. Same shape as `utilities/templatetags/filter_form_drawer.html`,
+the other place a filter builder is embedded in a page: the include that needs `filter_form.js` loads it.
+
+Both only define functions and register a `DOMContentLoaded` handler, so landing in the body ahead of
+jQuery and select2 is fine -- nothing runs until those have loaded.
+
+Left out when the card is re-rendered for an HTMX swap: they are already on the page being swapped into,
+and running them again would redeclare their `const`s and throw.
+{% endcomment %}
+{% if not scope_filter_partial %}
+    {% load helpers %}
+    <script src="{% versioned_static 'js/filter_form.js' %}" onerror="nb.media.handleFailure(this)"></script>
+    <script src="{% versioned_static 'js/scope_filter_form.js' %}" onerror="nb.media.handleFailure(this)"></script>
+{% endif %}
