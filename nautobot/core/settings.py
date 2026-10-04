@@ -582,6 +582,11 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
     DATABASES["default"].setdefault("TEST", {})["CHARSET"] = "utf8mb4"
     DATABASES["default"]["TEST"]["COLLATION"] = "utf8mb4_0900_ai_ci"
 
+# The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
+# alongside `job_logs`.
+DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]
+
+
 # The secret key is used to encrypt session keys and salt passwords.
 SECRET_KEY = os.getenv("NAUTOBOT_SECRET_KEY", "")
 

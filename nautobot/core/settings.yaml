@@ -675,10 +675,11 @@ properties:
       "Django documentation for CSRF protection": "https://docs.djangoproject.com/en/stable/ref/csrf/#how-it-works"
     type: "array"
   DATABASE_ROUTERS:
-    default: []
+    default: ["nautobot.core.models.routers.ChangelogArchiveRouter"]
     description: >-
-      Custom database router to generate the before & after queries for generating diffs.
-      Used for Nautobot Version Control App.
+      Database routers. Nautobot ships `ChangelogArchiveRouter`, which pins the changelog long-term
+      retention tables to the `changelog_archive` connection. Apps may append their own; the Nautobot
+      Version Control App uses this to generate the before and after queries for diffs.
     items:
       type: "string"
     type: "array"
@@ -699,6 +700,10 @@ properties:
 
       Nautobot supports either MySQL or PostgreSQL as a database backend. You must make sure that the `ENGINE`
       setting matches your selected database backend or **you will be unable to connect to the database**.
+      A second connection named `changelog_archive` holds the long-term retention tables. Define it
+      yourself to control it outright. Left undefined, Nautobot copies the `default` connection and
+      applies `NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME`, `_USER`, `_PASSWORD`, `_HOST` and `_PORT` over the
+      copy where they are set, so retention needs no separate provisioning to turn on.
     details: |-
       !!! note
           Nautobot supports all database options supported by the underlying Django framework.
