@@ -23,6 +23,7 @@ from nautobot.circuits import models as circuits_models
 from nautobot.core import exceptions, forms, settings_funcs
 from nautobot.core.api import utils as api_utils
 from nautobot.core.celery.encoders import NautobotKombuJSONEncoder
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.forms.utils import compress_range
 from nautobot.core.models import fields as core_fields, utils as models_utils, validators
 from nautobot.core.testing import TestCase
@@ -272,6 +273,37 @@ class NormalizeQueryDictTest(TestCase):
     """
     Validate normalize_querydict() utility function.
     """
+
+    def test_a_single_valued_form_field_is_de_listed(self):
+        """
+        What binds a filter form to a view's resolved filter parameters.
+
+        `get_filterable_params_from_filter_params` returns a list for every filter the filterset treats
+        as multi-valued, which is most of them. A filter form declaring the same name as a single field
+        then received a list: `time__gte` is a `MultiValueDateTimeFilter` on the filterset and a
+        `DateTimeField` on the form, and `DateTimeField.to_python` raised
+        `AttributeError: 'list' object has no attribute 'strip'`, 500ing every list view reached with a
+        date filter in the query string.
+        """
+        from nautobot.extras.forms import ObjectChangeFilterForm
+
+        self.assertDictEqual(
+            requests.normalize_querydict(
+                {"time__gte": ["2026-10-03 12:00:00"], "change_context": ["orm", "web"]},
+                form_class=ObjectChangeFilterForm,
+            ),
+            {"time__gte": "2026-10-03 12:00:00", "change_context": ["orm", "web"]},
+        )
+
+    def test_a_filter_form_binds_and_cleans_what_it_returns(self):
+        """The failure above, end to end through a real form."""
+        from nautobot.extras.forms import ObjectChangeFilterForm
+
+        params = {"time__gte": ["2026-10-03 12:00:00"], "change_context": ["orm", "web"]}
+        form = ObjectChangeFilterForm(requests.normalize_querydict(params, form_class=ObjectChangeFilterForm))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNotNone(form.cleaned_data["time__gte"])
+        self.assertEqual(form.cleaned_data["change_context"], ["orm", "web"])
 
     def test_normalize_querydict(self):
         self.assertDictEqual(
@@ -1594,6 +1626,11 @@ class TestQuerySetUtils(TestCase):
 
 
 class TestSerializeObjectV2(TestCase):
+    # Sweeps every model, which includes the changelog retention mirrors. Those are routed to their own
+    # database, and reading one is the point rather than an accident: the REST API serializes retained
+    # records through this same function.
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     def test_serialize_object_v2_json_only(self):
         """Make sure serialize_object_v2() returns a JSON-serializable dict and no lazy/deferred queryset data."""
         for model_class in apps.get_models():

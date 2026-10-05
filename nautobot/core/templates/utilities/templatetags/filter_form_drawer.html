@@ -34,6 +34,7 @@
             {% if dynamic_filter_form %}
                 <div id="advanced-filter" role="tabpanel" class="tab-pane fade{% if not filter_form %} show active{% endif %} h-100 p-20">
                     <form class="h-100 vstack" id="dynamic-filter-form">
+                        {% preserved_view_state %}
                         <div class="align-content-start flex-fill pb-20">
                             {{ dynamic_filter_form.management_form }}
                             <div id="nb-add-filter-form">

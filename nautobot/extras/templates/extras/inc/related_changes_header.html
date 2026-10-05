@@ -1,7 +1,11 @@
 {% load helpers %}
 <strong>{{ body_content_table_verbose_name_plural|bettertitle }}</strong>
 {% if related_changes_count > 0 %}
-    <a href="{% url 'extras:objectchange_list' %}?request_id={{ obj.request_id }}" class="badge bg-primary">
+    {% comment %}
+    `obj.period_key` is set only on a retained record and resolves to empty on a warm one, so this serves
+    both. Without it, following the badge from a retained record lands in warm storage.
+    {% endcomment %}
+    <a href="{% url 'extras:objectchange_list' %}?{% if obj.period_key %}archive_period={{ obj.period_key }}&amp;{% endif %}request_id={{ obj.request_id }}" class="badge bg-primary">
         {% comment %} Add 1 since current record is excluded from count but included in list {% endcomment %}
         {{ related_changes_count|add:1 }}
     </a>

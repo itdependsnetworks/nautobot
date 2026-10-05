@@ -1,6 +1,7 @@
 # Query parameters that are *not* filterset filters
 NON_FILTER_QUERY_PARAMS = (
     "api_version",  # used to select the Nautobot API version
+    "archive_period",  # selects one retained-history period; see nautobot.extras.models.archive
     "depth",  # nested levels of the serializers default to depth=0
     "exclude_m2m",  # used to exclude many-to-many fields from the REST API
     "format",  # "json" or "api", used in the interactive HTML REST API views

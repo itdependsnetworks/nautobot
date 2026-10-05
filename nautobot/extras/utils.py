@@ -43,6 +43,8 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
 )
 from nautobot.extras.constants import (
+    CHANGELOG_ARCHIVE_AGE_FIELDS,
+    CHANGELOG_ARCHIVE_COVERED_MODELS,
     CHANGELOG_MAX_CHANGE_CONTEXT_DETAIL,
     EXTRAS_FEATURES,
     JOB_MAX_NAME_LENGTH,
@@ -125,6 +127,76 @@ class FeaturedQueryMixin:
 
     def get_choices(self):
         return [(f"{ct.app_label}.{ct.model}", ct.pk) for ct in self.as_queryset()]
+
+
+def resolve_object_urls(references):
+    """
+    Map each `(content_type_id, object_id)` reference to that object's URL, for those that resolve.
+
+    A retained change record identifies the object it describes by a content type id and an object id instead
+    than as a relation, so nothing can follow it the way a template follows a warm record's generic foreign
+    key. This resolves a batch of such references with one query per distinct content type, which is the
+    same shape as the generic foreign key prefetch the warm table gets for free: a page of retained records
+    costs about what the same page of warm records costs.
+
+    A reference is simply absent from the result when its object has since been deleted, when its content
+    type no longer maps to a model, or when that model has no detail URL. Change records routinely outlive
+    the objects they describe -- that is what an archive is for -- so absence is the ordinary case, and the
+    caller is expected to fall back to rendering the record's stored `object_repr` as plain text.
+
+    Args:
+        references (iterable): `(content_type_id, object_id)` pairs. Pairs with either half missing are
+            ignored, and duplicates cost nothing.
+
+    Returns:
+        (dict): `(content_type_id, object_id)` -> URL, holding only the references that resolved.
+    """
+    by_content_type = collections.defaultdict(set)
+    for content_type_id, object_id in references:
+        if content_type_id and object_id:
+            by_content_type[content_type_id].add(object_id)
+
+    urls = {}
+    for content_type_id, object_ids in by_content_type.items():
+        try:
+            model = ContentType.objects.get_for_id(content_type_id).model_class()
+        except ContentType.DoesNotExist:
+            continue
+        if model is None:
+            continue
+        # `_base_manager` rather than `objects`: a model whose default manager filters, as
+        # `StaticGroupAssociation`'s does, would otherwise report objects that exist as deleted. This only
+        # ever reads objects by primary key, so the default manager's filtering has nothing to contribute.
+        for obj in model._base_manager.filter(pk__in=object_ids):
+            # `get_absolute_url` raises `AttributeError` for a model with no detail route, which is a fact
+            # about that model rather than an error here.
+            with contextlib.suppress(AttributeError):
+                url = obj.get_absolute_url()
+                if url:
+                    urls[(content_type_id, obj.pk)] = url
+    return urls
+
+
+def age_field_for(model):
+    """The timestamp field that determines how old a record of `model` is."""
+    try:
+        return CHANGELOG_ARCHIVE_AGE_FIELDS[model._meta.label_lower]
+    except KeyError:
+        raise ValueError(f"{model._meta.label} is not covered by changelog retention") from None
+
+
+@deconstructible
+class ChangelogArchiveCoveredModelsQuery(FeaturedQueryMixin):
+    """
+    Helper class to get ContentTypes of the models changelog long-term retention covers.
+
+    Derived from `CHANGELOG_ARCHIVE_COVERED_MODELS`, so the retention rule form, its filter, and the
+    advanced filter's field lookup cannot drift from the set the rotation and truncation jobs act on.
+    """
+
+    def list_subclasses(self):
+        """The covered models themselves, named by the constant the jobs read."""
+        return [apps.get_model(label) for label in CHANGELOG_ARCHIVE_COVERED_MODELS]
 
 
 @deconstructible
@@ -405,6 +477,7 @@ def populate_model_features_registry(refresh=False):
         {
             "feature_name": "custom_fields",
             "field_names": ["_custom_field_data"],
+            "additional_constraints": {"is_custom_field_model": True},
         },
         {
             "feature_name": "metadata",

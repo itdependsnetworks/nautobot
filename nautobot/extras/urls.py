@@ -10,6 +10,8 @@ from nautobot.extras.models import (
 app_name = "extras"
 
 router = NautobotUIViewSetRouter()
+router.register("archive-segments", views.ArchiveSegmentUIViewSet, basename="archivesegment")
+
 router.register("approval-workflows", views.ApprovalWorkflowUIViewSet)
 router.register("approval-workflow-definitions", views.ApprovalWorkflowDefinitionUIViewSet)
 router.register("approval-workflow-stages", views.ApprovalWorkflowStageUIViewSet)
@@ -23,6 +25,7 @@ router.register("custom-fields", views.CustomFieldUIViewSet)
 router.register("custom-links", views.CustomLinkUIViewSet)
 router.register("dynamic-groups", views.DynamicGroupUIViewSet)
 router.register("export-templates", views.ExportTemplateUIViewSet)
+router.register("retention-rules", views.RetentionRuleUIViewSet)
 router.register("external-integrations", views.ExternalIntegrationUIViewSet)
 router.register("git-repositories", views.GitRepositoryUIViewSet)
 router.register("graphql-queries", views.GraphQLQueryUIViewSet)

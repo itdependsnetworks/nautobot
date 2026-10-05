@@ -525,6 +525,45 @@ properties:
     environment_variable: "NAUTOBOT_CELERY_WORKER_REDIRECT_STDOUTS_LEVEL"
     type: "string"
     version_added: "2.0.0"
+  CHANGELOG_ARCHIVE_ENABLED:
+    default: false
+    description: >-
+      Whether long-term retention of change and job history is enabled. While disabled, all reads and
+      writes behave exactly as they do without the capability.
+    environment_variable: "NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED"
+    is_constance_config: false
+    type: "boolean"
+    version_added: "3.3.0"
+  CHANGELOG_ARCHIVE_PERIOD:
+    default: "year"
+    description: >-
+      How retained history is divided into periods, each with its own table. A record's own timestamp
+      decides which period it is written to. A period is the unit retained history can be discarded in,
+      so `unbounded`, one period for everything, is the setting under which the archive only ever grows.
+      One setting applies to the whole archive, and changing it does not reshape the periods that already
+      exist, so set it before enabling retention.
+    enum:
+    - "unbounded"
+    - "year"
+    - "quarter"
+    - "month"
+    environment_variable: "NAUTOBOT_CHANGELOG_ARCHIVE_PERIOD"
+    is_constance_config: false
+    see_also:
+      "Changing the period granularity": "../../platform-functionality/change-logging.md#changing-the-period-granularity"
+    type: "string"
+    version_added: "3.3.0"
+  CHANGELOG_LEGACY_OBJECT_DATA:
+    default: true
+    description: >-
+      Whether to store the legacy `object_data` snapshot on each change record, alongside `object_data_v2`.
+      Deprecated: `object_data_v2` supersedes it and every reader prefers it, falling back to the legacy
+      snapshot only for records written before Nautobot 1.3. Turning this off halves the data each new change
+      record stores. Records written while it is off leave `object_data` empty, which is visible to REST API
+      clients reading that field directly.
+    is_constance_config: true
+    type: "boolean"
+    version_added: "3.3.0"
   CHANGELOG_RETENTION:
     default: 90
     description: >-
@@ -543,6 +582,16 @@ properties:
     environment_variable: "NAUTOBOT_CHANGELOG_RETENTION"
     is_constance_config: true
     type: "integer"
+  CHANGELOG_ROTATION_BATCH_SIZE:
+    default: 1000
+    description: >-
+      The number of records the changelog rotation job moves per increment. Lower than the truncation batch size
+      because rotation holds each record in memory in order to copy it, twice over -- the warm record and the
+      retained copy built from it -- while truncation needs only their keys. Reduce this if rotation runs out of
+      memory on records carrying large data.
+    is_constance_config: true
+    type: "integer"
+    version_added: "3.3.0"
   CHANGELOG_SKIP_UNCHANGED_SAVES:
     default: true
     description: >-
@@ -560,6 +609,22 @@ properties:
       `changelog_skip_unchanged_saves = False`.
     environment_variable: "NAUTOBOT_CHANGELOG_SKIP_UNCHANGED_SAVES"
     type: "boolean"
+    version_added: "3.3.0"
+  CHANGELOG_TRUNCATION_BATCH_SIZE:
+    default: 10000
+    description: >-
+      The number of records the changelog truncation job deletes per increment. Truncation always runs in
+      bounded increments, never as a single delete statement.
+    is_constance_config: true
+    type: "integer"
+    version_added: "3.3.0"
+  CHANGELOG_WARM_WINDOW_DAYS:
+    default: 90
+    description: >-
+      The number of days of change and job history kept in warm storage. Records older than this are
+      eligible for the changelog rotation job to move into long-term retention.
+    is_constance_config: true
+    type: "integer"
     version_added: "3.3.0"
   CONFIG_CONTEXT_DYNAMIC_GROUPS_ENABLED:
     default: false
@@ -656,10 +721,11 @@ properties:
       "Django documentation for CSRF protection": "https://docs.djangoproject.com/en/stable/ref/csrf/#how-it-works"
     type: "array"
   DATABASE_ROUTERS:
-    default: []
+    default: ["nautobot.core.models.routers.ChangelogArchiveRouter"]
     description: >-
-      Custom database router to generate the before & after queries for generating diffs.
-      Used for Nautobot Version Control App.
+      Database routers. Nautobot ships `ChangelogArchiveRouter`, which pins the changelog long-term
+      retention tables to the `changelog_archive` connection. Apps may append their own; the Nautobot
+      Version Control App uses this to generate the before and after queries for diffs.
     items:
       type: "string"
     type: "array"
@@ -680,6 +746,10 @@ properties:
 
       Nautobot supports either MySQL or PostgreSQL as a database backend. You must make sure that the `ENGINE`
       setting matches your selected database backend or **you will be unable to connect to the database**.
+      A second connection named `changelog_archive` holds the long-term retention tables. Define it
+      yourself to control it outright. Left undefined, Nautobot copies the `default` connection and
+      applies `NAUTOBOT_CHANGELOG_ARCHIVE_DB_NAME`, `_USER`, `_PASSWORD`, `_HOST` and `_PORT` over the
+      copy where they are set, so retention needs no separate provisioning to turn on.
     details: |-
       !!! note
           Nautobot supports all database options supported by the underlying Django framework.

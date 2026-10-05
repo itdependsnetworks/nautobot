@@ -2,7 +2,6 @@ import logging
 
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Q
 from django.template import engines, loader
 from django.urls import resolve
 from django_tables2 import RequestConfig
@@ -30,7 +29,6 @@ from nautobot.core.views.utils import (
     get_saved_views_for_user,
     view_changes_not_saved,
 )
-from nautobot.extras.models.change_logging import ObjectChange
 from nautobot.extras.utils import get_saved_view_or_none
 
 
@@ -103,22 +101,25 @@ class NautobotHTMLRenderer(renderers.BrowsableAPIRenderer):
                     row_overviews_visibility=BaseTable.RowOverviewsVisibility.TABLE_DEFAULT,
                     is_object_embedded_search_results=is_object_embedded_search_request,
                 )
-                if "pk" in table.base_columns and (permissions["change"] or permissions["delete"]):
+                if (
+                    "pk" in table.base_columns
+                    and (permissions["change"] or permissions["delete"])
+                    and not table._renders_retained_history()
+                ):
+                    # Not for retained history: it is read-only, and the checkbox exists only to feed bulk
+                    # actions that cannot act on it.
                     table.columns.show("pk")
             elif view.action == "notes":
                 obj = kwargs.get("object")
                 table = table_class(obj.notes, user=request.user)
             elif view.action == "changelog":
+                from nautobot.extras.archive_reads import object_change_history
+
                 obj = kwargs.get("object")
                 content_type = kwargs.get("content_type")
-                objectchanges = (
-                    ObjectChange.objects.restrict(request.user, "view")
-                    .prefetch_related("user", "changed_object_type")
-                    .filter(
-                        Q(changed_object_type=content_type, changed_object_id=obj.pk)
-                        | Q(related_object_type=content_type, related_object_id=obj.pk)
-                    )
-                )
+                # Honors `?archive_period=`; without this the selector renders but the table still shows
+                # warm records.
+                objectchanges, _period_key = object_change_history(obj, content_type, request)
                 table = table_class(data=objectchanges, orderable=False)
 
             # Apply the request context
@@ -206,7 +207,14 @@ class NautobotHTMLRenderer(renderers.BrowsableAPIRenderer):
         queryset = view.alter_queryset(request)
         model = queryset.model
         form_class = view.get_form_class()
-        content_type = ContentType.objects.get_for_model(model)
+        # Imported here, not at module scope: `core` must not import `extras` at import time.
+        from nautobot.extras.models.archive import warm_model_for
+
+        # A retention mirror has no content type of its own. The mirrors are abstract and the per-period
+        # classes are generated rather than registered, so `get_for_model` would create a row whose
+        # `model_class()` is None, and every template tag that calls `.model_class` then fails on None.
+        # The warm model is used instead, and it is the one a plugin registers an extension against.
+        content_type = ContentType.objects.get_for_model(warm_model_for(model) or model)
         form = None
         table = None
         instance = None
@@ -236,7 +244,15 @@ class NautobotHTMLRenderer(renderers.BrowsableAPIRenderer):
                         for field_name, values in view.filter_params.items()
                     ]
                     if view.filterset_form_class is not None:
-                        filter_form = view.filterset_form_class(view.filter_params, label_suffix="")
+                        # Normalized against the form, not bound to `filter_params` directly.
+                        # `get_filterable_params_from_filter_params` returns a list for every filter the
+                        # filterset treats as multi-valued, which is most of them, and a form field
+                        # declared single-valued raises on a list: `time__gte` is a
+                        # `MultiValueDateTimeFilter` but `DateTimeField` on the form.
+                        filter_form = view.filterset_form_class(
+                            normalize_querydict(view.filter_params, form_class=view.filterset_form_class),
+                            label_suffix="",
+                        )
                 table = self.construct_table(view, request=request, permissions=permissions)
             elif view.action == "destroy":
                 form = form_class(initial=request.GET)

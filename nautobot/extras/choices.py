@@ -3,6 +3,55 @@ from celery import states
 from nautobot.core.choices import ChoiceSet
 
 #
+# Changelog long-term retention
+#
+
+
+class ChangelogArchivePeriodChoices(ChoiceSet):
+    """
+    How retained history is divided into periods.
+
+    The calendar granularities divide retained history by the timestamp each record carries, which is what
+    makes a period droppable: `DROP TABLE` on a period's table returns its disk, where deleting rows
+    returns none.
+
+    `unbounded` is one period for everything, and is the default. It is also the period an installation
+    that later adopts calendar periods keeps beside the new ones. It holds the history written before the
+    change, and nothing has to be migrated for it to go on being readable.
+    """
+
+    PERIOD_UNBOUNDED = "unbounded"
+    PERIOD_YEAR = "year"
+    PERIOD_QUARTER = "quarter"
+    PERIOD_MONTH = "month"
+
+    CHOICES = (
+        (PERIOD_UNBOUNDED, "All time"),
+        (PERIOD_YEAR, "Year"),
+        (PERIOD_QUARTER, "Quarter"),
+        (PERIOD_MONTH, "Month"),
+    )
+
+
+class RetentionRuleModeChoices(ChoiceSet):
+    """Whether a retention rule selects records for deletion or protects them from it."""
+
+    MODE_INCLUDE = "include"
+    MODE_EXCLUDE = "exclude"
+
+    CHOICES = (
+        (MODE_INCLUDE, "Include (select for deletion)"),
+        (MODE_EXCLUDE, "Exclude (protect from deletion)"),
+    )
+    # An include rule selects records to delete; an exclude rule protects them. Worth telling apart at a
+    # glance in a list, since the two have opposite consequences.
+    CSS_CLASSES = {
+        MODE_INCLUDE: "danger",
+        MODE_EXCLUDE: "success",
+    }
+
+
+#
 # Approval Workflows
 #
 

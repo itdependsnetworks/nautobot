@@ -1,6 +1,7 @@
 import logging
 from typing import ClassVar, Optional, Type
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import AccessMixin
 from django.contrib.auth.models import AnonymousUser
@@ -9,12 +10,13 @@ from django.core.exceptions import (
     FieldDoesNotExist,
     ImproperlyConfigured,
     ObjectDoesNotExist,
+    PermissionDenied,
     ValidationError,
 )
 from django.db import transaction
 from django.db.models import CharField, ManyToManyField, Model, ProtectedError, Q, QuerySet
 from django.forms import Form, ModelMultipleChoiceField, MultipleHiddenInput
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.template.loader import select_template, TemplateDoesNotExist
 from django.urls import resolve, reverse
@@ -674,7 +676,24 @@ class NautobotViewSetMixin(GenericViewSet, UIComponentsMixin, AccessMixin, GetRe
         Override the original `get_queryset()` to apply permission specific to the user and action.
         """
         queryset = super().get_queryset()
+        if self._is_archive_mirror(queryset.model):
+            # A retention mirror declares no permissions of its own, so `restrict` would resolve
+            # `view_archived<model>` -- a permission nobody is granted -- and return nothing at all. Access to
+            # retained history is gated once, on the cold-storage permission, at the point the queryset is
+            # built. Per-record restriction against retained history is explicitly out of scope (TRD §2).
+            return queryset
         return queryset.restrict(self.request.user, self.get_action())
+
+    @staticmethod
+    def _is_archive_mirror(model):
+        """Whether `model` is a retained-history model, and so is gated by the cold-storage permission instead."""
+        from nautobot.extras.models.archive import archive_base_of
+        from nautobot.extras.registry import registry
+
+        # Getting this wrong is silent: `restrict` on a model that declares no permissions returns an
+        # empty queryset instead of raising. Through `archive_base_of`, because a period of retained history is
+        # a generated class the registry holds under no key.
+        return archive_base_of(model) in registry["changelog_archive_models"].values()
 
     def get_action(self):
         """Helper method for retrieving action and if action not set defaulting to action name."""
@@ -843,6 +862,110 @@ class ObjectDetailViewMixin(NautobotViewSetMixin, mixins.RetrieveModelMixin):
         return Response({})
 
 
+class ArchiveAwareRetrieveMixin:
+    """
+    Let a model's existing detail view serve its retained records too.
+
+    A retained record has the same primary key it had in warm storage, so a URL that worked before rotation
+    keeps working after it. That is the reason this is a fallback on the existing view rather than a
+    parallel set of routes: one URL space, and links do not rot when a record is moved.
+
+    A view using this must tolerate a mirror instance in `get_extra_context` and in its panels. Mirrors
+    resolve demoted relations to None, which covers most of it, but anything calling a method that only the
+    warm model has needs a guard.
+    """
+
+    #: Actions the retention fallback applies to. Read-only on purpose: handing an archived record to a
+    #: destroy or update view would offer a write against something with no write surface.
+    archive_aware_actions = ("retrieve",)
+
+    def get_object(self):
+        try:
+            return super().get_object()
+        except Http404:
+            record = self.get_archived_object(self.kwargs.get("pk"))
+            if record is None:
+                raise
+            return record
+
+    def get_archived_object(self, pk):
+        """
+        The retained record with this primary key, or None if the fallback does not apply.
+
+        Separate from `get_object` so the custom detail actions -- a job result's log table and console
+        output -- can resolve the same record the detail page did. Those actions look their instance up
+        themselves rather than through `get_object`, so without this they raise 404 on a record whose page
+        had just rendered, and the panel comes up empty.
+
+        Raises `PermissionDenied` where the record exists but the user may not read retained history, rather
+        than returning None: a 404 there would say the record does not exist.
+        """
+        from nautobot.extras.archive_reads import user_can_read_archive
+        from nautobot.extras.models.archive import archive_model_for
+
+        if self.action not in self.archive_aware_actions:
+            return None
+        # Skipped entirely while retention is off, so a miss costs no extra query and behaves exactly as
+        # it did before the capability existed.
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
+            return None
+        warm_model = type(self).queryset.model
+        if archive_model_for(warm_model) is None:
+            return None
+        record = self._find_across_periods(warm_model, pk)
+        if record is None:
+            return None
+        # The warm view's own permission was already checked; reading retained history needs the
+        # cold-storage grant on top of it.
+        if not user_can_read_archive(self.request.user):
+            raise PermissionDenied("You do not have permission to read archived change history.")
+        self.archived_instance = record
+        return record
+
+    @staticmethod
+    def _find_across_periods(warm_model, pk):
+        """
+        The retained record with this primary key, in whichever period contains it.
+
+        The one read that cannot name its period. Every other read arrives with one, but a detail page
+        reached from a link saved before rotation has only the key, and that link is supposed to keep
+        working. Retained history is one table per period, so this asks each in turn, newest first, on the
+        assumption that a link someone still holds is more likely to be recent.
+
+        Bounded by the number of periods and indexed within each, so it is a handful of primary key
+        lookups rather than a scan.
+        """
+        from nautobot.extras.models.archive import archive_model_for, ArchiveSegment
+
+        periods = (
+            ArchiveSegment.objects.filter(model_label=warm_model._meta.label_lower)
+            .order_by("-period_key")
+            .values_list("period_key", flat=True)
+        )
+        for period_key in periods:
+            mirror = archive_model_for(warm_model, period_key)
+            record = mirror.objects.filter(pk=pk).first()
+            if record is not None:
+                return record
+        return None
+
+    def is_archived(self, instance):
+        """Whether `instance` came from long-term retention rather than warm storage."""
+        return self._is_archive_mirror(type(instance))
+
+    def restrict_if_warm(self, queryset, action="view"):
+        """
+        Apply per-object restriction, except on retained history, which has no per-object permissions.
+
+        A mirror declares no permissions of its own -- reading it is gated once, on
+        `extras.view_archivesegment` -- so `restrict` there would resolve a permission that does not exist
+        and return nothing. Mirrors it to `NautobotViewSetMixin.get_queryset`.
+        """
+        if self._is_archive_mirror(queryset.model):
+            return queryset
+        return queryset.restrict(self.request.user, action)
+
+
 class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
     """
     UI mixin to list a model queryset
@@ -858,6 +981,27 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
         """
         Filter a query with request querystrings.
         """
+        try:
+            archived = self._apply_archive_period(queryset)
+        except ValidationError as error:
+            # A period that does not exist is a bad URL. Report it and show nothing, rather than falling
+            # back to warm records the reader would read as archived.
+            messages.error(self.request, format_html("{}", "; ".join(error.messages)))
+            self.filter_params = {}
+            return queryset.none()
+        if archived is not None:
+            # Filtered through the mirror's own filterset, not the warm one: a few warm filters traverse
+            # relations the mirror declares as identifier columns.
+            from nautobot.extras.archive_reads import filter_archive_queryset
+
+            # The renderer reads `filter_params` to show which filters are active, so it has to be set on
+            # this path too -- returning early without it renders as a NoneType error.
+            self.filter_params = self.get_filter_params(self.request) if self.filterset_class is not None else {}
+            archived, filterset = filter_archive_queryset(archived, self.request.GET)
+            if filterset is not None and not filterset.is_valid():
+                messages.error(self.request, format_html("Invalid filters were specified: {}", filterset.errors))
+                return archived.none()
+            return archived
         if self.filterset_class is not None:
             self.filter_params = self.get_filter_params(self.request)
             self.filterset = self.filterset_class(self.filter_params, queryset)
@@ -875,6 +1019,37 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
             if self.filterset.is_valid() and self.filterset.data:
                 self.hide_hierarchy_ui = True
         return queryset
+
+    def get_archive_context(self, queryset):
+        """Context for the period selector, empty-but-present when there is nothing to offer."""
+        from nautobot.extras.archive_reads import archive_context
+
+        return archive_context(queryset.model, self.request)
+
+    def _apply_archive_period(self, queryset):
+        """
+        The queryset for one retained-history period, or None when the request names no period.
+
+        One period per query, never merged with warm storage, so the filterset, table, and paginator all
+        behave exactly as they do for a warm read. Absent the parameter this is a no-op, which is what
+        keeps the default path unchanged.
+        """
+        from nautobot.extras.archive_reads import (
+            get_archive_queryset,
+            requested_archive_period,
+        )
+        from nautobot.extras.models.archive import archive_model_for
+
+        period_key = requested_archive_period(self.request)
+        if not period_key:
+            return None
+        if archive_model_for(queryset.model) is None:
+            # This model has no retained history, so the parameter means nothing here. Ignoring it beats
+            # erroring on a stray parameter carried over from another page.
+            return None
+        # PermissionDenied is deliberately not caught: silently serving warm rows would let a reader
+        # mistake them for archived ones.
+        return get_archive_queryset(queryset.model, period_key, self.request.user)
 
     # 3.0 TODO: remove, irrelevant after #4746
     def check_for_export(self, request, model, content_type):
@@ -969,9 +1144,11 @@ class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):
             if global_saved_view:
                 return redirect(reverse("extras:savedview", kwargs={"pk": global_saved_view.pk}))
 
-        response = Response(
-            {"user_default_saved_view": user_default_saved_view, "global_saved_view": global_saved_view}
-        )
+        context = {"user_default_saved_view": user_default_saved_view, "global_saved_view": global_saved_view}
+        # Empty-but-present keys when there is nothing to offer, so the template includes the period
+        # selector unconditionally.
+        context.update(self.get_archive_context(self.get_queryset()))
+        response = Response(context)
         patch_vary_headers(response, ["HX-Request"])
         return response
 
@@ -1560,11 +1737,17 @@ class ObjectChangeLogViewMixin(NautobotViewSetMixin):
         detail=True, custom_view_base_action="view", custom_view_additional_permissions=["extras.view_objectchange"]
     )
     def changelog(self, request, *args, **kwargs):
+        from nautobot.extras.archive_reads import archive_context
+        from nautobot.extras.models import ObjectChange
+
         model = self.get_queryset().model
         data = {
             "base_template": get_base_template(self.base_template, model),
             "active_tab": "changelog",
         }
+        # The selector on an object's changelog tab offers ObjectChange periods, not periods of the object's
+        # own model, which has no retained history of its own.
+        data.update(archive_context(ObjectChange, request, show_counts=False))
         return Response(data)
 
 
@@ -1785,4 +1968,187 @@ class ObjectBulkRenameViewMixin(NautobotViewSetMixin):
                 "return_url": self.get_return_url(request),
                 "parent_name": self.get_selected_objects_parents_name(selected_objects),
             }
+        )
+
+
+class ScopedFilterViewMixin:
+    """
+    Edit a `ScopedFilterMixin` model's scope with the standard filter builder.
+
+    The scope is a filter over another model, so it is edited the way a filter is edited everywhere else in
+    Nautobot: the Basic and Advanced tabs of the filter form for whichever model is selected. Changing that
+    selection re-renders the card over HTMX, since a different model has different filters.
+
+    A view using this needs `scope_filter_content_type_field` naming the form field that selects the target
+    model, a `scope-filter-fields` route (the router builds it from the action below), and a template
+    including `inc/scope_filter_card.html`.
+    """
+
+    #: Prefix on the filter form's field names, keeping them clear of the model's own form fields.
+    scope_filter_prefix = "scope"
+    #: The form field that selects the model being filtered over.
+    scope_filter_content_type_field = "content_type"
+    #: Heading on the card.
+    scope_filter_label = "Scope Filter"
+    #: Shown before a target model is selected, since the available filters depend on it.
+    scope_filter_prompt_message = "Please select an object type first to load the available filter fields."
+    scope_filter_card_template = "inc/scope_filter_card.html"
+
+    def get_scope_filter_card_context(self):
+        """Labels the card renders, so the page include and the HTMX response cannot word them differently."""
+        return {
+            "scope_filter_label": self.scope_filter_label,
+            "prompt_message": self.scope_filter_prompt_message,
+        }
+
+    def scope_filter_model_class_from_data(self, data):
+        """
+        The model the scope filters over, read from submitted form data.
+
+        Returns None when nothing is selected yet, which the card renders as a prompt rather than an empty
+        filter form. Override where the selection is not a single content type.
+        """
+        from django.contrib.contenttypes.models import ContentType
+
+        value = data.get(self.scope_filter_content_type_field)
+        if not value:
+            return None
+        content_type = ContentType.objects.filter(pk=value).first()
+        return content_type.model_class() if content_type else None
+
+    @staticmethod
+    def _as_query_dict(data):
+        """`data` as a mutable QueryDict, whether it arrived as one or as a stored dict."""
+        from django.http import QueryDict
+
+        if hasattr(data, "getlist"):
+            return data.copy()
+        query_dict = QueryDict(mutable=True)
+        for key, value in (data or {}).items():
+            query_dict.setlist(key, list(value) if isinstance(value, (list, tuple)) else [value])
+        return query_dict
+
+    def get_scope_filter_context(self, model_class, scope_filter_data=None):
+        """
+        Context for the scope filter card: the filterset, both filter forms, and the applied filters.
+
+        `scope_filter_data` is either a stored filter keyed for the form (`scope_filter_prefixed`) or raw
+        submitted data, so the same call serves rendering a saved rule and re-rendering a submitted one.
+        """
+        from nautobot.core.forms.forms import DynamicFilterFormSet
+        from nautobot.core.utils.lookup import get_filterset_for_model, get_form_for_model
+        from nautobot.core.views.utils import check_filter_for_display
+
+        prefix = self.scope_filter_prefix
+        # A QueryDict either way, whether the filter came from a form submission or out of storage. The
+        # distinction matters both directions: `dict(querydict.items())` returns only the last value per key,
+        # collapsing a multi-value filter into one the form then rejects; and a plain dict hands a
+        # single-value field its whole list, so a stored `{"action": ["delete"]}` renders as
+        # "Select a valid choice. ['delete'] is not one of the available choices." Submitted data has
+        # neither problem, so storage is normalized to look the same.
+        scope_filter_data = self._as_query_dict(scope_filter_data)
+
+        # Some filters reject an empty value outright rather than ignoring it, so empties are dropped here.
+        # TODO: remove once NaturalKeyOrPKMultipleChoiceFilter and friends tolerate them.
+        for key in list(scope_filter_data):
+            if not key.startswith(f"{prefix}-"):
+                continue
+            values = scope_filter_data.getlist(key) if hasattr(scope_filter_data, "getlist") else scope_filter_data[key]
+            if values in ("", None, [], [""], ()):
+                scope_filter_data.pop(key)
+
+        filterset_class = get_filterset_for_model(model_class)
+        filterset = filterset_class(data=scope_filter_data, queryset=model_class.objects.all(), prefix=prefix)
+        filterset_form_class = get_form_for_model(model_class, form_prefix="Filter")
+        return {
+            "filterset": filterset,
+            # Prefixed so the scope filter's inputs cannot collide with the model's own form fields.
+            "filter_params": [
+                check_filter_for_display(filterset.filters, field_name, values, prefix=prefix)
+                for field_name, values in scope_filter_data.items()
+                if field_name.startswith(f"{prefix}-")
+            ],
+            "dynamic_filter_form": DynamicFilterFormSet(filterset=filterset)(
+                form_kwargs={"filter_fields_prefix": prefix}
+            ),
+            "filter_form": filterset_form_class(scope_filter_data, prefix=prefix),
+            "content_type_selected": True,
+        }
+
+    def get_scope_filter_unavailable_message(self, data, instance=None):
+        """
+        Why a scope filter cannot be set at all for this submission, or None if it can.
+
+        Distinct from "no target model selected yet": that is a prompt to pick one, this is a statement
+        that no filter is possible. A required custom field is the case that needs it.
+        """
+        return None
+
+    def get_scope_filter_form_context(self, request, instance):
+        """
+        The scope filter card's context for a create or update view, from POST data or the saved filter.
+
+        Returns an empty context when no target model is selected, which the card renders as a prompt.
+        """
+        saved = instance is not None and instance.present_in_database
+        data = request.POST if request.POST else (instance.scope_filter_prefixed if saved else None)
+
+        context = self.get_scope_filter_card_context()
+
+        message = self.get_scope_filter_unavailable_message(request.POST if request.POST else {}, instance)
+        if message:
+            return {**context, "unavailable_message": message}
+
+        if request.POST:
+            model_class = self.scope_filter_model_class_from_data(request.POST)
+        else:
+            model_class = instance.scope_filter_model_class if saved else None
+        if model_class is None:
+            return context
+        return {**context, **self.get_scope_filter_context(model_class, data)}
+
+    def save_scope_filter(self, obj, context):
+        """Write the submitted filter onto `obj`, refusing an invalid one rather than saving a partial scope."""
+        filterset = context.get("filterset")
+        if filterset is None:
+            return
+        if not filterset.form.is_valid():
+            raise ValidationError(filterset.form.errors)
+        obj.set_scope_filter(filterset.form.cleaned_data)
+        obj.save()
+
+    @drf_action(
+        detail=False,
+        methods=["GET"],
+        url_path="scope-filter-fields",
+        url_name="scope_filter_fields",
+        custom_view_base_action="change",
+    )
+    def scope_filter_fields(self, request, *args, **kwargs):
+        """
+        HTMX endpoint re-rendering the scope filter card when the target model changes.
+
+        Renders the card partial rather than the whole page: this action has no page of its own -- it is
+        registered on the list route -- so there is no `template_name` to render, and the request's
+        `hx-select` wants only this element anyway.
+
+        `scope_filter_partial` tells the card to leave its `<script>` tags out. They are already on the page
+        that is being swapped into, and re-running them would redeclare their `const`s and throw. The
+        callers' `hx-select` happens to discard them too, but a caller that omitted it would break, so this
+        does not depend on that.
+        """
+        from django.http import HttpResponse
+        from django.template.loader import render_to_string
+
+        context = self.get_scope_filter_card_context()
+        context["scope_filter_partial"] = True
+        message = self.get_scope_filter_unavailable_message(request.GET)
+        if message:
+            context["unavailable_message"] = message
+        else:
+            model_class = self.scope_filter_model_class_from_data(request.GET)
+            if model_class:
+                context.update(self.get_scope_filter_context(model_class))
+        return HttpResponse(
+            render_to_string(template_name=self.scope_filter_card_template, context=context, request=request)
         )

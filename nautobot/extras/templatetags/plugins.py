@@ -31,6 +31,11 @@ def _get_registered_content(obj, method, template_context, return_html=True):
         "perms": template_context["perms"],
     }
 
+    if obj is None:
+        # The caller passed no model. A list view whose model resolves to no content type reaches here
+        # with None, and raising would turn a missing extension point into a 500 on the page itself.
+        return "" if return_html else []
+
     model_name = obj._meta.label_lower
     template_extensions = registry["plugin_template_extensions"].get(model_name, [])
     objects = []

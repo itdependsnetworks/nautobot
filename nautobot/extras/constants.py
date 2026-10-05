@@ -1,6 +1,36 @@
 # Webhook content types
 HTTP_CONTENT_TYPE_JSON = "application/json"
 
+# Models whose history changelog long-term retention covers.
+# Each has a mirrored `Archived*` model registered in `registry["changelog_archive_models"]`.
+CHANGELOG_ARCHIVE_COVERED_MODELS = (
+    "extras.objectchange",
+    "extras.jobresult",
+    "extras.joblogentry",
+    "extras.jobconsoleentry",
+)
+
+# The timestamp field that means "when this record happened", per covered model. Stated explicitly rather
+# than probed for, because getting it wrong silently files records under the wrong period.
+# Longest `ArchiveSegment.period_key` we generate, e.g. "2024-Q3" or "2024-07".
+CHANGELOG_ARCHIVE_MAX_PERIOD_KEY = 16
+
+# The period key for retained history outside any calendar period. In a deployment with no calendar
+# periods, the archival job writes every retained record under this key. Named for the property true in
+# both cases: the period has no bounds.
+#
+# PostgreSQL has a name for the same idea, the DEFAULT partition, into which it inserts whatever falls
+# outside every other partition's bounds. The difference is that nothing writes to this one once calendar
+# periods exist, because `period_key_for` returns a calendar key for every timestamp from then on.
+CHANGELOG_ARCHIVE_UNBOUNDED_PERIOD = "unbounded"
+
+CHANGELOG_ARCHIVE_AGE_FIELDS = {
+    "extras.objectchange": "time",
+    "extras.jobresult": "date_created",
+    "extras.joblogentry": "created",
+    "extras.jobconsoleentry": "timestamp",
+}
+
 # Registerable extras features
 EXTRAS_FEATURES = [
     "cable_terminations",

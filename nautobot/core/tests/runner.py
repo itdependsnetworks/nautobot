@@ -43,6 +43,23 @@ class NautobotParallelTestSuite(ParallelTestSuite):
         return super().run(result)
 
 
+def mirror_test_database(alias, primary_alias):
+    """
+    Point `alias` at `primary_alias`'s test database, and drop any connection it already holds.
+
+    `set_as_test_mirror` rewrites the alias's settings and leaves an open connection alone. Anything that
+    touched the alias earlier in setup is therefore still connected to the pre-test database, and stays
+    connected to it for the whole run: `generate_test_data` opens every alias a router pins a model to,
+    and it runs before the mirrors are configured.
+
+    The symptom is a split brain rather than an error. Migrations create the tables in the test database
+    while queries read the real one, so tests report "relation does not exist" for a table that plainly
+    exists, and any write lands in the developer's own database.
+    """
+    connections[alias].creation.set_as_test_mirror(connections[primary_alias].settings_dict)
+    connections[alias].close()
+
+
 class NautobotTestRunner(DiscoverRunner):
     """
     Custom test runner that excludes (slow) integration and migration tests by default among others.
@@ -184,11 +201,11 @@ class NautobotTestRunner(DiscoverRunner):
 
                 # Configure all other connections as mirrors of the first one
                 else:
-                    connection.creation.set_as_test_mirror(connections[first_alias].settings_dict)
+                    mirror_test_database(alias, first_alias)
 
         # Configure the test mirrors
         for alias, mirror_alias in mirrored_aliases.items():
-            connections[alias].creation.set_as_test_mirror(connections[mirror_alias].settings_dict)
+            mirror_test_database(alias, mirror_alias)
 
         if self.debug_sql:
             for alias in connections:

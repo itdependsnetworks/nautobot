@@ -163,6 +163,10 @@ EXEMPT_EXCLUDE_MODELS = (
     # The UI list view always requires `extras.view_savedview` regardless of this setting.
     ("extras", "savedview"),
     ("extras", "usersavedviewassociation"),
+    # The cold-storage gate. `permission_is_exempt` short-circuits view permissions when a deployment sets
+    # EXEMPT_VIEW_PERMISSIONS = ["*"], which would silently open retained change history on exactly those
+    # deployments.
+    ("extras", "archivesegment"),
 )
 
 # Models to exempt from the enforcement of view permissions
@@ -526,6 +530,8 @@ SPECTACULAR_SETTINGS = {
         "PrefixTypeChoices": "nautobot.ipam.choices.PrefixTypeChoices",
         "RackTypeChoices": "nautobot.dcim.choices.RackTypeChoices",
         "RelationshipTypeChoices": "nautobot.extras.choices.RelationshipTypeChoices",
+        # Assigned to `RetentionRule.mode`, which collides with other choice sets named "mode".
+        "RetentionRuleModeChoices": "nautobot.extras.choices.RetentionRuleModeChoices",
         # These choice enums need to be overridden because they get assigned to different names with the same choice set and
         # result in this error:
         #   encountered multiple names for the same choice set
@@ -579,6 +585,35 @@ if "mysql" in DATABASES["default"]["ENGINE"]:
     DATABASES["default"].setdefault("OPTIONS", {})["charset"] = "utf8mb4"
     DATABASES["default"].setdefault("TEST", {})["CHARSET"] = "utf8mb4"
     DATABASES["default"]["TEST"]["COLLATION"] = "utf8mb4_0900_ai_ci"
+
+# Whether changelog long-term retention is available at all. Deliberately not a Constance setting:
+# turning it on commits an installation to a second connection, a set of retention tables, and two
+# scheduled jobs, so it is an administrator's deployment decision made once, not something to be toggled
+# from the UI. Changing it requires a restart.
+CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))
+
+# How retained history is divided into periods: `unbounded`, `year`, `quarter`, or `month`. A record's own
+# timestamp decides which period it is written to.
+#
+# Yearly by default. A period is the unit retained history can be discarded in -- `DROP TABLE` returns a
+# period's disk at once, where deleting rows returns none -- so `unbounded`, one period for everything,
+# is the setting under which the archive only ever grows. That is the problem retention exists to
+# address, which makes it the wrong default even though it is the simplest arrangement.
+#
+# One granularity applies at a time, and this describes the whole archive, not the period written next.
+# Changing it does not reshape periods that already exist: an installation switching from `year` to
+# `month` keeps its year-long tables and writes month-long ones from then on, until an administrator
+# splits the old tables by hand. `change-logging.md` has the SQL for that.
+#
+# Deliberately not a Constance setting, for the same reason as the line above: the consequence of the
+# change outlives the change, and a restart is the point at which somebody reads the documentation.
+CHANGELOG_ARCHIVE_PERIOD = os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_PERIOD", "year")
+
+
+# The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
+# alongside `job_logs`.
+DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]
+
 
 # The secret key is used to encrypt session keys and salt passwords.
 SECRET_KEY = os.getenv("NAUTOBOT_SECRET_KEY", "")
@@ -912,9 +947,38 @@ CONSTANCE_CONFIG = {
         default="",
         help_text="Custom Markdown or limited HTML to display in a banner at the top of all pages.",
     ),
+    "CHANGELOG_LEGACY_OBJECT_DATA": ConstanceConfigItem(
+        default=True,
+        help_text="Store the legacy `object_data` snapshot on each change record, alongside `object_data_v2`.\n"
+        "Deprecated: `object_data_v2` supersedes it and every reader prefers it, falling back to the legacy "
+        "snapshot only for records written before Nautobot 1.3. Turning this off halves the data each new "
+        "change record stores. Records written while it is off leave `object_data` empty, which is visible "
+        "to REST API clients reading that field directly.",
+        field_type=bool,
+    ),
     "CHANGELOG_RETENTION": ConstanceConfigItem(
         default=90,
         help_text="Number of days to retain object changelog history.\nSet this to 0 to retain changes indefinitely.",
+        field_type=int,
+    ),
+    "CHANGELOG_ROTATION_BATCH_SIZE": ConstanceConfigItem(
+        default=1000,
+        help_text="Number of records the rotation job moves per increment.\n"
+        "Lower than the truncation batch size because rotation loads each record into memory to copy it, "
+        "twice over -- the warm record and the retained copy built from it -- while truncation only "
+        "needs their keys. Reduce this if rotation runs out of memory on records with large data.",
+        field_type=int,
+    ),
+    "CHANGELOG_TRUNCATION_BATCH_SIZE": ConstanceConfigItem(
+        default=10000,
+        help_text="Number of records the truncation job deletes per increment.\n"
+        "Truncation always runs in bounded increments, never as a single delete statement.",
+        field_type=int,
+    ),
+    "CHANGELOG_WARM_WINDOW_DAYS": ConstanceConfigItem(
+        default=90,
+        help_text="Number of days of change and job history kept in warm storage.\n"
+        "Records older than this are eligible for the rotation job to move into long-term retention.",
         field_type=int,
     ),
     "DEVICE_UNIQUENESS": ConstanceConfigItem(
@@ -1056,7 +1120,13 @@ CONSTANCE_CONFIG = {
 
 CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
-    "Change Logging": ["CHANGELOG_RETENTION"],
+    "Change Logging": [
+        "CHANGELOG_RETENTION",
+        "CHANGELOG_WARM_WINDOW_DAYS",
+        "CHANGELOG_LEGACY_OBJECT_DATA",
+        "CHANGELOG_ROTATION_BATCH_SIZE",
+        "CHANGELOG_TRUNCATION_BATCH_SIZE",
+    ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],
     "Installation Metrics": ["DEPLOYMENT_ID"],
     "Natural Keys": ["DEVICE_UNIQUENESS", "LOCATION_NAME_AS_NATURAL_KEY"],

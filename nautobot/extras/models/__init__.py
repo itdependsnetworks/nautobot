@@ -6,6 +6,13 @@ from .approvals import (  # isort: skip
     ApprovalWorkflowStage,
     ApprovalWorkflowStageResponse,
 )
+from .archive import (
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
+    ArchiveSegment,
+)
 from .contacts import Contact, ContactAssociation, Team
 from .customfields import ComputedField, CustomField, CustomFieldChoice, CustomFieldModel
 from .datasources import GitRepository
@@ -42,6 +49,7 @@ from .models import (
     Webhook,
 )
 from .relationships import Relationship, RelationshipAssociation, RelationshipModel
+from .retention import RetentionRule
 from .roles import Role, RoleField
 from .secrets import Secret, SecretsGroup, SecretsGroupAssociation
 from .statuses import Status, StatusField
@@ -53,6 +61,11 @@ __all__ = (
     "ApprovalWorkflowStage",
     "ApprovalWorkflowStageDefinition",
     "ApprovalWorkflowStageResponse",
+    "ArchiveSegment",
+    "ArchivedJobConsoleEntry",
+    "ArchivedJobLogEntry",
+    "ArchivedJobResult",
+    "ArchivedObjectChange",
     "ChangeLoggedModel",
     "ComputedField",
     "ConfigContext",
@@ -93,6 +106,7 @@ __all__ = (
     "Relationship",
     "RelationshipAssociation",
     "RelationshipModel",
+    "RetentionRule",
     "Role",
     "RoleField",
     "SavedView",

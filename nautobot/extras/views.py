@@ -40,7 +40,6 @@ from nautobot.core.choices import ButtonActionColorChoices
 from nautobot.core.constants import PAGINATE_COUNT_DEFAULT
 from nautobot.core.exceptions import CeleryWorkerNotRunningException, FilterSetFieldNotFound
 from nautobot.core.forms import ApprovalForm, restrict_form_fields
-from nautobot.core.forms.forms import DynamicFilterFormSet
 from nautobot.core.models.querysets import count_related
 from nautobot.core.models.utils import pretty_print_query
 from nautobot.core.templatetags import helpers
@@ -61,18 +60,19 @@ from nautobot.core.utils.config import get_settings_or_config
 from nautobot.core.utils.deprecation import warn_deprecated_at_caller
 from nautobot.core.utils.lookup import (
     get_filterset_for_model,
-    get_form_for_model,
     get_model_for_view_name,
     get_route_for_model,
     get_table_class_string_from_view_name,
     get_table_for_model,
 )
+from nautobot.core.utils.querysets import maybe_select_related
 from nautobot.core.utils.requests import (
     is_single_choice_field,
     normalize_querydict,
 )
 from nautobot.core.views import generic, viewsets
 from nautobot.core.views.mixins import (
+    ArchiveAwareRetrieveMixin,
     ObjectBulkCreateViewMixin,
     ObjectBulkDestroyViewMixin,
     ObjectBulkUpdateViewMixin,
@@ -83,10 +83,10 @@ from nautobot.core.views.mixins import (
     ObjectEditViewMixin,
     ObjectListViewMixin,
     ObjectNotesViewMixin,
+    ScopedFilterViewMixin,
 )
 from nautobot.core.views.paginator import EnhancedPaginator, get_paginate_count
 from nautobot.core.views.utils import (
-    check_filter_for_display,
     common_detail_view_context,
     get_obj_from_context,
     prepare_cloned_fields,
@@ -101,6 +101,10 @@ from nautobot.dcim.tables import (
     RackTable,
     VirtualDeviceContextTable,
 )
+from nautobot.extras.archive_reads import (
+    archive_context,
+    object_change_history,
+)
 from nautobot.extras.conditions.forms import ConditionRowForm, errors_by_row_and_control
 from nautobot.extras.conditions.model_fields import addressable_fields
 from nautobot.extras.constants import PENDING_WORKFLOWS_ERROR_CODE
@@ -113,6 +117,7 @@ from nautobot.extras.utils import (
     get_kubernetes_job_manifest,
     get_pending_approval_workflow_stages,
     get_worker_count,
+    resolve_object_urls,
 )
 from nautobot.ipam.models import IPAddress, IPAddressRange, Prefix, VLAN
 from nautobot.ipam.tables import IPAddressRangeTable, IPAddressTable, PrefixTable, VLANTable
@@ -144,6 +149,7 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchiveSegment,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -169,6 +175,7 @@ from .models import (
     ObjectMetadata,
     Relationship,
     RelationshipAssociation,
+    RetentionRule,
     Role,
     SavedView,
     ScheduledJob,
@@ -1342,7 +1349,7 @@ class ObjectAssignContactOrTeamView(generic.ObjectEditView):
 #
 
 
-class CustomFieldUIViewSet(NautobotUIViewSet):
+class CustomFieldUIViewSet(ScopedFilterViewMixin, NautobotUIViewSet):
     bulk_update_form_class = forms.CustomFieldBulkEditForm
     queryset = CustomField.objects.all()
     serializer_class = serializers.CustomFieldSerializer
@@ -1415,18 +1422,10 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
 
             if request.POST:
                 context["choices"] = forms.CustomFieldChoiceFormSet(data=request.POST, instance=instance)
-
-                model_class = self.get_content_type_model_class(request.POST)
-                scope_filter_context = self.get_scope_filter_context(model_class, request.POST)
-                context.update(**scope_filter_context)
             else:
                 context["choices"] = forms.CustomFieldChoiceFormSet(instance=instance)
-
-                if content_type := instance.content_types.first():
-                    scope_filter_context = self.get_scope_filter_context(
-                        content_type.model_class(), instance.scope_filter_prefixed
-                    )
-                    context.update(**scope_filter_context)
+            context["scope_filter_trigger"] = "#id_content_types"
+            context.update(**self.get_scope_filter_form_context(request, instance))
 
         if self.action == "retrieve":
             choices_data = []
@@ -1440,66 +1439,30 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
 
         return context
 
-    @staticmethod
-    def get_content_type_model_class(data):
+    scope_filter_content_type_field = "content_types"
+    scope_filter_label = "Scope filter"
+    scope_filter_prompt_message = "Please select content types first to load scope filter available fields."
+
+    def scope_filter_model_class_from_data(self, data):
         """
-        This function will validate ContentType from POST and then return proper model class
+        The first content type the field is assigned to, since a field may be assigned to several.
+
+        Goes through the form so an invalid selection is reported rather than quietly resolving to nothing.
         """
         content_type_form = forms.CustomFieldContentTypesForm(data=data)
-        if content_type_form.is_valid():
-            if content_type_form.cleaned_data["content_types"].exists():
-                content_type = content_type_form.cleaned_data["content_types"][0]
-                return content_type.model_class()
-            return None
+        if not content_type_form.is_valid():
+            raise ValidationError(content_type_form.errors)
+        content_type = content_type_form.cleaned_data["content_types"].first()
+        return content_type.model_class() if content_type else None
 
-        raise ValidationError(content_type_form.errors)
-
-    def get_scope_filter_context(self, model_class, scope_filter_data=None):
-        """
-        Function responsible for generating context for scope filter form.
-
-        `scope_filter_data` can be both: value from DB or plain request.POST
-        """
-        prefix = "scope"
-        if not scope_filter_data:
-            scope_filter_data = {}
-
-        # We need to drop empty values, because some type of fields (e.g. NaturalKeyOrPKMultipleChoiceFilter) don't accept empty list or str
-        # TODO: Remove this code after fix on NaturalKeyOrPKMultipleChoiceFilter and other
-        scope_filter_data_filtered = scope_filter_data.copy()
-        for key in list(scope_filter_data_filtered.keys()):
-            if key.startswith("scope-"):
-                if hasattr(scope_filter_data_filtered, "getlist"):
-                    values = scope_filter_data_filtered.getlist(key)
-                else:
-                    values = scope_filter_data_filtered.get(key)
-                if values in ("", None, [], [""], ()):
-                    scope_filter_data_filtered.pop(key)
-
-        filterset_class = get_filterset_for_model(model_class)
-        filterset = filterset_class(
-            data=scope_filter_data_filtered,
-            queryset=model_class.objects.all(),
-            prefix=prefix,
-        )
-        filterset_form_class = get_form_for_model(model_class, form_prefix="Filter")
-        filterset_form = filterset_form_class(scope_filter_data_filtered, prefix=prefix)
-        display_filter_params = [
-            # To avoid input name collision between scope filter fields and standard custom field form we're prefixing all the fields
-            check_filter_for_display(filterset.filters, field_name, values, prefix=prefix)
-            for field_name, values in scope_filter_data_filtered.items()
-            if field_name.startswith(f"{prefix}-")
-        ]
-
-        dynamic_filter_form = DynamicFilterFormSet(filterset=filterset)(form_kwargs={"filter_fields_prefix": prefix})
-
-        return {
-            "filterset": filterset,
-            "filter_params": display_filter_params,
-            "dynamic_filter_form": dynamic_filter_form,
-            "filter_form": filterset_form,
-            "content_type_selected": True,
-        }
+    def get_scope_filter_unavailable_message(self, data, instance=None):
+        """A required field must be carriable by every in-scope object, so it can have no scope filter."""
+        required = bool(data) and data.get("required") == "on"
+        if not data and instance is not None and instance.present_in_database:
+            required = instance.required
+        if required:
+            return "Scope filter can be set only for non-required custom fields."
+        return None
 
     def form_save(self, form, **kwargs):
         obj = super().form_save(form, **kwargs)
@@ -1512,42 +1475,9 @@ class CustomFieldUIViewSet(NautobotUIViewSet):
         else:
             raise ValidationError(choices.errors)
 
-        # Process the data for scope filter
-        filter_form = ctx["filterset"].form
-        if filter_form.is_valid():
-            obj.set_scope_filter(filter_form.cleaned_data)
-            obj.save()
-        else:
-            raise ValidationError(filter_form.errors)
+        self.save_scope_filter(obj, ctx)
 
         return obj
-
-    @action(
-        detail=False,
-        methods=["GET"],
-        url_path="scope-filter-fields",
-        url_name="scope_filter_fields",
-        custom_view_base_action="change",
-    )
-    def scope_filter_fields_for_content_types(self, request, *args, **kwargs):
-        """
-        HTMX endpoint to re-render scope filter part of form on content type update.
-        """
-        required_checked = request.GET.get("required", None) == "on"
-        context = {"required_checked": required_checked}
-
-        model_class = self.get_content_type_model_class(request.GET)
-        if model_class and not required_checked:
-            context = self.get_scope_filter_context(model_class)
-
-        # It's rendering the whole template, but due to `hx-swap-oob` in template
-        # HTMX will swap only part of the page
-        html = render_to_string(
-            template_name=self.template_name,
-            context=context,
-            request=request,
-        )
-        return HttpResponse(html)
 
 
 #
@@ -2015,6 +1945,102 @@ class ObjectDynamicGroupsView(generic.GenericView):
                 "detail": True,
             },
         )
+
+
+#
+# Changelog Retention
+#
+
+
+class RetentionRuleUIViewSet(ScopedFilterViewMixin, NautobotUIViewSet):
+    """
+    CRUD for the filter model that drives changelog truncation.
+
+    The rule's scope is edited with the same filter builder a custom field's scope uses, so a rule selects
+    exactly what the same filter selects in the change log -- which is how an operator checks what a rule
+    will delete before enabling it.
+    """
+
+    bulk_update_form_class = forms.RetentionRuleBulkEditForm
+    filterset_class = filters.RetentionRuleFilterSet
+    filterset_form_class = forms.RetentionRuleFilterForm
+    form_class = forms.RetentionRuleForm
+    queryset = RetentionRule.objects.all()
+    serializer_class = serializers.RetentionRuleSerializer
+    table_class = tables.RetentionRuleTable
+
+    def get_queryset(self):
+        """`content_type` is rendered on every row of the list and on the detail page."""
+        return super().get_queryset().select_related("content_type")
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=[
+            object_detail.ObjectFieldsPanel(
+                label="Retention Rule",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("name", "description", "content_type", "mode", "max_age_days", "weight", "enabled"),
+            ),
+            object_detail.ObjectTextPanel(
+                label="Scope Filter",
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                object_field="scope_filter",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+            ),
+        ]
+    )
+
+    def get_extra_context(self, request, instance):
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            context["scope_filter_trigger"] = "#id_content_type"
+            context.update(**self.get_scope_filter_form_context(request, instance))
+        return context
+
+    def form_save(self, form, **kwargs):
+        obj = super().form_save(form, **kwargs)
+        self.save_scope_filter(obj, self.get_extra_context(self.request, obj))
+        return obj
+
+
+class ArchiveSegmentUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
+    """
+    Read-only view of the retention period registry.
+
+    Periods are created and maintained by the rotation job, never by hand, so there is no create, edit,
+    or delete here. Its `view` permission is the single cold-storage gate for every covered model.
+    """
+
+    filterset_class = filters.ArchiveSegmentFilterSet
+    filterset_form_class = forms.ArchiveSegmentFilterForm
+    queryset = ArchiveSegment.objects.all()
+    serializer_class = serializers.ArchiveSegmentSerializer
+    table_class = tables.ArchiveSegmentTable
+    action_buttons = ("export",)
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=[
+            object_detail.ObjectFieldsPanel(
+                label="Period",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=(
+                    "label",
+                    "model_label",
+                    "period_key",
+                    "time_start",
+                    "time_end",
+                ),
+            ),
+            object_detail.ObjectFieldsPanel(
+                label="Rotation Status",
+                section=SectionChoices.RIGHT_HALF,
+                weight=100,
+                fields=("row_count", "last_rotated_time", "is_period_closed"),
+            ),
+        ]
+    )
 
 
 #
@@ -3838,6 +3864,7 @@ class JobResultCancelPanel(object_detail.ObjectFieldsPanel):
 
 
 class JobResultUIViewSet(
+    ArchiveAwareRetrieveMixin,
     ObjectDetailViewMixin,
     ObjectListViewMixin,
     ObjectDestroyViewMixin,
@@ -3849,6 +3876,9 @@ class JobResultUIViewSet(
     table_class = tables.JobResultTable
     queryset = JobResult.objects.all()
     action_buttons = ()
+    # The detail page's log and console panels load through their own actions, so a retained result whose
+    # page renders needs those actions to resolve it too. All three are reads.
+    archive_aware_actions = ("retrieve", "log_table", "job_console_entries", "export_job_console_entries")
     breadcrumbs = Breadcrumbs(
         items={
             "detail": [
@@ -3918,7 +3948,15 @@ class JobResultUIViewSet(
                 icon="mdi-database-export",
                 required_permissions=["extras.view_joblogentry"],
                 link_name=lambda ctx: (
-                    reverse("extras-api:joblogentry-list") + f"?job_result={ctx['object'].pk}&format=csv"
+                    reverse("extras-api:joblogentry-list")
+                    + f"?job_result={ctx['object'].pk}&format=csv"
+                    # A retained result's log entries are not in the warm table the endpoint reads by
+                    # default, so without the period the export comes back empty rather than wrong.
+                    + (
+                        f"&archive_period={ctx['object'].period_key}"
+                        if getattr(ctx["object"], "period_key", None)
+                        else ""
+                    )
                 ),
             ),
             JobResultButton(
@@ -4045,7 +4083,10 @@ class JobResultUIViewSet(
         return context
 
     def get_queryset(self):
-        queryset = super().get_queryset().select_related("job_model", "user")
+        # `maybe_select_related` rather than `.select_related()` directly: this runs after a retained period
+        # has been swapped in, and a mirror declares `job_model` and `user` as bare identifier columns with no
+        # relation to follow. The deferred fields all exist on the mirror, so those need no guard.
+        queryset = maybe_select_related(super().get_queryset(), ["job_model", "user"])
 
         if not self.detail:
             queryset = queryset.defer("result", "task_args", "task_kwargs", "celery_kwargs", "traceback", "meta")
@@ -4060,15 +4101,18 @@ class JobResultUIViewSet(
     )
     def log_table(self, request, pk=None):
         """Custom action to return a rendered JobLogEntry table for a JobResult."""
-        instance = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+        instance = self.queryset.restrict(request.user, "view").filter(pk=pk).first()
+        if instance is None:
+            # The detail page this table loads into serves retained results, so this has to as well --
+            # otherwise the page renders and its log panel comes back 404 and empty.
+            instance = self.get_archived_object(pk)
+        if instance is None:
+            raise Http404
 
+        queryset = self.restrict_if_warm(instance.job_log_entries.all())
         filter_q = request.GET.get("q")
         if filter_q:
-            queryset = instance.job_log_entries.restrict(request.user, "view").filter(
-                Q(message__icontains=filter_q) | Q(log_level__icontains=filter_q)
-            )
-        else:
-            queryset = instance.job_log_entries.restrict(request.user, "view")
+            queryset = queryset.filter(Q(message__icontains=filter_q) | Q(log_level__icontains=filter_q))
 
         log_table = tables.JobLogEntryTable(data=queryset, user=request.user)
         paginate = {
@@ -4110,7 +4154,7 @@ class JobResultUIViewSet(
         if request.headers.get("HX-Request"):
             response = self._handle_console_poll(request, job_result)
         else:
-            entries = JobConsoleEntry.objects.restrict(user=request.user).filter(job_result=job_result)
+            entries = self._console_entries_for(job_result)
 
             # Get last entry timestamp for polling initialization
             last_entry = entries.last()
@@ -4138,6 +4182,16 @@ class JobResultUIViewSet(
         """Check if job has finished execution."""
         return job_result.status in JobResultStatusChoices.UNREADY_STATES
 
+    def _console_entries_for(self, job_result):
+        """
+        This result's console output, whether the result is warm or retained.
+
+        Both models expose the output under the same name -- a reverse foreign key warm, a queryset over
+        the stored identifier on a mirror -- so reading through the accessor serves both. Filtering
+        `JobConsoleEntry` on `job_result=<mirror instance>` does not: it is a different model.
+        """
+        return self.restrict_if_warm(job_result.job_console_entries.all())
+
     def _handle_console_poll(self, request, job_result) -> HttpResponse:
         """Handle HTMX polling request and return new log entries as HTML."""
         last_timestamp_str = request.GET.get("last_timestamp", "")
@@ -4155,9 +4209,7 @@ class JobResultUIViewSet(
                 msg = "Invalid timestamp: {}"
                 return HttpResponseBadRequest(format_html(msg, last_timestamp_str))
 
-            new_entries = JobConsoleEntry.objects.restrict(user=request.user).filter(
-                job_result=job_result, timestamp__gt=last_timestamp
-            )
+            new_entries = self._console_entries_for(job_result).filter(timestamp__gt=last_timestamp)
 
         job_is_pending = self._is_job_pending(job_result)
 
@@ -4184,7 +4236,7 @@ class JobResultUIViewSet(
         """Export all console entries for a JobResult as a plain-text file."""
         job_result = self.get_object()
 
-        entries = JobConsoleEntry.objects.restrict(user=request.user).filter(job_result=job_result)
+        entries = self._console_entries_for(job_result)
 
         lines = []
         for entry in entries:
@@ -4328,7 +4380,7 @@ class JobButtonUIViewSet(NautobotUIViewSet):
 #
 # Change logging
 #
-class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
+class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, ObjectListViewMixin):
     filterset_class = filters.ObjectChangeFilterSet
     filterset_form_class = forms.ObjectChangeFilterForm
     queryset = ObjectChange.objects.all()
@@ -4341,9 +4393,15 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
             if key == "changed_object":
                 if value and getattr(value, "get_absolute_url", None):
                     return helpers.hyperlinked_object(value)
-                else:
-                    obj = get_obj_from_context(context, self.context_object_key)
-                    return helpers.placeholder(obj.object_repr)
+                # A retained record has no `changed_object` relation to follow, only the content type and
+                # object ids rotation demoted it to, so the link is resolved from those. Falls back to the
+                # stored `object_repr` when the object is gone, which is the same thing the list does.
+                obj = get_obj_from_context(context, self.context_object_key)
+                reference = (obj.changed_object_type_id, obj.changed_object_id)
+                url = resolve_object_urls([reference]).get(reference)
+                if url:
+                    return format_html('<a href="{}">{}</a>', url, obj.object_repr)
+                return helpers.placeholder(obj.object_repr)
             return super().render_value(key, value, context)
 
     object_detail_content = object_detail.ObjectDetailContent(
@@ -4367,7 +4425,10 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
                 label="Object Data",
                 section=SectionChoices.LEFT_HALF,
                 weight=200,
-                object_field="object_data",
+                # `snapshot_data`, not `object_data`: the latter is the pre-1.3 snapshot, which is empty on
+                # records written with CHANGELOG_LEGACY_OBJECT_DATA off and is the older representation
+                # even when present.
+                object_field="snapshot_data",
                 render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
                 collapsed=True,
             ),
@@ -4423,29 +4484,36 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
         """
         context = super().get_extra_context(request, instance)
 
-        if self.action == "retrieve":
-            related_changes = instance.get_related_changes(user=request.user).filter(request_id=instance.request_id)
-            related_changes_table = tables.ObjectChangeTable(
-                data=related_changes,
-                orderable=False,
-            )
-            paginate = {
-                "paginator_class": EnhancedPaginator,
-                "per_page": get_paginate_count(request),
-            }
-            RequestConfig(request, paginate).configure(related_changes_table)
-            snapshots = instance.get_snapshots()
+        if self.action != "retrieve":
+            return context
 
-            context.update(
-                {
-                    "diff_added": snapshots["differences"]["added"],
-                    "diff_removed": snapshots["differences"]["removed"],
-                    "next_change": instance.get_next_change(request.user),
-                    "prev_change": instance.get_prev_change(request.user),
-                    "related_changes_table": related_changes_table,
-                    "related_changes_count": related_changes.count(),
-                }
-            )
+        # Warm and retained records answer the same methods, so there is one path here rather than a branch
+        # per storage. A retained record's siblings and diff neighbour are found within its period --
+        # see `ArchivedObjectChange.get_related_changes` for why that is the right scope and what it costs
+        # at a period boundary.
+        related_changes = instance.get_related_changes(user=request.user).filter(request_id=instance.request_id)
+        related_changes_table = tables.ObjectChangeTable(data=related_changes, orderable=False)
+        paginate = {
+            "paginator_class": EnhancedPaginator,
+            "per_page": get_paginate_count(request),
+        }
+        RequestConfig(request, paginate).configure(related_changes_table)
+        snapshots = instance.get_snapshots()
+
+        context.update(
+            {
+                "diff_added": snapshots["differences"]["added"],
+                "diff_removed": snapshots["differences"]["removed"],
+                "next_change": instance.get_next_change(request.user),
+                "prev_change": instance.get_prev_change(request.user),
+                "related_changes_table": related_changes_table,
+                "related_changes_count": related_changes.count(),
+            }
+        )
+        if self.is_archived(instance):
+            context["archive_segment"] = ArchiveSegment.objects.filter(
+                model_label=ObjectChange._meta.label_lower, period_key=instance.period_key
+            ).first()
 
         return context
 
@@ -4470,14 +4538,9 @@ class ObjectChangeLogView(generic.GenericView):
 
         # Gather all changes for this object (and its related objects)
         content_type = ContentType.objects.get_for_model(model)
-        objectchanges = (
-            ObjectChange.objects.restrict(request.user, "view")
-            .select_related("user", "changed_object_type")
-            .filter(
-                Q(changed_object_type=content_type, changed_object_id=obj.pk)
-                | Q(related_object_type=content_type, related_object_id=obj.pk)
-            )
-        )
+        archive = archive_context(ObjectChange, request, show_counts=False)
+        # One period at a time: the selected period replaces warm storage rather than adding to it.
+        objectchanges, _period_key = object_change_history(obj, content_type, request)
         objectchanges_table = tables.ObjectChangeTable(data=objectchanges, orderable=False)
 
         # Apply the request context
@@ -4503,6 +4566,7 @@ class ObjectChangeLogView(generic.GenericView):
                 "view_titles": self.get_view_titles(obj, view_type=""),
                 "detail": True,
                 "view_action": "changelog",
+                **archive,
             },
         )
 
