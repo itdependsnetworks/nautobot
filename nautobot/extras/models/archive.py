@@ -37,6 +37,35 @@ from nautobot.extras.models.change_logging import ObjectChangeSnapshotsMixin
 from nautobot.extras.models.customfields import CustomFieldModel
 
 
+def build_mirror_instance(warm_object, mirror_model):
+    """
+    Build an unsaved mirror instance with every retained field of `warm_object`.
+
+    The primary key is copied unchanged, which is what makes rotation idempotent. A field present only on
+    the mirror raises instead of taking a default, `user_name` below being the one exception.
+    """
+    values = {"id": warm_object.pk}
+    for field in mirror_model._meta.fields:
+        name = field.name
+        if name == "id":
+            continue
+        if name == "user_name" and not hasattr(warm_object, name):
+            # `JobResult` reads the username through its `user` foreign key. With the key demoted that
+            # would be unrecoverable once the User row is deleted, so rotation denormalizes it, the same
+            # trade `ObjectChange.user_name` already makes.
+            values[name] = getattr(warm_object.user, "username", "") or ""
+        elif hasattr(warm_object, name):
+            # Covers plain columns, and demoted foreign keys whose `<name>_id` attribute exists on the
+            # warm model too, read as a raw id rather than a related-object fetch.
+            values[name] = getattr(warm_object, name)
+        else:
+            raise ValueError(
+                f"{mirror_model.__name__}.{name} has no counterpart on {warm_object._meta.label}. "
+                f"Run `nautobot-server check_changelog_archive_schema`."
+            )
+    return mirror_model(**values)
+
+
 def archive_model_for(model):
     """
     The retention mirror for `model`'s history, or None if `model` has none.

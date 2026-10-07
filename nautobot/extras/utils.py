@@ -43,6 +43,7 @@ from nautobot.extras.choices import (
     ObjectChangeActionChoices,
 )
 from nautobot.extras.constants import (
+    CHANGELOG_ARCHIVE_AGE_FIELDS,
     CHANGELOG_MAX_CHANGE_CONTEXT_DETAIL,
     EXTRAS_FEATURES,
     JOB_MAX_NAME_LENGTH,
@@ -55,6 +56,14 @@ if TYPE_CHECKING:
     from nautobot.extras.models import JobQueue
 
 logger = logging.getLogger(__name__)
+
+
+def age_field_for(model):
+    """The timestamp field that determines how old a record of `model` is."""
+    try:
+        return CHANGELOG_ARCHIVE_AGE_FIELDS[model._meta.label_lower]
+    except KeyError:
+        raise ValueError(f"{model._meta.label} is not covered by changelog retention") from None
 
 
 def resolve_object_urls(references):

@@ -18,10 +18,12 @@ invisible. The seed makes a re-run reproduce the same data.
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone as dt_timezone
+import logging
 import random
 import uuid
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand, CommandError
@@ -60,6 +62,16 @@ DEMO_PASSWORD = "retention-demo-1234"  # noqa: S105
 DEMO_USERS = ("retention-viewer", "retention-archivist")
 
 User = get_user_model()
+
+
+class _StubJobResult:
+    """Stands in for the `JobResult` a running job reads its user from.
+
+    Rotation is run in-process here rather than through a worker, so there is no real `JobResult` to read.
+    """
+
+    def __init__(self, user):
+        self.user = user
 
 
 def _model_for_label(label):
@@ -118,6 +130,7 @@ class Command(BaseCommand):
             self._flush()
 
         with transaction.atomic():
+            self._configure()
             # Users first: `_job_history` assigns each job result one of them, and a job result with no
             # user renders a summary panel missing the rows a real one has.
             self._users()
@@ -138,6 +151,19 @@ class Command(BaseCommand):
         )
 
     # Setup
+
+    def _configure(self):
+        """Set the runtime tuning this fabricated history is shaped for, and check the capability is on."""
+        from constance import config
+
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
+            raise CommandError(
+                "Changelog long-term retention is off. It is a deployment setting rather than a runtime "
+                "toggle, so this command cannot turn it on. Set CHANGELOG_ARCHIVE_ENABLED = True in "
+                "nautobot_config.py (or NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED=True), restart, and run again."
+            )
+        config.CHANGELOG_WARM_WINDOW_DAYS = 90
+        self.stdout.write(self.style.NOTICE("Warm window 90 days"))
 
     def _targets(self, rng):
         """
@@ -374,53 +400,30 @@ class Command(BaseCommand):
 
     def _rotate(self):
         """
-        Move the fabricated history into retained storage, so there is something to browse.
+        Run the rotation job in-process, so no worker is needed to get retained history to look at.
 
-        TODO(retention-placeholder): a direct move, because the rotation job does not exist yet. ROTATE-1
-        replaces this body with an in-process run of `ChangelogRotation`, which is what a real deployment
-        uses. The records this writes are the same records rotation would write: same primary keys, same
-        field values, children before parents.
+        Its log goes to stdout, there being no real `JobResult` behind it.
+
         """
-        from django.apps import apps
-        from django.utils import timezone
+        from nautobot.core.jobs.retention import ChangelogRotation
 
-        cutoff = timezone.now() - timedelta(days=90)
-        age_fields = {
-            "extras.objectchange": "time",
-            "extras.jobresult": "date_created",
-            "extras.joblogentry": "created",
-            "extras.jobconsoleentry": "timestamp",
-        }
-        moved = {}
-        # Children first: a warm job result is deleted once copied, and its log and console entries go
-        # with it.
-        from nautobot.extras.registry import registry
+        logger = logging.getLogger(f"nautobot.{MARKER}")
+        logger.setLevel(logging.INFO)
+        # Not propagated: Nautobot's root handler would print every line a second time, with its own
+        # timestamped prefix, which makes the rotation log twice as long and half as readable.
+        logger.propagate = False
+        if not logger.handlers:
+            handler = logging.StreamHandler(self.stdout)
+            handler.setFormatter(logging.Formatter("  %(message)s"))
+            logger.addHandler(handler)
 
-        # Children before parents: deleting a warm job result takes its log and console entries with it.
-        for label, mirror in reversed(list(registry["changelog_archive_models"].items())):
-            model = apps.get_model(label)
-            eligible = list(model.objects.filter(**{f"{age_fields[label]}__lt": cutoff}))
-            if not eligible:
-                continue
-            mirror.objects.bulk_create(
-                [self._mirror_of(warm_object, mirror) for warm_object in eligible], ignore_conflicts=True
-            )
-            model.objects.filter(pk__in=[o.pk for o in eligible]).delete()
-            moved[label] = len(eligible)
-        self.stdout.write(self.style.SUCCESS(f"Moved into retained storage: {moved}"))
+        job = ChangelogRotation()
+        job.logger = logger
+        job.job_result = _StubJobResult(User.objects.filter(is_superuser=True).first())
 
-    @staticmethod
-    def _mirror_of(warm_object, mirror_model):
-        """TODO(retention-placeholder): ROTATE-1 replaces this with `build_mirror_instance`."""
-        values = {"id": warm_object.pk}
-        for field in mirror_model._meta.fields:
-            if field.name == "id":
-                continue
-            if field.name == "user_name" and not hasattr(warm_object, field.name):
-                values[field.name] = getattr(warm_object.user, "username", "") or ""
-            else:
-                values[field.name] = getattr(warm_object, field.name)
-        return mirror_model(**values)
+        self.stdout.write(self.style.NOTICE("Running Changelog Rotation in-process"))
+        result = job.run(record_types=None, warm_window_days=90, batch_size=500, dry_run=False)
+        self.stdout.write(self.style.SUCCESS(f"Rotated: {result}"))
 
     # Reporting and teardown
 
@@ -439,10 +442,31 @@ class Command(BaseCommand):
         for label, count in rows:
             self.stdout.write(f"{label:28} {count}")
 
+        self._report_storage()
+
         from nautobot.extras.registry import registry
 
         for warm_label, mirror in sorted(registry["changelog_archive_models"].items()):
             self.stdout.write(f"  {warm_label:32} {mirror.objects.count():6} rows  {mirror._meta.db_table}")
+
+    def _report_storage(self):
+        """
+        Where retained history is being written, which is what a tester most often needs to check.
+
+        The archive sharing the primary database and the archive on its own host look identical from the UI.
+        """
+
+        from nautobot.core.constants import CHANGELOG_ARCHIVE
+        from nautobot.core.utils.config import changelog_archive_is_separate
+
+        archive = settings.DATABASES.get(CHANGELOG_ARCHIVE, {})
+        if changelog_archive_is_separate():
+            host = archive.get("HOST") or "localhost"
+            target = f"{archive.get('NAME', '?')} on {host}:{archive.get('PORT') or 'default'}"
+        else:
+            target = f"{archive.get('NAME', '?')} (same database as default)"
+        self.stdout.write("")
+        self.stdout.write(f"{'Retained history connection':28} {CHANGELOG_ARCHIVE} -> {target}")
 
     def _flush(self):
         """

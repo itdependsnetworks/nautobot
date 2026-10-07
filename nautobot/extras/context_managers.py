@@ -1,9 +1,11 @@
 from contextlib import contextmanager
+import logging
 import uuid
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
+from django.db.models.signals import pre_delete
 
 from nautobot.core.events import publish_event
 from nautobot.core.utils.otel import traced_span
@@ -352,3 +354,32 @@ def deferred_change_logging_for_bulk_operation():
         finally:
             change_context.defer_object_changes = False
             change_context.reset_deferred_object_changes()
+
+
+@contextmanager
+def without_delete_change_logging(logger=None):
+    """
+    Detach the change log's `pre_delete` receiver for the duration of the block.
+
+    Bulk deletion is much faster without signals, and where the records being deleted *are* the change
+    log there is nothing to log. The two cleanup jobs and the two retention jobs all want this. It is a
+    context manager so the reconnect cannot be skipped: a caller that forgets a `finally` leaves change
+    logging off for the rest of the process, silently.
+
+    Not for a request path. Signal receivers are process-global, so this suppresses delete logging for
+    everything in the process. Acceptable in a Celery worker, which has the process to itself.
+
+    Args:
+        logger (logging.Logger, optional): Logger for the debug messages, so a job's own log records them.
+    """
+    from nautobot.extras.signals import _handle_deleted_object
+
+    logger = logger or logging.getLogger(__name__)
+
+    logger.debug("Temporarily disconnecting the _handle_deleted_object signal for performance")
+    pre_delete.disconnect(_handle_deleted_object)
+    try:
+        yield
+    finally:
+        logger.debug("Re-connecting the _handle_deleted_object signal")
+        pre_delete.connect(_handle_deleted_object)

@@ -65,3 +65,13 @@ JOB_RESULT_CUSTOM_CELERY_KWARGS = (
 )
 
 PENDING_WORKFLOWS_ERROR_CODE = "definition_has_pending_workflows"
+
+# The timestamp field that means "when this record happened", per covered model. Stated explicitly
+# instead of being probed for, because getting it wrong would compare the warm window against the wrong
+# column and rotate the wrong records.
+CHANGELOG_ARCHIVE_AGE_FIELDS = {
+    "extras.objectchange": "time",
+    "extras.jobresult": "date_created",
+    "extras.joblogentry": "created",
+    "extras.jobconsoleentry": "timestamp",
+}
