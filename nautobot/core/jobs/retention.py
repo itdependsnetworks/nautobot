@@ -4,6 +4,9 @@ System jobs maintaining changelog long-term retention.
 `ChangelogRotation` moves change and job history past the warm window into retained storage, which is
 what keeps the warm tables a working set instead of the whole history.
 
+`ChangelogArchiveIntegrityCheck` stands in for the CASCADE the mirrors gave up when their foreign keys
+became identifier columns. It reports the two ways retained history goes wrong and changes nothing.
+
 `LogsCleanup` stays the age-only tool that deletes warm history outright. Rotation moves that history
 instead of deleting it, so the two are alternatives and not a sequence.
 """
@@ -12,6 +15,7 @@ from datetime import timedelta
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -19,6 +23,13 @@ from django.utils import timezone
 from nautobot.core.utils.config import get_settings_or_config
 from nautobot.extras.context_managers import without_delete_change_logging
 from nautobot.extras.jobs import BooleanVar, IntegerVar, Job, MultiChoiceVar
+from nautobot.extras.models import (
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
+    JobResult,
+)
 from nautobot.extras.models.archive import (
     build_mirror_instance,
 )
@@ -231,3 +242,132 @@ class ChangelogRotation(Job):
             deleted = model.objects.filter(pk__in=list(archived)).delete()[0]
         self.logger.debug("Archived %d and removed %d warm rows", len(archived), deleted)
         return len(archived)
+
+
+class ChangelogArchiveIntegrityCheck(Job):
+    """
+    Stand in for what CASCADE used to do for retained history.
+
+    The mirrors declare their references as bare identifier columns, so a retained record can outlive what
+    it points at. Deletes only when asked: a dangling reference is a reason to look, not to discard.
+    """
+
+    repair = BooleanVar(
+        description="Delete the records reported instead of only reporting them.",
+        default=False,
+    )
+
+    class Meta:
+        name = "Changelog Archive Integrity Check"
+        description = "Report retained records whose referent no longer exists."
+        has_sensitive_variables = False
+
+    def run(self, *, repair=False):  # pylint: disable=arguments-differ
+        result = {}
+        for name, finder in (
+            ("orphaned_log_entries", self._find_orphaned_log_entries),
+            ("orphaned_console_entries", self._find_orphaned_console_entries),
+            ("stale_content_types", self._find_stale_content_types),
+        ):
+            queryset = finder()
+            count = queryset.count()
+            result[name] = count
+            if not count:
+                self.logger.info("%s: none found", name)
+                continue
+            if repair:
+                deleted = queryset.delete()[0]
+                self.logger.warning("%s: deleted %d records", name, deleted)
+                result[name] = deleted
+            else:
+                self.logger.warning("%s: %d records found. Re-run with `repair` to delete them.", name, count)
+
+        # Not a finder like the others: a duplicate is reported, never deleted. Which copy to keep is the
+        # operator's call, and re-running rotation resolves it without this job touching anything.
+        result["duplicated_records"] = self._find_duplicate_records()
+        return result
+
+    def _find_orphaned_log_entries(self):
+        """Retained log entries whose job result is in neither warm storage nor retained storage."""
+        return self._orphans_for(ArchivedJobLogEntry)
+
+    def _find_orphaned_console_entries(self):
+        return self._orphans_for(ArchivedJobConsoleEntry)
+
+    def _orphans_for(self, mirror):
+        """Entries whose job result is in neither warm storage nor retained storage."""
+        # Every table a job result could still be in: the warm one and the retained one.
+        missing = self._missing_referents(mirror, "job_result_id", [JobResult, ArchivedJobResult])
+        return mirror.objects.filter(job_result_id__in=missing)
+
+    def _find_stale_content_types(self):
+        """
+        Retained changes pointing at a content type that no longer exists.
+
+        `ContentType` is small, so its keys are compared as a literal list, for the same cross-connection
+        reason as `_missing_referents`.
+        """
+        known = list(ContentType.objects.values_list("pk", flat=True))
+        return ArchivedObjectChange.objects.filter(changed_object_type_id__isnull=False).exclude(
+            changed_object_type_id__in=known
+        )
+
+    def _find_duplicate_records(self):
+        """
+        A record in both warm storage and retention was copied but never removed.
+
+        What an interrupted rotation leaves behind. Harmless to read past, but the warm table is not as small
+        as the operator thinks.
+        """
+        total = 0
+        for label, mirror in registry["changelog_archive_models"].items():
+            warm = apps.get_model(label)
+            # Chunked in Python for the same reason as `_missing_referents`: the two are stored on different
+            # connections, so a subquery across them cannot be relied on.
+            count = 0
+            offset = 0
+            retained_pks = mirror.objects.values_list("pk", flat=True)
+            while True:
+                chunk = list(retained_pks[offset : offset + 10000])
+                if not chunk:
+                    break
+                count += warm.objects.filter(pk__in=chunk).count()
+                offset += 10000
+            if count:
+                total += count
+                self.logger.warning(
+                    "%d %s records exist in both warm storage and retention; re-run rotation to clear them",
+                    count,
+                    warm._meta.label,
+                )
+        if not total:
+            self.logger.info("No record exists in both warm storage and retention")
+        return total
+
+    @staticmethod
+    def _missing_referents(mirror, field_name, referent_models):
+        """
+        Which values of `mirror.field_name` name nothing that still exists.
+
+        Compared in chunks in Python instead of as a subquery, because the two sides are on different
+        connections and may be on different hosts.
+
+        The caller passes every table a referent could be in, so a log entry is orphaned only once its job
+        result is in none of them.
+        """
+        CHUNK = 10000
+        missing = []
+        distinct_ids = (
+            mirror.objects.exclude(**{f"{field_name}__isnull": True}).values_list(field_name, flat=True).distinct()
+        )
+        offset = 0
+        while True:
+            chunk = list(distinct_ids[offset : offset + CHUNK])
+            if not chunk:
+                break
+            found = set()
+            for table in referent_models:
+                found |= set(table.objects.filter(pk__in=chunk).values_list("pk", flat=True))
+            missing.extend(value for value in chunk if value not in found)
+            offset += CHUNK
+        return missing

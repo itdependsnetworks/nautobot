@@ -49,7 +49,7 @@ from nautobot.core.jobs.customfields import (
     UpdateCustomFieldChoiceData,
 )
 from nautobot.core.jobs.groups import RefreshDynamicGroupCacheJobButtonReceiver, RefreshDynamicGroupCaches
-from nautobot.core.jobs.retention import ChangelogRotation
+from nautobot.core.jobs.retention import ChangelogArchiveIntegrityCheck, ChangelogRotation
 from nautobot.core.models.sensitive_fields import get_sensitive_field_names
 from nautobot.core.models.utils import m2m_through_data_fields
 from nautobot.core.utils.data import shallow_compare_dict
@@ -1298,6 +1298,7 @@ class ValidateModelData(Job):
 jobs = [
     BulkDeleteObjects,
     BulkEditObjects,
+    ChangelogArchiveIntegrityCheck,
     ChangelogRotation,
     CleanupCustomFieldsData,
     DeleteCustomFieldData,
