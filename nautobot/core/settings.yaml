@@ -525,6 +525,15 @@ properties:
     environment_variable: "NAUTOBOT_CELERY_WORKER_REDIRECT_STDOUTS_LEVEL"
     type: "string"
     version_added: "2.0.0"
+  CHANGELOG_ARCHIVE_ENABLED:
+    default: false
+    description: >-
+      Whether long-term retention of change and job history is enabled. While disabled, all reads and
+      writes behave exactly as they do without the capability.
+    environment_variable: "NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED"
+    is_constance_config: false
+    type: "boolean"
+    version_added: "3.3.0"
   CHANGELOG_LEGACY_OBJECT_DATA:
     default: true
     description: >-

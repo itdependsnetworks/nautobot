@@ -1448,3 +1448,5 @@ del _value
 NAUTOBOT_OTEL_EXTRA_INSTRUMENTORS = [
     path for path in os.getenv("NAUTOBOT_OTEL_EXTRA_INSTRUMENTORS", "").split(_CONFIG_SETTING_SEPARATOR) if path != ""
 ]
+
+CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))

@@ -61,15 +61,6 @@ DEMO_USERS = ("retention-viewer", "retention-archivist")
 
 User = get_user_model()
 
-# Each warm model beside the mirror its history is moved into. Listed here rather than looked up,
-# because nothing in Nautobot maps the two yet.
-MIRRORED = {
-    "extras.jobconsoleentry": "extras.ArchivedJobConsoleEntry",
-    "extras.joblogentry": "extras.ArchivedJobLogEntry",
-    "extras.jobresult": "extras.ArchivedJobResult",
-    "extras.objectchange": "extras.ArchivedObjectChange",
-}
-
 
 def _model_for_label(label):
     """The model a `delete()` result is keyed by, or None where it is not a registered model."""
@@ -403,10 +394,11 @@ class Command(BaseCommand):
         moved = {}
         # Children first: a warm job result is deleted once copied, and its log and console entries go
         # with it.
+        from nautobot.extras.registry import registry
+
         # Children before parents: deleting a warm job result takes its log and console entries with it.
-        for label, mirror_label in MIRRORED.items():
+        for label, mirror in reversed(list(registry["changelog_archive_models"].items())):
             model = apps.get_model(label)
-            mirror = apps.get_model(mirror_label)
             eligible = list(model.objects.filter(**{f"{age_fields[label]}__lt": cutoff}))
             if not eligible:
                 continue
@@ -447,8 +439,9 @@ class Command(BaseCommand):
         for label, count in rows:
             self.stdout.write(f"{label:28} {count}")
 
-        for warm_label, mirror_label in sorted(MIRRORED.items()):
-            mirror = apps.get_model(mirror_label)
+        from nautobot.extras.registry import registry
+
+        for warm_label, mirror in sorted(registry["changelog_archive_models"].items()):
             self.stdout.write(f"  {warm_label:32} {mirror.objects.count():6} rows  {mirror._meta.db_table}")
 
     def _flush(self):

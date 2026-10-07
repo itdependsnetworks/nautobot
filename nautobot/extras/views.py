@@ -73,6 +73,7 @@ from nautobot.core.utils.requests import (
 )
 from nautobot.core.views import generic, viewsets
 from nautobot.core.views.mixins import (
+    ArchiveAwareRetrieveMixin,
     ObjectBulkCreateViewMixin,
     ObjectBulkDestroyViewMixin,
     ObjectBulkUpdateViewMixin,
@@ -3858,6 +3859,7 @@ class JobResultCancelPanel(object_detail.ObjectFieldsPanel):
 
 
 class JobResultUIViewSet(
+    ArchiveAwareRetrieveMixin,
     ObjectDetailViewMixin,
     ObjectListViewMixin,
     ObjectDestroyViewMixin,
@@ -4472,7 +4474,7 @@ class JobButtonUIViewSet(NautobotUIViewSet):
 #
 # Change logging
 #
-class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
+class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, ObjectListViewMixin):
     filterset_class = filters.ObjectChangeFilterSet
     filterset_form_class = forms.ObjectChangeFilterForm
     queryset = ObjectChange.objects.all()

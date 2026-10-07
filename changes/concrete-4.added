@@ -1,0 +1,2 @@
+Added a redirect from a warm detail URL to the retained record's own page, so a link saved before rotation still reaches the record.
+Added `CHANGELOG_ARCHIVE_ENABLED`, a deployment setting requiring a restart.

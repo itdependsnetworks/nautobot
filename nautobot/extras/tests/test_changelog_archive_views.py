@@ -3,7 +3,10 @@ Tests for the pages that show retained history.
 
 Each of these asserts something that returns HTTP 200 when it is broken, which is why they exist. A
 permission that quietly grants more than intended, a constraint that quietly grants everything, a write
-route that quietly exists: none of them shows up in a status code the way a 500 does.
+route that quietly exists: none of them shows up in a status code the way a 500 does. Neither does a
+record served at two URLs, which renders its panels at only one of them, because
+`Tab.should_render_content` compares `request.path` against `object.get_absolute_url()` and the other URL
+returns a complete page with every panel missing.
 """
 
 from datetime import datetime, timezone as dt_timezone
@@ -15,18 +18,91 @@ from django.test import override_settings
 from django.urls import NoReverseMatch, reverse
 
 from nautobot.core.testing import TestCase
-from nautobot.extras.choices import ObjectChangeActionChoices
+from nautobot.extras.choices import JobResultStatusChoices, ObjectChangeActionChoices
 from nautobot.extras.models import (
     ArchivedJobConsoleEntry,
     ArchivedJobLogEntry,
     ArchivedJobResult,
     ArchivedObjectChange,
+    JobResult,
     ObjectChange,
 )
 from nautobot.extras.tests.test_changelog_archive_base import clear_archive
 from nautobot.users.models import ObjectPermission
 
 WHEN = datetime(2021, 6, 1, tzinfo=dt_timezone.utc)
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class WarmUrlRedirectTestCase(TestCase):
+    """A primary key the warm table no longer has belongs to a record that was rotated, not to nothing."""
+
+    user_permissions = (
+        "extras.view_objectchange",
+        "extras.view_jobresult",
+        "extras.view_archivedobjectchange",
+        "extras.view_archivedjobresult",
+    )
+
+    def setUp(self):
+        super().setUp()
+        clear_archive(ArchivedObjectChange, ArchivedJobResult)
+        self.addCleanup(clear_archive, ArchivedObjectChange, ArchivedJobResult)
+        self.change = ArchivedObjectChange.objects.create(
+            id=uuid.uuid4(),
+            time=WHEN,
+            user_name="alice",
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type_id=ContentType.objects.get_for_model(ObjectChange).pk,
+            changed_object_id=uuid.uuid4(),
+            change_context="orm",
+            object_repr="Archived Widget",
+            object_data={},
+        )
+        self.result = ArchivedJobResult.objects.create(
+            id=uuid.uuid4(),
+            name="retained-job",
+            user_name="alice",
+            status=JobResultStatusChoices.STATUS_SUCCESS,
+            date_created=WHEN,
+            date_started=WHEN,
+            date_done=WHEN,
+            celery_kwargs={},
+        )
+
+    # Redirects from the warm URL
+
+    def test_warm_change_url_redirects_to_the_retained_page(self):
+        """A link saved before rotation names a primary key the warm table no longer has."""
+        response = self.client.get(reverse("extras:objectchange", kwargs={"pk": self.change.pk}))
+
+        self.assertRedirects(response, self.change.get_absolute_url())
+
+    def test_warm_job_result_url_redirects_to_the_retained_page(self):
+        response = self.client.get(reverse("extras:jobresult", kwargs={"pk": self.result.pk}))
+
+        self.assertRedirects(response, self.result.get_absolute_url())
+
+    def test_a_warm_record_is_still_served_at_its_own_url(self):
+        """The redirect applies only to a primary key the warm table has lost, never to a live record."""
+        warm = JobResult.objects.create(name="warm-job", celery_kwargs={})
+
+        response = self.client.get(warm.get_absolute_url())
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_an_unknown_primary_key_is_still_a_404(self):
+        response = self.client.get(reverse("extras:objectchange", kwargs={"pk": uuid.uuid4()}))
+
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(CHANGELOG_ARCHIVE_ENABLED=False)
+    def test_no_redirect_while_retention_is_off(self):
+        """With the capability off the view behaves exactly as it did before retention existed."""
+        response = self.client.get(reverse("extras:objectchange", kwargs={"pk": self.change.pk}))
+
+        self.assertEqual(response.status_code, 404)
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
@@ -56,6 +132,12 @@ class RetainedHistoryPermissionTestCase(TestCase):
         response = self.client.get(reverse("extras:archivedobjectchange_list"))
 
         self.assertEqual(response.status_code, 403)
+
+    def test_a_warm_url_is_not_redirected_to_a_page_the_user_may_not_see(self):
+        """Without the retained permission the record is not found, so the link 404s as any other would."""
+        response = self.client.get(reverse("extras:objectchange", kwargs={"pk": self.change.pk}))
+
+        self.assertEqual(response.status_code, 404)
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)

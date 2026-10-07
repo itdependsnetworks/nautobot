@@ -36,6 +36,17 @@ from nautobot.extras.constants import (
 from nautobot.extras.models.customfields import CustomFieldModel
 
 
+def archive_model_for(model):
+    """
+    The retention mirror for `model`'s history, or None if `model` has none.
+
+    Takes the warm model: `archive_model_for(ObjectChange)` is `ArchivedObjectChange`.
+    """
+    from nautobot.extras.registry import registry
+
+    return registry["changelog_archive_models"].get(model._meta.label_lower)
+
+
 class ArchivedRecord(BaseModel):
     """
     Shared shape for every retained-history mirror.
