@@ -70,6 +70,8 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -147,6 +149,8 @@ __all__ = (
     "ApprovalWorkflowStageDefinitionFormSet",
     "ApprovalWorkflowStageFilterForm",
     "ApprovalWorkflowStageResponseFilterForm",
+    "ArchivedJobResultFilterForm",
+    "ArchivedObjectChangeFilterForm",
     "BaseDynamicGroupMembershipFormSet",
     "ComputedFieldBulkEditForm",
     "ComputedFieldFilterForm",
@@ -2930,3 +2934,45 @@ class WebhookFilterForm(BootstrapMixin, forms.Form):
     type_update = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     type_delete = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
     enabled = forms.NullBooleanField(required=False, widget=StaticSelect2(choices=BOOLEAN_WITH_BLANK_CHOICES))
+
+
+class ArchivedJobResultFilterForm(BootstrapMixin, forms.Form):
+    """
+    Filter form for retained job results.
+
+    No Job or User pickers. Rotation demotes both to identifier columns with no relation to traverse,
+    and the job's name is copied onto `name`, which `q` searches.
+    """
+
+    model = ArchivedJobResult
+    q = forms.CharField(required=False, label="Search")
+    date_created__gte = forms.DateTimeField(label="After", required=False, widget=DateTimePicker())
+    date_created__lte = forms.DateTimeField(label="Before", required=False, widget=DateTimePicker())
+    status = forms.MultipleChoiceField(
+        choices=JobResultStatusChoices,
+        required=False,
+        widget=StaticSelect2Multiple(),
+    )
+
+
+class ArchivedObjectChangeFilterForm(BootstrapMixin, forms.Form):
+    """
+    Filter form for retained change records.
+
+    The same fields the warm form offers, minus User. Rotation demotes the user relation to the
+    `user_name` text the record was written with, so there is no live user to pick from; searching that
+    text is what the `q` field does.
+    """
+
+    model = ArchivedObjectChange
+    q = forms.CharField(required=False, label="Search")
+    time__gte = forms.DateTimeField(label="After", required=False, widget=DateTimePicker())
+    time__lte = forms.DateTimeField(label="Before", required=False, widget=DateTimePicker())
+    action = forms.ChoiceField(
+        choices=add_blank_choice(ObjectChangeActionChoices),
+        required=False,
+        widget=StaticSelect2(),
+    )
+    change_context = forms.MultipleChoiceField(
+        required=False, label="Change Context", choices=ObjectChangeEventContextChoices, widget=StaticSelect2Multiple()
+    )

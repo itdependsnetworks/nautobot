@@ -144,6 +144,10 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -2015,6 +2019,22 @@ class ObjectDynamicGroupsView(generic.GenericView):
                 "detail": True,
             },
         )
+
+
+#
+# Retained change history
+#
+
+
+class ArchivedRetentionViewMixin:
+    """
+    Shared wiring for a read-only view over retained history.
+
+    Retained records are written by rotation and never edited, so these views offer no create, edit or
+    delete, and no bulk actions.
+    """
+
+    action_buttons = ("export",)
 
 
 #
@@ -4296,6 +4316,130 @@ class JobResultUIViewSet(
         return redirect(job_result.get_absolute_url())
 
 
+class ArchivedJobConsoleEntriesTab(object_detail.Tab):
+    """
+    The Console Log tab on a retained job result, shown only when there is console output.
+
+    The warm tab hides itself the same way. Rotation stores the entries' reference as `job_result_id`, so
+    the count comes from a query against `ArchivedJobConsoleEntry` instead of a reverse relation.
+    """
+
+    def should_render(self, context):
+        if not super().should_render(context):
+            return False
+        return ArchivedJobConsoleEntry.objects.filter(job_result_id=get_obj_from_context(context).pk).exists()
+
+
+class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMixin, ObjectListViewMixin):
+    """Retained job results, read-only."""
+
+    filterset_class = filters.ArchivedJobResultFilterSet
+    filterset_form_class = forms.ArchivedJobResultFilterForm
+    queryset = ArchivedJobResult.objects.all()
+    serializer_class = serializers.ArchivedJobResultSerializer
+    table_class = tables.ArchivedJobResultTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            # `result` is a field of this panel, not a panel of its own, which is where the warm page
+            # shows it.
+            object_detail.ObjectFieldsPanel(
+                label="Job Result",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=("name", "user_name", "status", "date_created", "date_started", "date_done", "result"),
+            ),
+            object_detail.ObjectsTablePanel(
+                table_title="Logs",
+                section=SectionChoices.FULL_WIDTH,
+                weight=300,
+                context_table_key="log_entries_table",
+                # Retained log entries have no list view of their own, so there is nothing to link to.
+                enable_related_link=False,
+                footer_content_template_path=None,
+            ),
+        ),
+        extra_tabs=[
+            ArchivedJobConsoleEntriesTab(
+                weight=object_detail.Tab.WEIGHT_ADVANCED_TAB + 50,
+                # The warm tab's id, so `?tab=` names the same thing on both pages.
+                tab_id="job_console_entries",
+                label="Console Log",
+                layout=object_detail.LayoutChoices.ONE_OVER_TWO,
+                panels=[
+                    object_detail.Panel(
+                        label="Console Log",
+                        section=SectionChoices.FULL_WIDTH,
+                        weight=100,
+                        body_content_template_path="extras/inc/archivedjobresult_console_log.html",
+                    ),
+                ],
+                required_permissions=["extras.view_archivedjobconsoleentry"],
+            ),
+        ],
+    )
+
+    # The same Advanced-tab panels the warm page has, minus the two that read a demoted relation.
+    advanced_tab = next(tab for tab in object_detail_content.tabs if tab.label == "Advanced")
+    advanced_tab.panels = (
+        *advanced_tab.panels,
+        object_detail.ObjectTextPanel(
+            label="Job Keyword Arguments",
+            section=SectionChoices.LEFT_HALF,
+            weight=300,
+            object_field="task_kwargs",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+        ),
+        object_detail.ObjectTextPanel(
+            label="Job Positional Arguments",
+            section=SectionChoices.LEFT_HALF,
+            weight=400,
+            object_field="task_args",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+        ),
+        object_detail.ObjectTextPanel(
+            label="Job Celery Keyword Arguments",
+            section=SectionChoices.LEFT_HALF,
+            weight=500,
+            object_field="celery_kwargs",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+        ),
+        object_detail.ObjectFieldsPanel(
+            label="Worker",
+            section=SectionChoices.RIGHT_HALF,
+            weight=200,
+            fields=["worker", "task_name", "meta"],
+        ),
+        object_detail.ObjectTextPanel(
+            label="Traceback",
+            section=SectionChoices.RIGHT_HALF,
+            weight=300,
+            object_field="traceback",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.CODE,
+        ),
+    )
+
+    def get_extra_context(self, request, instance):
+        """This result's own retained log entries, matched on the identifier rotation stores."""
+        context = super().get_extra_context(request, instance)
+        if self.action != "retrieve":
+            return context
+        log_entries_table = tables.ArchivedJobLogEntryTable(
+            data=ArchivedJobLogEntry.objects.restrict(request.user, "view").filter(job_result_id=instance.pk),
+            user=request.user,
+        )
+        RequestConfig(
+            request, {"paginator_class": EnhancedPaginator, "per_page": get_paginate_count(request)}
+        ).configure(log_entries_table)
+        context["log_entries_table"] = log_entries_table
+        # `entries` is the name the warm console partial reads. `ArchivedJobConsoleEntry` orders by
+        # `timestamp` ascending, so the stream reads in the order it was written.
+        context["entries"] = ArchivedJobConsoleEntry.objects.restrict(request.user, "view").filter(
+            job_result_id=instance.pk
+        )
+        return context
+
+
 #
 # Job Button
 #
@@ -4449,6 +4593,79 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
                 }
             )
 
+        return context
+
+
+class ArchivedObjectChangeUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMixin, ObjectListViewMixin):
+    """
+    Retained change records, read-only.
+
+    A separate view from the warm change log instead of the same one taught to serve two models, so the
+    table and filterset are declared against the mirror and nothing has to reconcile a model mismatch.
+    """
+
+    filterset_class = filters.ArchivedObjectChangeFilterSet
+    filterset_form_class = forms.ArchivedObjectChangeFilterForm
+    queryset = ArchivedObjectChange.objects.all()
+    serializer_class = serializers.ArchivedObjectChangeSerializer
+    table_class = tables.ArchivedObjectChangeTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            object_detail.ObjectFieldsPanel(
+                label="Change",
+                section=SectionChoices.LEFT_HALF,
+                weight=100,
+                fields=(
+                    "time",
+                    "user_name",
+                    "action",
+                    "changed_object_type",
+                    "object_repr",
+                    "request_id",
+                    "change_context",
+                    "change_context_detail",
+                ),
+            ),
+            object_detail.ObjectTextPanel(
+                label="Object Data",
+                section=SectionChoices.LEFT_HALF,
+                weight=200,
+                object_field="object_data",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+                collapsed=True,
+            ),
+            object_detail.ObjectTextPanel(
+                label="Object Data v2",
+                section=SectionChoices.LEFT_HALF,
+                weight=250,
+                object_field="object_data_v2",
+                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+                collapsed=True,
+            ),
+            object_detail.ObjectsTablePanel(
+                table_title="Related Changes",
+                section=SectionChoices.FULL_WIDTH,
+                weight=300,
+                context_table_key="related_changes_table",
+                enable_related_link=False,
+                footer_content_template_path=None,
+            ),
+        )
+    )
+
+    def get_extra_context(self, request, instance):
+        """The other retained changes to the same object, which is what Related Changes lists."""
+        context = super().get_extra_context(request, instance)
+        if self.action != "retrieve":
+            return context
+        related_changes = instance.get_related_changes()
+        related_changes_table = tables.ArchivedObjectChangeTable(data=related_changes, orderable=False)
+        RequestConfig(
+            request, {"paginator_class": EnhancedPaginator, "per_page": get_paginate_count(request)}
+        ).configure(related_changes_table)
+        context["related_changes_table"] = related_changes_table
+        context["related_changes_count"] = related_changes.count()
         return context
 
 

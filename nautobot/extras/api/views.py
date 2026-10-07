@@ -50,6 +50,9 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1477,6 +1480,48 @@ class ObjectChangeViewSet(ReadOnlyModelViewSet):
     queryset = ObjectChange.objects.all()
     serializer_class = serializers.ObjectChangeSerializer
     filterset_class = filters.ObjectChangeFilterSet
+
+
+#
+# Retained change history
+#
+# One read-only endpoint per mirror, matching the three warm endpoints. Each serializer subclasses its
+# warm counterpart with `Meta.model` pointed at the mirror, so a client reads the same field names it
+# already reads, with one gap: a demoted reference serializes to null here, because the mirror stores
+# `user_id` and has no `user` to follow. CONCRETE-8 fills those in. Read-only because retained records
+# are written by rotation and never edited; `ArchivedRecord.Meta` grants only the `view` permission, so
+# there is no `add`, `change` or `delete` to expose.
+#
+
+
+class ArchivedObjectChangeViewSet(ReadOnlyModelViewSet):
+    """
+    Retrieve a list of retained changes.
+    """
+
+    queryset = ArchivedObjectChange.objects.all()
+    serializer_class = serializers.ArchivedObjectChangeSerializer
+    filterset_class = filters.ArchivedObjectChangeFilterSet
+
+
+class ArchivedJobResultViewSet(ReadOnlyModelViewSet):
+    """
+    Retrieve a list of retained job results.
+    """
+
+    queryset = ArchivedJobResult.objects.all()
+    serializer_class = serializers.ArchivedJobResultSerializer
+    filterset_class = filters.ArchivedJobResultFilterSet
+
+
+class ArchivedJobLogEntryViewSet(ReadOnlyModelViewSet):
+    """
+    Retrieve a list of retained job log entries.
+    """
+
+    queryset = ArchivedJobLogEntry.objects.all()
+    serializer_class = serializers.ArchivedJobLogEntrySerializer
+    filterset_class = filters.ArchivedJobLogEntryFilterSet
 
 
 #

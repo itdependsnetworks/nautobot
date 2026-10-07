@@ -405,6 +405,9 @@ def populate_model_features_registry(refresh=False):
         {
             "feature_name": "custom_fields",
             "field_names": ["_custom_field_data"],
+            # A changelog retention mirror carries `_custom_field_data` because it copies its warm
+            # counterpart field for field. The flag is how it opts out.
+            "additional_constraints": {"is_custom_field_model": True},
         },
         {
             "feature_name": "metadata",

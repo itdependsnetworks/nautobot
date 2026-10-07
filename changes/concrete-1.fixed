@@ -1,0 +1,1 @@
+Fixed `ArchivedJobResult` registering itself as a custom field model, which offered retained job results in the custom field object type picker and let the orphaned-key sweep write to records that are meant to be immutable.

@@ -209,6 +209,7 @@ def get_expected_menu_item_name(view_model) -> str:
         "Approval Workflow Definitions": "Workflow Definitions",
         "Approval Workflow Stages": "Approval Dashboard",
         "Controller Managed Device Groups": "Device Groups",
+        "Archived Object Changes": "Archived Change Log",
         "Object Changes": "Change Log",
         "Min Max Validation Rules": "Min/Max Rules",
         "Regular Expression Validation Rules": "Regex Rules",

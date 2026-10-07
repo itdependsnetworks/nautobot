@@ -126,6 +126,12 @@ GLOBAL_SEARCH_EXCLUDE_LIST = [
     "approvalworkflow",
     "approvalworkflowdefinition",
     "approvalworkflowstage",
+    # Retained change history has its own list views, which is where it is read. Including it in global
+    # search would return a retained copy beside every warm record that has not rotated yet.
+    "archivedjobconsoleentry",
+    "archivedjoblogentry",
+    "archivedjobresult",
+    "archivedobjectchange",
     "approvalworkflowstagedefinition",
     "approvalworkflowstageresponse",
     "cablepath",

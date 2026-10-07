@@ -53,6 +53,9 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1196,6 +1199,41 @@ class ObjectChangeSerializer(BaseModelSerializer):
             return return_nested_serializer_data_based_on_depth(self, depth, obj, obj.changed_object, "changed_object")
         except SerializerNotFound:
             return obj.object_repr
+
+
+#
+# Retained change history
+#
+# Each one is its warm serializer with `Meta.model` pointed at the mirror. Declaring the model is what
+# makes `url` name this record's own endpoint, and what keeps `BaseModelSerializer`'s natural-key
+# lookups to relations the mirror has: built from the warm model they name relations that were
+# demoted, and every CSV export raised `FieldError`.
+#
+
+
+class ArchivedObjectChangeSerializer(ObjectChangeSerializer):
+    class Meta(ObjectChangeSerializer.Meta):
+        model = ArchivedObjectChange
+
+
+class ArchivedJobResultSerializer(JobResultSerializer):
+    class Meta(JobResultSerializer.Meta):
+        model = ArchivedJobResult
+        extra_kwargs = {}
+
+    def get_field_names(self, declared_fields, info):
+        """
+        Drop `files`, which the warm serializer adds as a reverse relation and the warm response omits.
+
+        On the mirror `files` is a property returning an empty list, so left in it would serialize and the
+        two responses would not match. Job output files are deleted with the warm record, not archived.
+        """
+        return [name for name in super().get_field_names(declared_fields, info) if name != "files"]
+
+
+class ArchivedJobLogEntrySerializer(JobLogEntrySerializer):
+    class Meta(JobLogEntrySerializer.Meta):
+        model = ArchivedJobLogEntry
 
 
 #

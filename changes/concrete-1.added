@@ -1,0 +1,5 @@
+Added long-term retention for change and job history, disabled by default. `ArchivedObjectChange`, `ArchivedJobResult`, `ArchivedJobLogEntry` and `ArchivedJobConsoleEntry` mirror the warm models, with every foreign key stored as a plain identifier column so no relation crosses the two connections.
+Added read-only **Archived Change Log** and **Archived Job Results** pages under Extensibility > Logging, and read-only `/api/extras/archived-object-changes/`, `/api/extras/archived-job-results/` and `/api/extras/archived-job-logs/` endpoints.
+Added filtering and sorting on both archived lists. Filters that traverse a relation have no counterpart: `user` on change records, and `job_model`, `scheduled_job`, `canceled_by`, `user` and `has_job_console_entries` on job results.
+Added a `view` permission per retained record type. The models declare no `add`, `change` or `delete`, because rotation writes these records and nothing else does.
+Added retained history to the global search exclusion list, so a search never returns a warm record and its retained copy together.

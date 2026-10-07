@@ -1,0 +1,10 @@
+{% comment %}
+A retained job result's console output, as the warm Console Log tab shows it: one monospace line per
+entry, timestamp first. The lines themselves come from the warm partial, so the two cannot drift.
+Expects `entries`.
+{% endcomment %}
+{% spaceless %}
+    <div class="card-body overflow-hidden">
+        <pre class="h-100 mb-0 overflow-y-auto" id="console-output"><code class="h-100">{% include "extras/inc/jobresult_console_log_lines.html" %}</code></pre>
+    </div>
+{% endspaceless %}
