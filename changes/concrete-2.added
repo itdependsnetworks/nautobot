@@ -1,0 +1,1 @@
+Added `nautobot-server create_changelog_retention_demo_data`, which fabricates backdated change and job history and two users differing only in the retained-history permissions, so retention can be exercised on an instance with no history old enough to rotate.
