@@ -1,0 +1,2 @@
+Added documentation for changelog long-term retention: how records are stored, the archived pages and endpoints, the per-model view permissions, what an object permission's constraints can and cannot do against a retained record, and the fields that are always empty on a retained job result.
+Added upgrade notes covering the schema check to run after every upgrade and the effect of rotation on integrations that read the changelog tables directly.

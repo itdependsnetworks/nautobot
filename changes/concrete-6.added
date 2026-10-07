@@ -1,0 +1,1 @@
+Added the warm job result's summary panel to a retained job result, so both pages show the same fields in the same shape. A retained result shows the `user_name` copied at rotation where the warm page shows `user`, and its Cancel Details panel appears only on a job that was canceled.

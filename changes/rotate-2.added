@@ -1,0 +1,2 @@
+Added the **Changelog Archive Integrity Check** system job, standing in for the referential integrity the retained tables do not enforce. It reports retained records whose referent no longer exists, and records present in both warm and retained storage, and deletes them only when asked.
+Added `nautobot-server check_changelog_archive_schema` and a matching startup check, reporting retained tables that have fallen behind the models they mirror.

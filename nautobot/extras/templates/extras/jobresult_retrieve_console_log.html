@@ -12,15 +12,7 @@
             </div>
         </div>
 
-        {% spaceless %}
-            <div class="card-body overflow-hidden">
-                <pre class="h-100 mb-0 overflow-y-auto" id="console-output" hx-on:load="this.scrollTop = this.scrollHeight">
-                    <code class="h-100">
-                        {% include "extras/inc/jobresult_console_log_lines.html" %}
-                    </code>
-                </pre>
-            </div>
-        {% endspaceless %}
+        {% include "extras/inc/jobresult_console_log_body.html" %}
 
         {% if job_is_pending %}
             <div

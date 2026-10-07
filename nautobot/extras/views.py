@@ -73,6 +73,7 @@ from nautobot.core.utils.requests import (
 )
 from nautobot.core.views import generic, viewsets
 from nautobot.core.views.mixins import (
+    ArchiveAwareRetrieveMixin,
     ObjectBulkCreateViewMixin,
     ObjectBulkDestroyViewMixin,
     ObjectBulkUpdateViewMixin,
@@ -144,6 +145,10 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobConsoleEntry,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -2018,6 +2023,22 @@ class ObjectDynamicGroupsView(generic.GenericView):
 
 
 #
+# Retained change history
+#
+
+
+class ArchivedRetentionViewMixin:
+    """
+    Shared wiring for a read-only view over retained history.
+
+    Retained records are written by rotation and never edited, so these views offer no create, edit or
+    delete, and no bulk actions.
+    """
+
+    action_buttons = ("export",)
+
+
+#
 # Export Templates
 #
 
@@ -3838,6 +3859,7 @@ class JobResultCancelPanel(object_detail.ObjectFieldsPanel):
 
 
 class JobResultUIViewSet(
+    ArchiveAwareRetrieveMixin,
     ObjectDetailViewMixin,
     ObjectListViewMixin,
     ObjectDestroyViewMixin,
@@ -4296,6 +4318,242 @@ class JobResultUIViewSet(
         return redirect(job_result.get_absolute_url())
 
 
+class ArchivedJobConsoleEntriesTab(object_detail.Tab):
+    """
+    The Console Log tab on a retained job result, shown only when there is console output.
+
+    The warm tab hides itself the same way. Rotation stores the entries' reference as `job_result_id`, so
+    the count comes from a query against `ArchivedJobConsoleEntry` instead of a reverse relation.
+    """
+
+    def should_render(self, context):
+        if not super().should_render(context):
+            return False
+        return ArchivedJobConsoleEntry.objects.filter(job_result_id=get_obj_from_context(context).pk).exists()
+
+
+class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMixin, ObjectListViewMixin):
+    """Retained job results, read-only."""
+
+    filterset_class = filters.ArchivedJobResultFilterSet
+    filterset_form_class = forms.ArchivedJobResultFilterForm
+    queryset = ArchivedJobResult.objects.all()
+    serializer_class = serializers.ArchivedJobResultSerializer
+    table_class = tables.ArchivedJobResultTable
+
+    object_detail_content = object_detail.ObjectDetailContent(
+        panels=(
+            # `JobResultSummaryPanel`, the class the warm page uses, so a stored `result` of None renders
+            # as a placeholder here too instead of the string "null". Its other branch shows a spinner
+            # while a job is unfinished, which a retained result never is.
+            JobResultSummaryPanel(
+                label="Summary of Results",
+                section=SectionChoices.FULL_WIDTH,
+                weight=100,
+                # The warm page's fields, with `user_name` where it shows `user`: rotation stores the
+                # user reference as an id and copies the name onto the record.
+                fields=[
+                    "job_description",
+                    "status",
+                    "date_created",
+                    "date_started",
+                    "user_name",
+                    "duration",
+                    "result",
+                    "files",
+                ],
+                value_transforms={
+                    "status": [render_jobresult_status],
+                    "files": [render_jobresult_files],
+                },
+            ),
+            # The warm page's Logs card, filter box included. `log_table_url_name` in `get_extra_context`
+            # points it at this view's own `log_table` action instead of the warm one.
+            object_detail.Panel(
+                weight=300,
+                section=SectionChoices.FULL_WIDTH,
+                body_content_template_path="extras/inc/log_table_filter.html",
+                body_wrapper_template_path="components/panel/body_wrapper_table.html",
+            ),
+        ),
+        # The warm page's two export buttons. No Run and no Cancel Job: a retained result finished before
+        # it was rotated, so there is nothing left to run or cancel.
+        extra_buttons=(
+            JobResultButton(
+                weight=120,
+                label="Export Logs",
+                color=ButtonActionColorChoices.EXPORT,
+                icon="mdi-database-export",
+                required_permissions=["extras.view_archivedjoblogentry"],
+                link_name=lambda ctx: (
+                    reverse("extras-api:archivedjoblogentry-list") + f"?job_result_id={ctx['object'].pk}&format=csv"
+                ),
+            ),
+            JobResultButton(
+                weight=130,
+                label="Export Console Logs",
+                color=ButtonActionColorChoices.EXPORT,
+                icon="mdi-database-export",
+                required_permissions=["extras.view_archivedjobconsoleentry"],
+                render_on_tab_id=["job_console_entries"],
+                link_name=lambda ctx: reverse(
+                    "extras:archivedjobresult_export_job_console_entries", kwargs={"pk": ctx["object"].pk}
+                ),
+            ),
+        ),
+        extra_tabs=[
+            ArchivedJobConsoleEntriesTab(
+                weight=object_detail.Tab.WEIGHT_ADVANCED_TAB + 50,
+                # The warm tab's id, so `?tab=` names the same thing on both pages.
+                tab_id="job_console_entries",
+                label="Console Log",
+                layout=object_detail.LayoutChoices.ONE_OVER_TWO,
+                panels=[
+                    object_detail.Panel(
+                        label="Console Log",
+                        section=SectionChoices.FULL_WIDTH,
+                        weight=100,
+                        body_content_template_path="extras/inc/jobresult_console_log_body.html",
+                        header_extra_content_template_path="extras/inc/jobresult_console_log_status.html",
+                    ),
+                ],
+                required_permissions=["extras.view_archivedjobconsoleentry"],
+            ),
+        ],
+    )
+
+    # The same Advanced-tab panels the warm page has, minus the two that read a demoted relation.
+    advanced_tab = next(tab for tab in object_detail_content.tabs if tab.label == "Advanced")
+    advanced_tab.panels = (
+        *advanced_tab.panels,
+        object_detail.ObjectTextPanel(
+            label="Job Keyword Arguments",
+            section=SectionChoices.LEFT_HALF,
+            weight=300,
+            object_field="task_kwargs",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+        ),
+        object_detail.ObjectTextPanel(
+            label="Job Positional Arguments",
+            section=SectionChoices.LEFT_HALF,
+            weight=400,
+            object_field="task_args",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+        ),
+        object_detail.ObjectTextPanel(
+            label="Job Celery Keyword Arguments",
+            section=SectionChoices.LEFT_HALF,
+            weight=500,
+            object_field="celery_kwargs",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
+        ),
+        # `JobResultCancelPanel`, so that like the warm page this shows only on a canceled job.
+        JobResultCancelPanel(
+            label="Cancel Details",
+            section=SectionChoices.RIGHT_HALF,
+            weight=100,
+            fields=["date_canceled", "canceled_by_user_name", "cancel_type"],
+            value_transforms={"cancel_type": [render_jobresult_cancel_type]},
+        ),
+        object_detail.ObjectFieldsPanel(
+            label="Worker",
+            section=SectionChoices.RIGHT_HALF,
+            weight=200,
+            fields=["worker", "queue", "task_name", "meta"],
+        ),
+        object_detail.ObjectTextPanel(
+            label="Traceback",
+            section=SectionChoices.RIGHT_HALF,
+            weight=300,
+            object_field="traceback",
+            render_as=object_detail.ObjectTextPanel.RenderOptions.CODE,
+        ),
+    )
+
+    #: The route `extras/inc/log_table_filter.html` and `jobresult_log_table_partial.html` point their
+    #: htmx requests at. Both templates default to the warm route, so this is what redirects them here.
+    log_table_url_name = "extras:archivedjobresult_log-table"
+
+    @action(
+        detail=True,
+        url_path="log-table",
+        url_name="log-table",
+        custom_view_base_action="view",
+    )
+    def log_table(self, request, pk=None):
+        """The Logs panel's table body, the same action the warm page has over the retained entries."""
+        instance = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+
+        queryset = ArchivedJobLogEntry.objects.restrict(request.user, "view").filter(job_result_id=instance.pk)
+        filter_q = request.GET.get("q")
+        if filter_q:
+            queryset = queryset.filter(Q(message__icontains=filter_q) | Q(log_level__icontains=filter_q))
+
+        log_table = tables.ArchivedJobLogEntryTable(data=queryset, user=request.user)
+        paginate = {"paginator_class": EnhancedPaginator, "per_page": get_paginate_count(request)}
+        RequestConfig(request, paginate).configure(log_table)
+
+        if request.headers.get("HX-Request"):
+            context = {
+                "job_result": instance,
+                # A retained result finished before it was rotated, so the warm template's "loading"
+                # placeholder and its poller are both switched off.
+                "job_is_pending": False,
+                "has_logs": queryset.exists(),
+                "table_html": log_table.as_html(request),
+                "log_table_url": request.get_full_path(),
+                "log_table_url_name": self.log_table_url_name,
+            }
+            response = render(request, "extras/inc/jobresult_log_table_partial.html", context)
+            patch_vary_headers(response, ["HX-Request"])
+            return response
+
+        response = HttpResponse(log_table.as_html(request))
+        patch_vary_headers(response, ["HX-Request"])
+        return response
+
+    @action(
+        detail=True,
+        url_path="export-job-console-entries",
+        url_name="export_job_console_entries",
+        custom_view_base_action="view",
+        custom_view_additional_permissions=["extras.view_archivedjobconsoleentry"],
+    )
+    def export_job_console_entries(self, request, pk=None):
+        """
+        Retained console output as a plain-text file, in the format the warm page exports.
+
+        A UI action and not a REST endpoint, because that is what the warm page offers: `JobConsoleEntry`
+        has no REST endpoint, so neither does `ArchivedJobConsoleEntry`.
+        """
+        instance = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+
+        entries = ArchivedJobConsoleEntry.objects.restrict(request.user, "view").filter(job_result_id=instance.pk)
+        lines = [f"[{entry.timestamp.strftime('%H:%M:%S.%f')[:12]}] {entry.text.strip()}" for entry in entries]
+
+        filename = f"{settings.BRANDING_PREPENDED_FILENAME}job_console_entries_{instance.pk}.txt"
+        response = HttpResponse("\n".join(lines), content_type="text/plain; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    def get_extra_context(self, request, instance):
+        """What the Logs card and the Console Log tab render from."""
+        context = super().get_extra_context(request, instance)
+        if self.action not in ("retrieve", "log_table"):
+            return context
+        # `result` is the name the shared log templates read, and the Logs card renders nothing without
+        # it: its htmx wrapper sits inside `{% if result and result.pk %}`.
+        context["result"] = instance
+        # Both shared log templates default to the warm route; this is what redirects them here.
+        context["log_table_url_name"] = self.log_table_url_name
+        # `entries` is the name the warm console partial reads. `ArchivedJobConsoleEntry` orders by
+        # `timestamp` ascending, so the stream reads in the order it was written.
+        context["entries"] = ArchivedJobConsoleEntry.objects.restrict(request.user, "view").filter(
+            job_result_id=instance.pk
+        )
+        return context
+
+
 #
 # Job Button
 #
@@ -4328,13 +4586,19 @@ class JobButtonUIViewSet(NautobotUIViewSet):
 #
 # Change logging
 #
-class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
-    filterset_class = filters.ObjectChangeFilterSet
-    filterset_form_class = forms.ObjectChangeFilterForm
-    queryset = ObjectChange.objects.all()
-    serializer_class = serializers.ObjectChangeSerializer
-    table_class = tables.ObjectChangeTable
-    action_buttons = ("export",)
+class ObjectChangeDetailMixin:
+    """
+    The change-log detail page, shared by the warm change log and by retained history.
+
+    Both pages show the same five panels over the same fields, so they are defined once here and the two
+    viewsets differ only in which model and which table they are declared against. A mirror resolves
+    `changed_object` to None, which `ChangeObjectFieldsPanel` already renders as the stored `object_repr`,
+    so the same panel serves a record whose object is long gone.
+    """
+
+    #: The table the Related Changes panel is built with. A retained record's siblings are retained too,
+    #: and the warm table would ask a mirror to follow relations it stores as identifier columns.
+    related_changes_table_class = None
 
     class ChangeObjectFieldsPanel(object_detail.ObjectFieldsPanel):
         def render_value(self, key, value, context):
@@ -4367,7 +4631,10 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
                 label="Object Data",
                 section=SectionChoices.LEFT_HALF,
                 weight=200,
-                object_field="object_data",
+                # `snapshot_data`, not `object_data`: the latter is the pre-1.3 snapshot, which is empty on
+                # records written with CHANGELOG_LEGACY_OBJECT_DATA off and is the older representation
+                # even when present.
+                object_field="snapshot_data",
                 render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
                 collapsed=True,
             ),
@@ -4398,25 +4665,6 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
         )
     )
 
-    # 2.0 TODO: Remove this remapping and solve it at the `BaseFilterSet` as it is addressing a breaking change.
-    def get(self, request, *args, **kwargs):
-        # Remappings below allow previous queries of time_before and time_after to use
-        # newer methods specifying the lookup method.
-
-        # They will only use the previous arguments if the newer ones are undefined
-
-        if request.GET.get("time_after") and request.GET.get("time__gte") is None:
-            request.GET._mutable = True
-            request.GET.update({"time__gte": request.GET.get("time_after")})
-            request.GET._mutable = False
-
-        if request.GET.get("time_before") and request.GET.get("time__lte") is None:
-            request.GET._mutable = True
-            request.GET.update({"time__lte": request.GET.get("time_before")})
-            request.GET._mutable = False
-
-        return super().get(request=request, *args, **kwargs)
-
     def get_extra_context(self, request, instance):
         """
         Adds snapshot diff and related changes table for the object change detail view.
@@ -4425,10 +4673,7 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
 
         if self.action == "retrieve":
             related_changes = instance.get_related_changes(user=request.user).filter(request_id=instance.request_id)
-            related_changes_table = tables.ObjectChangeTable(
-                data=related_changes,
-                orderable=False,
-            )
+            related_changes_table = self.related_changes_table_class(data=related_changes, orderable=False)
             paginate = {
                 "paginator_class": EnhancedPaginator,
                 "per_page": get_paginate_count(request),
@@ -4448,6 +4693,56 @@ class ObjectChangeUIViewSet(ObjectDetailViewMixin, ObjectListViewMixin):
             )
 
         return context
+
+
+class ObjectChangeUIViewSet(
+    ObjectChangeDetailMixin, ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, ObjectListViewMixin
+):
+    filterset_class = filters.ObjectChangeFilterSet
+    filterset_form_class = forms.ObjectChangeFilterForm
+    queryset = ObjectChange.objects.all()
+    related_changes_table_class = tables.ObjectChangeTable
+    serializer_class = serializers.ObjectChangeSerializer
+    table_class = tables.ObjectChangeTable
+    action_buttons = ("export",)
+
+    # 2.0 TODO: Remove this remapping and solve it at the `BaseFilterSet` as it is addressing a breaking change.
+    def get(self, request, *args, **kwargs):
+        # Remappings below allow previous queries of time_before and time_after to use
+        # newer methods specifying the lookup method.
+
+        # They will only use the previous arguments if the newer ones are undefined
+
+        if request.GET.get("time_after") and request.GET.get("time__gte") is None:
+            request.GET._mutable = True
+            request.GET.update({"time__gte": request.GET.get("time_after")})
+            request.GET._mutable = False
+
+        if request.GET.get("time_before") and request.GET.get("time__lte") is None:
+            request.GET._mutable = True
+            request.GET.update({"time__lte": request.GET.get("time_before")})
+            request.GET._mutable = False
+
+        return super().get(request=request, *args, **kwargs)
+
+
+class ArchivedObjectChangeUIViewSet(
+    ArchivedRetentionViewMixin, ObjectChangeDetailMixin, ObjectDetailViewMixin, ObjectListViewMixin
+):
+    """
+    Retained change records, read-only.
+
+    A separate view from the warm change log rather than the same one taught to serve two models, so the
+    table and filterset are declared against the mirror and nothing has to reconcile a model mismatch.
+    The detail page itself comes from `ObjectChangeDetailMixin`, so the two pages cannot drift apart.
+    """
+
+    filterset_class = filters.ArchivedObjectChangeFilterSet
+    filterset_form_class = forms.ArchivedObjectChangeFilterForm
+    queryset = ArchivedObjectChange.objects.all()
+    related_changes_table_class = tables.ArchivedObjectChangeTable
+    serializer_class = serializers.ObjectChangeSerializer
+    table_class = tables.ArchivedObjectChangeTable
 
 
 class ObjectChangeLogView(generic.GenericView):

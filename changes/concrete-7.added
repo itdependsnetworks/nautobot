@@ -1,0 +1,2 @@
+Added the warm page's Logs card, filter box included, to a retained job result, and moved its console output onto the block the warm console view renders. Both pages now share those templates instead of keeping separate copies.
+Added the warm page's Export Logs and Export Console Logs buttons to a retained job result.

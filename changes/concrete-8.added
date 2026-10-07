@@ -1,0 +1,1 @@
+Added warm-schema parity to the archived REST endpoints. Each reference stored as an identifier is rendered under the field name the warm response uses, so a client reading change or job history needs no second code path. A retained job result adds one field, `user_name`, denormalized at rotation.

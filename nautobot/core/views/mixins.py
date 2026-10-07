@@ -1,6 +1,7 @@
 import logging
 from typing import ClassVar, Optional, Type
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import AccessMixin
 from django.contrib.auth.models import AnonymousUser
@@ -841,6 +842,44 @@ class ObjectDetailViewMixin(NautobotViewSetMixin, mixins.RetrieveModelMixin):
         Retrieve a model instance.
         """
         return Response({})
+
+
+class ArchiveAwareRetrieveMixin:
+    """
+    Send a warm detail URL on to the retained record's own page.
+
+    A retained record keeps the primary key it had in warm storage, so a URL saved before rotation still
+    names a real record afterwards. Retained history has its own views, so this redirects there instead
+    of serving the record a second time.
+
+    Serving one record at two URLs does not work: `Tab.should_render_content` renders a tab's panels only
+    when `request.path` equals `object.get_absolute_url()`, so the URL that is not the record's own
+    renders the page frame with every panel missing.
+    """
+
+    def retrieve(self, request, *args, **kwargs):
+        archived_url = self.archived_url_for(kwargs.get("pk"))
+        if archived_url is not None:
+            return redirect(archived_url)
+        return super().retrieve(request, *args, **kwargs)
+
+    def archived_url_for(self, pk):
+        """The retained record's own detail URL, or None when no retained record should be redirected to."""
+        from nautobot.extras.models.archive import archive_model_for
+
+        # Checked first so that with retention off this costs no query and behaves exactly as it did
+        # before the capability existed.
+        if not settings.CHANGELOG_ARCHIVE_ENABLED:
+            return None
+        mirror = archive_model_for(type(self).queryset.model)
+        if mirror is None:
+            return None
+        # Only a primary key the warm table no longer has is redirected, so a record still in warm
+        # storage is served here as it always was.
+        if self.get_queryset().filter(pk=pk).exists():
+            return None
+        record = mirror.objects.restrict(self.request.user, "view").filter(pk=pk).first()
+        return record.get_absolute_url() if record is not None else None
 
 
 class ObjectListViewMixin(NautobotViewSetMixin, mixins.ListModelMixin):

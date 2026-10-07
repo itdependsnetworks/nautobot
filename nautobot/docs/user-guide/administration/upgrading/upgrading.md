@@ -155,3 +155,23 @@ Finally, with root permissions, restart the web and background services:
 ```no-highlight
 sudo systemctl restart nautobot nautobot-worker nautobot-scheduler
 ```
+
+## Changelog Long-Term Retention
+
++++ 3.3.0
+
+[Long-term retention](../../platform-functionality/change-logging.md#long-term-retention) is disabled by default, and while it is disabled nothing changes. Two things to know if you enable it:
+
+### Run the schema check after every upgrade
+
+```no-highlight
+nautobot-server check_changelog_archive_schema
+```
+
+The retained tables mirror the warm models field for field, and nothing in Django's migration tooling detects a field added to one and not the other. Records rotated while a field is missing will not carry it. Nautobot also reports this at startup as check `nautobot.core.W011`.
+
+### Integrations that read the database directly
+
+Once the changelog rotation job is scheduled, anything querying `extras_objectchange`, `extras_jobresult`, `extras_joblogentry`, or `extras_jobconsoleentry` directly instead of through the REST API will see fewer rows, with no error raised. Rotation moves those records into separate tables, read through `/api/extras/archived-object-changes/`, `/api/extras/archived-job-results/` and `/api/extras/archived-job-logs/`.
+
+If you have integrations reading these tables directly, move them to the REST API before scheduling rotation.

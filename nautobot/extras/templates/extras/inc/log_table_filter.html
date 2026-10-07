@@ -1,3 +1,9 @@
+{% comment %}
+Shared by the warm job result page and the retained one. `log_table_url_name` names the route that
+serves the table body; each view supplies its own, because a retained result's log entries are read from
+a different model.
+{% endcomment %}
+{% firstof log_table_url_name 'extras:jobresult_log-table' as log_table_route %}
 <div class="card-header">
     <strong>Logs</strong>
     <div class="float-end d-print-none">
@@ -10,7 +16,7 @@
             title="Filter log level or message"
             style="height: 1.4375rem; width: 11.875rem;"
             {% if result and result.pk %}
-                hx-get="{% url 'extras:jobresult_log-table' pk=result.pk %}"
+                hx-get="{% url log_table_route pk=result.pk %}"
                 hx-target="#log-table-wrapper"
                 hx-trigger="input changed delay:500ms"
             {% endif %}
@@ -20,7 +26,7 @@
 {% if result and result.pk %}
     <div
         id="log-table-wrapper"
-        hx-get="{% url 'extras:jobresult_log-table' pk=result.pk %}?{{ request.GET.urlencode }}"
+        hx-get="{% url log_table_route pk=result.pk %}?{{ request.GET.urlencode }}"
         hx-trigger="load"
         hx-target="#log-table-wrapper"
         hx-swap="innerHTML"

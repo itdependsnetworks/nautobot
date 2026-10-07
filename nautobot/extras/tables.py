@@ -3,6 +3,7 @@ import re
 from textwrap import dedent
 
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import QuerySet
 from django.utils.html import format_html, format_html_join
 import django_tables2 as tables
 from django_tables2.utils import Accessor
@@ -23,6 +24,7 @@ from nautobot.core.tables import (
     ToggleColumn,
 )
 from nautobot.core.templatetags.helpers import HTML_NONE, render_boolean, render_json, render_markdown
+from nautobot.extras.utils import resolve_object_urls
 from nautobot.tenancy.tables import TenantColumn
 
 from .choices import JobResultStatusChoices
@@ -32,6 +34,9 @@ from .models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1665,6 +1670,129 @@ class ObjectChangeTable(BaseTable):
                             Please ensure you fully understand the implications of these actions before proceeding.
                             """)
             logger.warning(error_message)
+
+
+ARCHIVED_OBJECTCHANGE_REQUEST_ID = """
+<a href="{% url 'extras:archivedobjectchange_list' %}?request_id={{ value }}">{{ value }}</a>
+"""
+
+
+class ArchivedJobLogEntryTable(JobLogEntryTable):
+    """
+    Retained job log entries, shown on a retained job result's detail page.
+
+    Same columns as the warm log table. Only `Meta.model` differs, so the two tables cannot drift.
+    """
+
+    class Meta(JobLogEntryTable.Meta):
+        model = ArchivedJobLogEntry
+
+
+class ArchivedJobResultTable(BaseTable):
+    """
+    Retained job results.
+
+    Declared against the mirror, like `ArchivedObjectChangeTable`. Columns that follow a relation are
+    absent rather than blank: rotation demotes `job_model`, `scheduled_job`, `user` and `canceled_by` to
+    identifier columns, and a column rendering an empty cell for every row is worse than no column. The
+    job's name is copied to `name` at rotation and the user's to `user_name`, so neither is lost.
+
+    No `pk` toggle and no actions column. Retained history is read-only, so there is nothing to select
+    rows for.
+    """
+
+    date_created = tables.DateTimeColumn(linkify=True, short=True)
+    date_started = tables.DateTimeColumn(short=True)
+    date_done = tables.DateTimeColumn(short=True)
+    status = tables.TemplateColumn(
+        template_code="{% include 'extras/inc/job_label.html' with result=record %}",
+    )
+
+    class Meta(BaseTable.Meta):
+        model = ArchivedJobResult
+        fields = (
+            "date_created",
+            "date_started",
+            "date_done",
+            "name",
+            "user_name",
+            "status",
+        )
+
+
+class ArchivedObjectColumn(tables.Column):
+    """
+    A retained record's `object_repr`, linked to its object where one still resolves.
+
+    Rotation demotes the generic foreign key to a content type id and an object id, so the link is built
+    from those, in one batch for the whole page. The fallback is the stored `object_repr` as plain text,
+    which is all there is once the object itself is gone -- the ordinary case for an archive.
+    """
+
+    def render(self, record, table):
+        url = table.changed_object_urls().get((record.changed_object_type_id, record.changed_object_id))
+        if url:
+            return format_html('<a href="{}">{}</a>', url, record.object_repr)
+        return record.object_repr
+
+
+class ArchivedObjectChangeTable(BaseTable):
+    """
+    Retained change records.
+
+    Declared against `ArchivedObjectChange` instead of reusing `ObjectChangeTable`. The two render the
+    same columns, but a table declared against `ObjectChange` and given mirror rows disagrees with
+    django-tables2 about its own model, and every column that follows a relation resolves to None because
+    `ArchivedObjectChange` stores identifier columns in place of those relations.
+
+    No `pk` toggle and no actions column. Retained history is read-only, so there is nothing to select
+    rows for.
+    """
+
+    time = tables.DateTimeColumn(linkify=True, short=True)
+    action = ChoiceFieldColumn()
+    # Resolved by the model, which reads `ContentType.objects.get_for_id` from a per-process cache.
+    # Not sortable: the stored column is an id, so sorting it would order by id and not by label.
+    changed_object_type = tables.Column(accessor="changed_object_type", verbose_name="Type", orderable=False)
+    object_repr = ArchivedObjectColumn(verbose_name="Object")
+    request_id = tables.TemplateColumn(template_code=ARCHIVED_OBJECTCHANGE_REQUEST_ID, verbose_name="Request ID")
+
+    class Meta(BaseTable.Meta):
+        model = ArchivedObjectChange
+        fields = (
+            "time",
+            "user_name",
+            "action",
+            "changed_object_type",
+            "object_repr",
+            "request_id",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._changed_object_urls = None
+
+    def changed_object_urls(self):
+        """
+        Resolve every record on this page to its object's URL, once.
+
+        Unconditional here, unlike on the warm table: every row this table renders is a retained one, so
+        there is no prefetched generic relation to prefer.
+        """
+        if self._changed_object_urls is None:
+            rows = self.paginated_rows
+            data = getattr(rows, "data", None)
+            data = getattr(data, "data", data)
+            # Evaluate the page's queryset before walking it. It is the same object the renderer iterates
+            # immediately afterwards, so filling its result cache here makes this scan free instead of
+            # running the page query a second time.
+            if isinstance(data, QuerySet):
+                len(data)
+            self._changed_object_urls = resolve_object_urls(
+                (record.changed_object_type_id, record.changed_object_id)
+                for record in (getattr(row, "record", row) for row in rows)
+            )
+        return self._changed_object_urls
 
 
 #

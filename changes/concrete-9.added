@@ -1,0 +1,1 @@
+Added the `changelog_archive` database connection alias, defaulting to the same physical database as `default` so retention needs no separate provisioning to enable. Repoint it with the `NAUTOBOT_CHANGELOG_ARCHIVE_DB_*` environment variables; `ChangelogArchiveRouter` pins the retained tables to it.

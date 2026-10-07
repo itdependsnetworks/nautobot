@@ -1,0 +1,8 @@
+{% extends 'extras/jobresult_retrieve.html' %}
+{% comment %}
+The warm job result's detail template, reused unchanged, so both pages build their title the same way.
+
+Its title block prefers the job's grouping and name; rotation demotes `job_model` to an identifier
+column, so on a retained result those branches are skipped and the title falls through to the `name`
+copied at rotation.
+{% endcomment %}

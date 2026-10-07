@@ -23,6 +23,7 @@ from django.utils.html import escape, format_html
 
 from nautobot.circuits.models import Circuit
 from nautobot.core.choices import ColorChoices
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.models.fields import slugify_dashes_to_underscores
 from nautobot.core.templatetags.helpers import bettertitle, HTML_NONE
 from nautobot.core.testing import (
@@ -5068,6 +5069,10 @@ class JobResultTestCase(
     ViewTestCases.BulkDeleteObjectsViewTestCase,
 ):
     model = JobResult
+    # The detail view redirects a primary key the warm table no longer has to the retained record's own
+    # page, so a miss queries the archive alias whenever CHANGELOG_ARCHIVE_ENABLED is on.
+    # See `ArchiveAwareRetrieveMixin`.
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     @classmethod
     def setUpTestData(cls):
@@ -7215,9 +7220,12 @@ class JobHookTestCase(ViewTestCases.OrganizationalObjectViewTestCase, ViewTestCa
         }
 
 
-# TODO: Convert to StandardTestCases.Views
 class ObjectChangeTestCase(TestCase):
     user_permissions = ("extras.view_objectchange",)
+    # The detail view redirects a primary key the warm table no longer has to the retained record's own
+    # page, so a miss queries the archive alias whenever CHANGELOG_ARCHIVE_ENABLED is on.
+    # See `ArchiveAwareRetrieveMixin`.
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     @classmethod
     def setUpTestData(cls):

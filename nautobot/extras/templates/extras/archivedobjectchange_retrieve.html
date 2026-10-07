@@ -1,0 +1,9 @@
+{% extends 'extras/objectchange_retrieve.html' %}
+{% comment %}
+The warm change log's detail template, reused unchanged.
+
+It loads `js/editor.js`, which drives the Monaco diff viewer the Difference panel renders a container
+for. Without this the retained page renders that container and leaves it empty, which is a complete page
+with a dead panel in it. Extending the warm template rather than copying its contents means a change
+there reaches this page too.
+{% endcomment %}

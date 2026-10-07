@@ -912,6 +912,28 @@ CONSTANCE_CONFIG = {
         default="",
         help_text="Custom Markdown or limited HTML to display in a banner at the top of all pages.",
     ),
+    "CHANGELOG_LEGACY_OBJECT_DATA": ConstanceConfigItem(
+        default=True,
+        help_text="Store the legacy `object_data` snapshot on each change record, alongside `object_data_v2`.\n"
+        "Deprecated: `object_data_v2` supersedes it and every reader prefers it, falling back to the legacy "
+        "snapshot only for records written before Nautobot 1.3. Turning this off halves the data each new "
+        "change record stores. Records written while it is off leave `object_data` empty, which is visible "
+        "to REST API clients reading that field directly.",
+        field_type=bool,
+    ),
+    "CHANGELOG_ROTATION_BATCH_SIZE": ConstanceConfigItem(
+        default=1000,
+        help_text="Number of records the rotation job moves per increment.\n"
+        "Rotation loads each record into memory to copy it, twice over (the warm record and the retained "
+        "copy built from it). Reduce this if rotation runs out of memory on records with large data.",
+        field_type=int,
+    ),
+    "CHANGELOG_WARM_WINDOW_DAYS": ConstanceConfigItem(
+        default=90,
+        help_text="Number of days of change and job history kept in warm storage.\n"
+        "Records older than this are eligible for the rotation job to move into long-term retention.",
+        field_type=int,
+    ),
     "CHANGELOG_RETENTION": ConstanceConfigItem(
         default=90,
         help_text="Number of days to retain object changelog history.\nSet this to 0 to retain changes indefinitely.",
@@ -1056,7 +1078,12 @@ CONSTANCE_CONFIG = {
 
 CONSTANCE_CONFIG_FIELDSETS = {
     "Banners": ["BANNER_LOGIN", "BANNER_TOP", "BANNER_BOTTOM"],
-    "Change Logging": ["CHANGELOG_RETENTION"],
+    "Change Logging": [
+        "CHANGELOG_RETENTION",
+        "CHANGELOG_WARM_WINDOW_DAYS",
+        "CHANGELOG_LEGACY_OBJECT_DATA",
+        "CHANGELOG_ROTATION_BATCH_SIZE",
+    ],
     "Device Connectivity": ["NETWORK_DRIVERS", "PREFER_IPV4"],
     "Installation Metrics": ["DEPLOYMENT_ID"],
     "Natural Keys": ["DEVICE_UNIQUENESS", "LOCATION_NAME_AS_NATURAL_KEY"],
@@ -1439,3 +1466,9 @@ del _value
 NAUTOBOT_OTEL_EXTRA_INSTRUMENTORS = [
     path for path in os.getenv("NAUTOBOT_OTEL_EXTRA_INSTRUMENTORS", "").split(_CONFIG_SETTING_SEPARATOR) if path != ""
 ]
+
+CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))
+
+# The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
+# alongside `job_logs`.
+DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]

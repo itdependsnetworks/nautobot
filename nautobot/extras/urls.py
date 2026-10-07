@@ -10,6 +10,9 @@ from nautobot.extras.models import (
 app_name = "extras"
 
 router = NautobotUIViewSetRouter()
+router.register("archived-object-changes", views.ArchivedObjectChangeUIViewSet, basename="archivedobjectchange")
+router.register("archived-job-results", views.ArchivedJobResultUIViewSet, basename="archivedjobresult")
+
 router.register("approval-workflows", views.ApprovalWorkflowUIViewSet)
 router.register("approval-workflow-definitions", views.ApprovalWorkflowDefinitionUIViewSet)
 router.register("approval-workflow-stages", views.ApprovalWorkflowStageUIViewSet)

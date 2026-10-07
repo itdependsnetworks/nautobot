@@ -1,0 +1,2 @@
+Added links on the Object column of the archived change log. It links to the object a record describes where that object still exists, resolved in one query per object type on the page, and falls back to the recorded `object_repr` where it does not.
+Added `changed_object_type` filtering on the archived change log, matching `app_label.model` against the stored identifier column.

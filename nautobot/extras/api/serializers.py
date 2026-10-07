@@ -3,6 +3,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth.models import Group
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
@@ -53,6 +54,9 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1196,6 +1200,84 @@ class ObjectChangeSerializer(BaseModelSerializer):
             return return_nested_serializer_data_based_on_depth(self, depth, obj, obj.changed_object, "changed_object")
         except SerializerNotFound:
             return obj.object_repr
+
+
+#
+# Retained change history
+#
+# Each one is its warm serializer with `Meta.model` pointed at the mirror. Declaring the model is what
+# makes `url` name this record's own endpoint, and what keeps `BaseModelSerializer`'s natural-key
+# lookups to relations the mirror has: built from the warm model they name relations that were
+# demoted, and every CSV export raised `FieldError`.
+#
+
+
+class ArchivedRecordSerializerMixin:
+    """
+    Render a mirror's demoted foreign keys under the field names the warm response uses.
+
+    Rotation stores each reference as a bare `<name>_id` column, so `fields = "__all__"` names them
+    `user_id`, `job_result_id` and so on where the warm response has `user` and `job_result`. This renames
+    each one back and gives it the shape the warm response carries: `app_label.model` for a content type,
+    and the identifying part of a nested object otherwise. `url` is left out of that nested object on
+    purpose, because the referent may have been deleted long before the record was retained.
+
+    Each id is read from the record rather than from the rendered data, because a renderer may have
+    turned it into something else first: the CSV renderer writes a null as the string `"NULL"`, and
+    looking a content type up by that raises `ValueError`.
+    """
+
+    def to_representation(self, instance):
+        from nautobot.extras.models.archive import warm_model_for
+
+        data = super().to_representation(instance)
+        warm_model = warm_model_for(type(instance))
+        if warm_model is None:
+            return data
+        for key in [key for key in data if key.endswith("_id")]:
+            name = key[: -len("_id")]
+            try:
+                field = warm_model._meta.get_field(name)
+            except FieldDoesNotExist:
+                continue
+            related_model = getattr(field, "related_model", None)
+            if related_model is None:
+                continue
+            data.pop(key)
+            related_id = getattr(instance, key, None)
+            if related_model is ContentType:
+                content_type = ContentType.objects.filter(pk=related_id).first() if related_id else None
+                data[name] = f"{content_type.app_label}.{content_type.model}" if content_type else None
+            else:
+                data[name] = (
+                    {"id": str(related_id), "object_type": related_model._meta.label_lower} if related_id else None
+                )
+        return data
+
+
+class ArchivedObjectChangeSerializer(ArchivedRecordSerializerMixin, ObjectChangeSerializer):
+    class Meta(ObjectChangeSerializer.Meta):
+        model = ArchivedObjectChange
+
+
+class ArchivedJobResultSerializer(ArchivedRecordSerializerMixin, JobResultSerializer):
+    class Meta(JobResultSerializer.Meta):
+        model = ArchivedJobResult
+        extra_kwargs = {}
+
+    def get_field_names(self, declared_fields, info):
+        """
+        Drop `files`, which the warm serializer adds as a reverse relation and the warm response omits.
+
+        On the mirror `files` is a property returning an empty list, so left in it would serialize and the
+        two responses would not match. Job output files are deleted with the warm record, not archived.
+        """
+        return [name for name in super().get_field_names(declared_fields, info) if name != "files"]
+
+
+class ArchivedJobLogEntrySerializer(ArchivedRecordSerializerMixin, JobLogEntrySerializer):
+    class Meta(JobLogEntrySerializer.Meta):
+        model = ArchivedJobLogEntry
 
 
 #

@@ -1,0 +1,13 @@
+{% comment %}
+The console output block itself, shared by the warm job result's Console Log view and by the retained
+job result's Console Log tab, so the two render the same thing. Expects `entries`.
+{% endcomment %}
+{% spaceless %}
+    <div class="card-body overflow-hidden">
+        <pre class="h-100 mb-0 overflow-y-auto" id="console-output" hx-on:load="this.scrollTop = this.scrollHeight">
+            <code class="h-100">
+                {% include "extras/inc/jobresult_console_log_lines.html" %}
+            </code>
+        </pre>
+    </div>
+{% endspaceless %}

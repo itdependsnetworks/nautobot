@@ -67,6 +67,9 @@ from nautobot.extras.models import (
     ApprovalWorkflowStage,
     ApprovalWorkflowStageDefinition,
     ApprovalWorkflowStageResponse,
+    ArchivedJobLogEntry,
+    ArchivedJobResult,
+    ArchivedObjectChange,
     ComputedField,
     ConfigContext,
     ConfigContextSchema,
@@ -1754,4 +1757,117 @@ class RoleFilterSet(NautobotFilterSet):
             "weight",
             "created",
             "last_updated",
+        ]
+
+
+#
+# Changelog long-term retention
+#
+# Declared against the mirrors instead of derived from the warm filtersets, which would spend their
+# effort discovering which warm filters no longer resolve against an identifier column and removing
+# them.
+#
+# The cost is that a filter added to a warm filterset does not appear here until someone adds it.
+# `check_changelog_archive_schema` reports diverging fields, not filters.
+
+
+class ArchivedContentTypeFilter(django_filters.CharFilter):
+    """
+    Filter a retention mirror's bare content-type id column by `app_label.model`.
+
+    The mirrors declare content types as identifier columns instead of relations, so `ContentTypeFilter`
+    has nothing to traverse. `ArchivedContentTypeFilter` keeps the same `?changed_object_type=dcim.device`
+    spelling working against retained records.
+    """
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        try:
+            app_label, model = value.lower().strip().split(".")
+        except ValueError:
+            return qs.none()
+        content_type_id = (
+            ContentType.objects.filter(app_label=app_label, model=model).values_list("pk", flat=True).first()
+        )
+        if content_type_id is None:
+            return qs.none()
+        return qs.filter(**{self.field_name: content_type_id})
+
+
+class ArchivedObjectChangeFilterSet(BaseFilterSet):
+    """Filters offered on retained `ObjectChange` history."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "user_name": "icontains",
+            "object_repr": "icontains",
+        },
+    )
+    changed_object_type = ArchivedContentTypeFilter(field_name="changed_object_type_id")
+    # `user` is absent on purpose: the mirror records `user_name` as text and has no relation to a live
+    # user, which may since have been renamed or deleted. Searching the recorded name is what remains true.
+    change_context = MultipleChoiceFilter(label="Change Context", choices=ObjectChangeEventContextChoices)
+    change_context_detail = MultiValueCharFilter(label="Change Context Detail")
+
+    class Meta:
+        model = ArchivedObjectChange
+        fields = [
+            "id",
+            "user_name",
+            "change_context",
+            "change_context_detail",
+            "request_id",
+            "action",
+            "changed_object_type_id",
+            "changed_object_id",
+            "object_repr",
+            "time",
+        ]
+
+
+class ArchivedJobResultFilterSet(BaseFilterSet):
+    """Filters offered on retained `JobResult` history."""
+
+    q = SearchFilter(filter_predicates={"name": "icontains"})
+    # `job_model`, `scheduled_job`, `user` and `canceled_by` are identifier columns on the mirror with no
+    # relation to traverse, and `has_job_console_entries` has no reverse relation to test. The job's name
+    # is copied onto `name` at rotation, so searching by name still works.
+    status = MultipleChoiceFilter(choices=JobResultStatusChoices, null_value=None)
+
+    class Meta:
+        model = ArchivedJobResult
+        fields = [
+            "id",
+            "date_created",
+            "date_started",
+            "date_done",
+            "date_canceled",
+            "name",
+            "status",
+        ]
+
+
+class ArchivedJobLogEntryFilterSet(BaseFilterSet):
+    """Filters offered on retained `JobLogEntry` history."""
+
+    q = SearchFilter(
+        filter_predicates={
+            "grouping": "icontains",
+            "message": "icontains",
+            "log_level": "icontains",
+        },
+    )
+
+    class Meta:
+        model = ArchivedJobLogEntry
+        fields = [
+            "id",
+            "created",
+            "grouping",
+            "log_level",
+            "log_object",
+            "message",
+            "absolute_url",
+            "job_result_id",
         ]

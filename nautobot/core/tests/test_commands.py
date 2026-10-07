@@ -6,6 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 import yaml
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase, TransactionTestCase
 from nautobot.dcim.models import Device
 from nautobot.extras.models import Status
@@ -13,6 +14,10 @@ from nautobot.extras.models import Status
 
 class ManagementCommandTestCase(TestCase):
     """Test case for core management commands."""
+
+    # These commands walk every model and every URL pattern, which reaches the changelog retention
+    # mirrors; a router pins those to the `changelog_archive` alias.
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def setUp(self):
         """Initialize user and client."""

@@ -1,0 +1,2 @@
+Added the difference panel and previous/next navigation to a retained change record, so a diff reads the same there as on the warm change log.
+Added `ObjectChangeSnapshotsMixin`, which moves diffing and neighbour lookup out of `ObjectChange` so the warm model and its mirror share one copy. Both change log detail pages are now defined once, so they cannot drift apart.

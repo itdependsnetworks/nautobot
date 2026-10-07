@@ -1,0 +1,3 @@
+Added the **Changelog Rotation** system job, which moves change and job history older than the warm window into retained storage in bounded increments. It is idempotent: a second run writes the same records again without duplicating them.
+Added the `CHANGELOG_WARM_WINDOW_DAYS` and `CHANGELOG_ROTATION_BATCH_SIZE` settings.
+Added the `without_delete_change_logging()` context manager, which detaches the change log's delete receiver for a bulk deletion and guarantees it is reattached.
