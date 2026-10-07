@@ -266,6 +266,40 @@ class ArchivedJobResult(ArchivedRecord, CustomFieldModel):
     # `_custom_field_data` comes from CustomFieldModel, which also supplies the accessors the warm detail
     # page calls. Rotation copies the raw JSON, so no custom field value is lost.
 
+    @property
+    def job_description(self):
+        """
+        Empty: the warm property reads it through the `job_model` relation, which is demoted here.
+
+        Defined here because `__getattr__` keys off a `<name>_id` field and there is no `job_description_id`.
+        """
+        return None
+
+    @property
+    def duration(self):
+        """Same as the warm property: derived from the stored timestamps, which the mirror also has."""
+        if not self.date_done or not self.date_started:
+            return None
+        minutes, seconds = divmod((self.date_done - self.date_started).total_seconds(), 60)
+        return f"{int(minutes)} minutes, {seconds:.2f} seconds"
+
+    @property
+    def files(self):
+        """
+        Empty: job output files are not archived.
+
+        Rotation excludes any result with files unless the operator opts in, because those files are deleted
+        with the warm record rather than moved.
+        """
+        return []
+
+    @property
+    def queue(self):
+        """Same as warm: read from the stored celery kwargs."""
+        if self.celery_kwargs and isinstance(self.celery_kwargs, dict):
+            return self.celery_kwargs.get("queue")
+        return None
+
     class Meta(ArchivedRecord.Meta):
         ordering = ["-date_created"]
         get_latest_by = "date_created"

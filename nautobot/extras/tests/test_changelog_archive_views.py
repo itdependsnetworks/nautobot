@@ -165,6 +165,76 @@ class RetainedChangeDetailTestCase(TestCase):
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class RetainedJobResultSummaryTestCase(TestCase):
+    """The summary panel a retained job result shares with the warm one."""
+
+    user_permissions = ("extras.view_archivedjobresult",)
+
+    def setUp(self):
+        super().setUp()
+        clear_archive(ArchivedJobResult)
+        self.addCleanup(clear_archive, ArchivedJobResult)
+        self.result = ArchivedJobResult.objects.create(
+            id=uuid.uuid4(),
+            name="retained-job",
+            user_name="alice",
+            status=JobResultStatusChoices.STATUS_SUCCESS,
+            date_created=WHEN,
+            date_started=WHEN,
+            date_done=WHEN.replace(minute=2),
+            worker="celery@worker-01",
+            celery_kwargs={"queue": "priority"},
+        )
+
+    def test_the_summary_panel_is_the_warm_one(self):
+        body = self.client.get(self.result.get_absolute_url()).content.decode()
+
+        self.assertIn("SUMMARY OF RESULTS", body.upper())
+
+    def test_the_summary_panel_is_the_class_the_warm_page_uses(self):
+        """
+        Not cosmetic: `JobResultSummaryPanel` decides how `result` and `duration` render.
+
+        A plain `ObjectFieldsPanel` renders a stored `result` as raw JSON wherever the row is shown.
+        """
+        from nautobot.extras.views import ArchivedJobResultUIViewSet, JobResultSummaryPanel
+
+        panel = next(
+            p
+            for p in ArchivedJobResultUIViewSet.object_detail_content.tabs[0].panels
+            if p.label == "Summary of Results"
+        )
+
+        self.assertIsInstance(panel, JobResultSummaryPanel)
+
+    def test_a_stored_result_renders_in_the_summary(self):
+        self.result.result = {"devices_checked": 12}
+        self.result.save()
+
+        body = self.client.get(self.result.get_absolute_url()).content.decode()
+
+        self.assertIn("devices_checked", body)
+
+    def test_cancel_details_is_hidden_on_a_job_that_was_not_canceled(self):
+        """The warm panel hides itself the same way, so an uncanceled job shows no empty rows."""
+        body = self.client.get(self.result.get_absolute_url()).content.decode()
+
+        self.assertNotIn("CANCEL DETAILS", body.upper())
+
+    def test_the_derived_fields_read_from_what_was_stored(self):
+        self.assertEqual(self.result.queue, "priority")
+        self.assertEqual(self.result.duration, "2 minutes, 0.00 seconds")
+
+    def test_the_fields_that_cannot_be_recovered_are_empty_not_wrong(self):
+        """
+        The job's description belongs to the `Job`, which is not archived, and output files are deleted
+        with the warm record. Both render empty instead of showing something from today.
+        """
+        self.assertIsNone(self.result.job_description)
+        self.assertEqual(self.result.files, [])
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class RetainedHistoryPermissionTestCase(TestCase):
     """Retained history is gated by its own ordinary `view` permission, granted to nobody by default."""
 

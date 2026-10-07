@@ -4343,13 +4343,29 @@ class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMix
 
     object_detail_content = object_detail.ObjectDetailContent(
         panels=(
-            # `result` is a field of this panel, not a panel of its own, which is where the warm page
-            # shows it.
-            object_detail.ObjectFieldsPanel(
-                label="Job Result",
-                section=SectionChoices.LEFT_HALF,
+            # `JobResultSummaryPanel`, the class the warm page uses, so a stored `result` of None renders
+            # as a placeholder here too instead of the string "null". Its other branch shows a spinner
+            # while a job is unfinished, which a retained result never is.
+            JobResultSummaryPanel(
+                label="Summary of Results",
+                section=SectionChoices.FULL_WIDTH,
                 weight=100,
-                fields=("name", "user_name", "status", "date_created", "date_started", "date_done", "result"),
+                # The warm page's fields, with `user_name` where it shows `user`: rotation stores the
+                # user reference as an id and copies the name onto the record.
+                fields=[
+                    "job_description",
+                    "status",
+                    "date_created",
+                    "date_started",
+                    "user_name",
+                    "duration",
+                    "result",
+                    "files",
+                ],
+                value_transforms={
+                    "status": [render_jobresult_status],
+                    "files": [render_jobresult_files],
+                },
             ),
             object_detail.ObjectsTablePanel(
                 table_title="Logs",
@@ -4406,11 +4422,19 @@ class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMix
             object_field="celery_kwargs",
             render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
         ),
+        # `JobResultCancelPanel`, so that like the warm page this shows only on a canceled job.
+        JobResultCancelPanel(
+            label="Cancel Details",
+            section=SectionChoices.RIGHT_HALF,
+            weight=100,
+            fields=["date_canceled", "canceled_by_user_name", "cancel_type"],
+            value_transforms={"cancel_type": [render_jobresult_cancel_type]},
+        ),
         object_detail.ObjectFieldsPanel(
             label="Worker",
             section=SectionChoices.RIGHT_HALF,
             weight=200,
-            fields=["worker", "task_name", "meta"],
+            fields=["worker", "queue", "task_name", "meta"],
         ),
         object_detail.ObjectTextPanel(
             label="Traceback",
