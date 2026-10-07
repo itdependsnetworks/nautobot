@@ -2968,6 +2968,14 @@ class ArchivedObjectChangeFilterForm(BootstrapMixin, forms.Form):
     q = forms.CharField(required=False, label="Search")
     time__gte = forms.DateTimeField(label="After", required=False, widget=DateTimePicker())
     time__lte = forms.DateTimeField(label="Before", required=False, widget=DateTimePicker())
+    changed_object_type_id = DynamicModelMultipleChoiceField(
+        queryset=ContentType.objects.all(),
+        required=False,
+        label="Object Type",
+        widget=APISelectMultiple(
+            api_url="/api/extras/content-types/",
+        ),
+    )
     action = forms.ChoiceField(
         choices=add_blank_choice(ObjectChangeActionChoices),
         required=False,

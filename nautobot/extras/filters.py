@@ -1771,6 +1771,30 @@ class RoleFilterSet(NautobotFilterSet):
 # `check_changelog_archive_schema` reports diverging fields, not filters.
 
 
+class ArchivedContentTypeFilter(django_filters.CharFilter):
+    """
+    Filter a retention mirror's bare content-type id column by `app_label.model`.
+
+    The mirrors declare content types as identifier columns instead of relations, so `ContentTypeFilter`
+    has nothing to traverse. `ArchivedContentTypeFilter` keeps the same `?changed_object_type=dcim.device`
+    spelling working against retained records.
+    """
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        try:
+            app_label, model = value.lower().strip().split(".")
+        except ValueError:
+            return qs.none()
+        content_type_id = (
+            ContentType.objects.filter(app_label=app_label, model=model).values_list("pk", flat=True).first()
+        )
+        if content_type_id is None:
+            return qs.none()
+        return qs.filter(**{self.field_name: content_type_id})
+
+
 class ArchivedObjectChangeFilterSet(BaseFilterSet):
     """Filters offered on retained `ObjectChange` history."""
 
@@ -1780,6 +1804,7 @@ class ArchivedObjectChangeFilterSet(BaseFilterSet):
             "object_repr": "icontains",
         },
     )
+    changed_object_type = ArchivedContentTypeFilter(field_name="changed_object_type_id")
     # `user` is absent on purpose: the mirror records `user_name` as text and has no relation to a live
     # user, which may since have been renamed or deleted. Searching the recorded name is what remains true.
     change_context = MultipleChoiceFilter(label="Change Context", choices=ObjectChangeEventContextChoices)
