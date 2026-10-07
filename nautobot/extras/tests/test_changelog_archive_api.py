@@ -17,6 +17,7 @@ import uuid
 from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import APITestCase, APIViewTestCases
 from nautobot.extras.choices import JobResultStatusChoices, LogLevelChoices, ObjectChangeActionChoices
 from nautobot.extras.models import (
@@ -69,6 +70,8 @@ def make_archived_results(count=3):
 
 
 class ArchivedObjectChangeTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     model = ArchivedObjectChange
 
     @classmethod
@@ -78,6 +81,8 @@ class ArchivedObjectChangeTest(APIViewTestCases.GetObjectViewTestCase, APIViewTe
 
 
 class ArchivedJobResultTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     model = ArchivedJobResult
     choices_fields = ["status"]
 
@@ -88,6 +93,8 @@ class ArchivedJobResultTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestC
 
 
 class ArchivedJobLogEntryTest(APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase):
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     model = ArchivedJobLogEntry
     choices_fields = []
 
@@ -108,6 +115,8 @@ class ArchivedJobLogEntryTest(APIViewTestCases.GetObjectViewTestCase, APIViewTes
 
 class ArchivedApiShapeTest(APITestCase):
     """The archived response against the warm one, field name by field name."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def setUp(self):
         super().setUp()
@@ -212,6 +221,8 @@ class ArchivedApiShapeTest(APITestCase):
 
 class ArchivedApiPermissionTest(APITestCase):
     """Retained history is gated by its own ordinary `view` permission, granted to nobody by default."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def setUp(self):
         super().setUp()

@@ -1,0 +1,1 @@
+Fixed the test runner reading mirrored models out of the developer's own database. `generate_test_data` queries every content type while the test database is built, and mirrored aliases were not pointed at it until after that ran.

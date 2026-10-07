@@ -14,6 +14,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
 from nautobot.dcim.models import Location
 from nautobot.extras.choices import ObjectChangeActionChoices
@@ -26,6 +27,8 @@ WHEN = datetime(2021, 6, 1, tzinfo=dt_timezone.utc)
 
 
 class ArchivedObjectChangeTableTestCase(TestCase):
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     def setUp(self):
         super().setUp()
         clear_archive(ArchivedObjectChange)
@@ -93,6 +96,8 @@ class ArchivedObjectChangeTableTestCase(TestCase):
 
 class ArchivedContentTypeFilterTestCase(TestCase):
     """`?changed_object_type=dcim.location` has to keep working against an identifier column."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def setUp(self):
         super().setUp()

@@ -1450,3 +1450,7 @@ NAUTOBOT_OTEL_EXTRA_INSTRUMENTORS = [
 ]
 
 CHANGELOG_ARCHIVE_ENABLED = is_truthy(os.getenv("NAUTOBOT_CHANGELOG_ARCHIVE_ENABLED", "False"))
+
+# The `changelog_archive` connection alias is added in `nautobot.core.cli._preprocess_settings`,
+# alongside `job_logs`.
+DATABASE_ROUTERS = ["nautobot.core.models.routers.ChangelogArchiveRouter"]

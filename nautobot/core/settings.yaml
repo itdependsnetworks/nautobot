@@ -676,10 +676,11 @@ properties:
       "Django documentation for CSRF protection": "https://docs.djangoproject.com/en/stable/ref/csrf/#how-it-works"
     type: "array"
   DATABASE_ROUTERS:
-    default: []
+    default: ["nautobot.core.models.routers.ChangelogArchiveRouter"]
     description: >-
-      Custom database router to generate the before & after queries for generating diffs.
-      Used for Nautobot Version Control App.
+      Database routers. Nautobot ships `ChangelogArchiveRouter`, which pins the changelog long-term
+      retention tables to the `changelog_archive` connection. Apps may append their own; the Nautobot
+      Version Control App uses this to generate the before and after queries for diffs.
     items:
       type: "string"
     type: "array"

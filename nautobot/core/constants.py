@@ -116,6 +116,17 @@ CONFIG_SETTING_SEPARATOR = ","
 
 CHARFIELD_MAX_LENGTH = 255
 
+# Connection alias the changelog long-term retention tables are pinned to by `ChangelogArchiveRouter`.
+#
+# Set up in `nautobot.core.cli._preprocess_settings` as a second connection onto the same physical
+# database as `default`, the way `job_logs` is. Warm records and retained records are read through
+# separate views, so no query joins the two in one statement, which is what leaves this repointable at a
+# separate host by configuration alone.
+#
+# Defined here rather than alongside the models so that the router and the settings machinery can import
+# it without pulling in a models module before the app registry is ready.
+CHANGELOG_ARCHIVE = "changelog_archive"
+
 # Default values for pagination settings.
 MAX_PAGE_SIZE_DEFAULT = 1000
 PAGINATE_COUNT_DEFAULT = 50

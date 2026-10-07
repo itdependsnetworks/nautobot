@@ -7,6 +7,7 @@ Nothing else catches a field added to a warm model and not to its mirror: it pro
 and no failure anywhere else, and every record rotated afterwards is missing it.
 """
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
 from nautobot.extras.models import (
     ArchivedJobConsoleEntry,
@@ -31,6 +32,8 @@ ARCHIVE_MODELS = tuple(MIRRORED.values())
 
 class ChangelogArchiveSchemaTestCase(TestCase):
     """The mirrors have to stay field-compatible with the warm models they hold history for."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def test_mirror_fields_match_warm_fields_with_foreign_keys_demoted(self):
         """

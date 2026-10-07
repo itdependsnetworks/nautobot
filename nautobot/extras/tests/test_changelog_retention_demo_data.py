@@ -13,6 +13,7 @@ from itertools import pairwise
 
 from django.core.management import call_command
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
 from nautobot.extras.choices import ObjectChangeActionChoices
 from nautobot.extras.management.commands.create_changelog_retention_demo_data import (
@@ -38,6 +39,8 @@ from nautobot.users.models import ObjectPermission, User
 
 
 class CreateChangelogRetentionDemoDataTestCase(TestCase):
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     def setUp(self):
         super().setUp()
         self._clear_retained_history()

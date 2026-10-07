@@ -17,6 +17,7 @@ from django.core.exceptions import FieldError
 from django.test import override_settings
 from django.urls import NoReverseMatch, reverse
 
+from nautobot.core.constants import CHANGELOG_ARCHIVE
 from nautobot.core.testing import TestCase
 from nautobot.extras.choices import JobResultStatusChoices, LogLevelChoices, ObjectChangeActionChoices
 from nautobot.extras.models import (
@@ -36,6 +37,8 @@ WHEN = datetime(2021, 6, 1, tzinfo=dt_timezone.utc)
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class WarmUrlRedirectTestCase(TestCase):
     """A primary key the warm table no longer has belongs to a record that was rotated, not to nothing."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     user_permissions = (
         "extras.view_objectchange",
@@ -109,6 +112,8 @@ class WarmUrlRedirectTestCase(TestCase):
 class RetainedChangeDetailTestCase(TestCase):
     """The panels a retained change record shares with the warm one."""
 
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     user_permissions = ("extras.view_archivedobjectchange",)
 
     def setUp(self):
@@ -167,6 +172,8 @@ class RetainedChangeDetailTestCase(TestCase):
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class RetainedJobResultSummaryTestCase(TestCase):
     """The summary panel a retained job result shares with the warm one."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     user_permissions = ("extras.view_archivedjobresult",)
 
@@ -237,6 +244,8 @@ class RetainedJobResultSummaryTestCase(TestCase):
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class RetainedLogAndConsoleTestCase(TestCase):
     """The Logs card and the Console Log tab, rendered through the warm page's own templates."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     user_permissions = (
         "extras.view_archivedjobresult",
@@ -346,6 +355,8 @@ class RetainedLogAndConsoleTestCase(TestCase):
 class RetainedHistoryPermissionTestCase(TestCase):
     """Retained history is gated by its own ordinary `view` permission, granted to nobody by default."""
 
+    databases = ["default", CHANGELOG_ARCHIVE]
+
     user_permissions = ("extras.view_objectchange",)
 
     def setUp(self):
@@ -386,6 +397,8 @@ class RetainedHistoryObjectConstraintTestCase(TestCase):
     assuming constraints are ignored would overstate what a reader can see, and assuming they all work
     would send operators to copy a constraint written for the warm model, which cannot resolve.
     """
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def setUp(self):
         super().setUp()
@@ -446,6 +459,8 @@ class RetainedHistoryObjectConstraintTestCase(TestCase):
 
 class RetainedHistoryReadOnlyTestCase(TestCase):
     """Retained history offers no write surface at all."""
+
+    databases = ["default", CHANGELOG_ARCHIVE]
 
     def test_no_write_url_resolves_for_a_retained_record(self):
         """Rotation writes these records and nothing else does, so there is nothing to edit or delete."""
