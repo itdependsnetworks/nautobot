@@ -4474,13 +4474,19 @@ class JobButtonUIViewSet(NautobotUIViewSet):
 #
 # Change logging
 #
-class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, ObjectListViewMixin):
-    filterset_class = filters.ObjectChangeFilterSet
-    filterset_form_class = forms.ObjectChangeFilterForm
-    queryset = ObjectChange.objects.all()
-    serializer_class = serializers.ObjectChangeSerializer
-    table_class = tables.ObjectChangeTable
-    action_buttons = ("export",)
+class ObjectChangeDetailMixin:
+    """
+    The change-log detail page, shared by the warm change log and by retained history.
+
+    Both pages show the same five panels over the same fields, so they are defined once here and the two
+    viewsets differ only in which model and which table they are declared against. A mirror resolves
+    `changed_object` to None, which `ChangeObjectFieldsPanel` already renders as the stored `object_repr`,
+    so the same panel serves a record whose object is long gone.
+    """
+
+    #: The table the Related Changes panel is built with. A retained record's siblings are retained too,
+    #: and the warm table would ask a mirror to follow relations it stores as identifier columns.
+    related_changes_table_class = None
 
     class ChangeObjectFieldsPanel(object_detail.ObjectFieldsPanel):
         def render_value(self, key, value, context):
@@ -4514,7 +4520,8 @@ class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, Ob
                 section=SectionChoices.LEFT_HALF,
                 weight=200,
                 # `snapshot_data`, not `object_data`: the latter is the pre-1.3 snapshot, which is empty on
-                # records written with CHANGELOG_LEGACY_OBJECT_DATA off.
+                # records written with CHANGELOG_LEGACY_OBJECT_DATA off and is the older representation
+                # even when present.
                 object_field="snapshot_data",
                 render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
                 collapsed=True,
@@ -4546,25 +4553,6 @@ class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, Ob
         )
     )
 
-    # 2.0 TODO: Remove this remapping and solve it at the `BaseFilterSet` as it is addressing a breaking change.
-    def get(self, request, *args, **kwargs):
-        # Remappings below allow previous queries of time_before and time_after to use
-        # newer methods specifying the lookup method.
-
-        # They will only use the previous arguments if the newer ones are undefined
-
-        if request.GET.get("time_after") and request.GET.get("time__gte") is None:
-            request.GET._mutable = True
-            request.GET.update({"time__gte": request.GET.get("time_after")})
-            request.GET._mutable = False
-
-        if request.GET.get("time_before") and request.GET.get("time__lte") is None:
-            request.GET._mutable = True
-            request.GET.update({"time__lte": request.GET.get("time_before")})
-            request.GET._mutable = False
-
-        return super().get(request=request, *args, **kwargs)
-
     def get_extra_context(self, request, instance):
         """
         Adds snapshot diff and related changes table for the object change detail view.
@@ -4573,10 +4561,7 @@ class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, Ob
 
         if self.action == "retrieve":
             related_changes = instance.get_related_changes(user=request.user).filter(request_id=instance.request_id)
-            related_changes_table = tables.ObjectChangeTable(
-                data=related_changes,
-                orderable=False,
-            )
+            related_changes_table = self.related_changes_table_class(data=related_changes, orderable=False)
             paginate = {
                 "paginator_class": EnhancedPaginator,
                 "per_page": get_paginate_count(request),
@@ -4598,77 +4583,54 @@ class ObjectChangeUIViewSet(ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, Ob
         return context
 
 
-class ArchivedObjectChangeUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMixin, ObjectListViewMixin):
+class ObjectChangeUIViewSet(
+    ObjectChangeDetailMixin, ArchiveAwareRetrieveMixin, ObjectDetailViewMixin, ObjectListViewMixin
+):
+    filterset_class = filters.ObjectChangeFilterSet
+    filterset_form_class = forms.ObjectChangeFilterForm
+    queryset = ObjectChange.objects.all()
+    related_changes_table_class = tables.ObjectChangeTable
+    serializer_class = serializers.ObjectChangeSerializer
+    table_class = tables.ObjectChangeTable
+    action_buttons = ("export",)
+
+    # 2.0 TODO: Remove this remapping and solve it at the `BaseFilterSet` as it is addressing a breaking change.
+    def get(self, request, *args, **kwargs):
+        # Remappings below allow previous queries of time_before and time_after to use
+        # newer methods specifying the lookup method.
+
+        # They will only use the previous arguments if the newer ones are undefined
+
+        if request.GET.get("time_after") and request.GET.get("time__gte") is None:
+            request.GET._mutable = True
+            request.GET.update({"time__gte": request.GET.get("time_after")})
+            request.GET._mutable = False
+
+        if request.GET.get("time_before") and request.GET.get("time__lte") is None:
+            request.GET._mutable = True
+            request.GET.update({"time__lte": request.GET.get("time_before")})
+            request.GET._mutable = False
+
+        return super().get(request=request, *args, **kwargs)
+
+
+class ArchivedObjectChangeUIViewSet(
+    ArchivedRetentionViewMixin, ObjectChangeDetailMixin, ObjectDetailViewMixin, ObjectListViewMixin
+):
     """
     Retained change records, read-only.
 
-    A separate view from the warm change log instead of the same one taught to serve two models, so the
+    A separate view from the warm change log rather than the same one taught to serve two models, so the
     table and filterset are declared against the mirror and nothing has to reconcile a model mismatch.
+    The detail page itself comes from `ObjectChangeDetailMixin`, so the two pages cannot drift apart.
     """
 
     filterset_class = filters.ArchivedObjectChangeFilterSet
     filterset_form_class = forms.ArchivedObjectChangeFilterForm
     queryset = ArchivedObjectChange.objects.all()
-    serializer_class = serializers.ArchivedObjectChangeSerializer
+    related_changes_table_class = tables.ArchivedObjectChangeTable
+    serializer_class = serializers.ObjectChangeSerializer
     table_class = tables.ArchivedObjectChangeTable
-
-    object_detail_content = object_detail.ObjectDetailContent(
-        panels=(
-            object_detail.ObjectFieldsPanel(
-                label="Change",
-                section=SectionChoices.LEFT_HALF,
-                weight=100,
-                fields=(
-                    "time",
-                    "user_name",
-                    "action",
-                    "changed_object_type",
-                    "object_repr",
-                    "request_id",
-                    "change_context",
-                    "change_context_detail",
-                ),
-            ),
-            object_detail.ObjectTextPanel(
-                label="Object Data",
-                section=SectionChoices.LEFT_HALF,
-                weight=200,
-                object_field="object_data",
-                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
-                collapsed=True,
-            ),
-            object_detail.ObjectTextPanel(
-                label="Object Data v2",
-                section=SectionChoices.LEFT_HALF,
-                weight=250,
-                object_field="object_data_v2",
-                render_as=object_detail.ObjectTextPanel.RenderOptions.JSON,
-                collapsed=True,
-            ),
-            object_detail.ObjectsTablePanel(
-                table_title="Related Changes",
-                section=SectionChoices.FULL_WIDTH,
-                weight=300,
-                context_table_key="related_changes_table",
-                enable_related_link=False,
-                footer_content_template_path=None,
-            ),
-        )
-    )
-
-    def get_extra_context(self, request, instance):
-        """The other retained changes to the same object, which is what Related Changes lists."""
-        context = super().get_extra_context(request, instance)
-        if self.action != "retrieve":
-            return context
-        related_changes = instance.get_related_changes()
-        related_changes_table = tables.ArchivedObjectChangeTable(data=related_changes, orderable=False)
-        RequestConfig(
-            request, {"paginator_class": EnhancedPaginator, "per_page": get_paginate_count(request)}
-        ).configure(related_changes_table)
-        context["related_changes_table"] = related_changes_table
-        context["related_changes_count"] = related_changes.count()
-        return context
 
 
 class ObjectChangeLogView(generic.GenericView):

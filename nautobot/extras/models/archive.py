@@ -33,6 +33,7 @@ from nautobot.extras.constants import (
     JOB_LOG_MAX_GROUPING_LENGTH,
     JOB_LOG_MAX_LOG_OBJECT_LENGTH,
 )
+from nautobot.extras.models.change_logging import ObjectChangeSnapshotsMixin
 from nautobot.extras.models.customfields import CustomFieldModel
 
 
@@ -119,7 +120,7 @@ class ArchivedRecord(BaseModel):
         default_permissions = ("view",)
 
 
-class ArchivedObjectChange(ArchivedRecord):
+class ArchivedObjectChange(ObjectChangeSnapshotsMixin, ArchivedRecord):
     """
     Every field and method of a retained `extras.ObjectChange`.
     """

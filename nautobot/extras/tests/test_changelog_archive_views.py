@@ -106,6 +106,65 @@ class WarmUrlRedirectTestCase(TestCase):
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class RetainedChangeDetailTestCase(TestCase):
+    """The panels a retained change record shares with the warm one."""
+
+    user_permissions = ("extras.view_archivedobjectchange",)
+
+    def setUp(self):
+        super().setUp()
+        clear_archive(ArchivedObjectChange)
+        self.addCleanup(clear_archive, ArchivedObjectChange)
+        self.content_type = ContentType.objects.get_for_model(ObjectChange)
+        self.request_id = uuid.uuid4()
+        self.object_id = uuid.uuid4()
+        self.earlier = self.make_change({"name": "Widget", "description": "before"}, WHEN)
+        self.change = self.make_change({"name": "Widget", "description": "after"}, WHEN.replace(hour=12))
+
+    def make_change(self, data, when):
+        return ArchivedObjectChange.objects.create(
+            id=uuid.uuid4(),
+            time=when,
+            user_name="alice",
+            request_id=self.request_id,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type_id=self.content_type.pk,
+            changed_object_id=self.object_id,
+            change_context="orm",
+            object_repr="Archived Widget",
+            object_data={},
+            object_data_v2=data,
+        )
+
+    def test_the_difference_panel_loads_the_diff_viewer(self):
+        """
+        The panel renders a container that `js/editor.js` fills.
+
+        Without a retrieve template extending the warm one that script never loads, and the panel is an
+        empty box on a page that returns 200.
+        """
+        body = self.client.get(self.change.get_absolute_url()).content.decode()
+
+        self.assertIn("nb-editor-container", body)
+        self.assertIn("js/editor.js", body)
+
+    def test_the_diff_compares_against_the_previous_change_to_the_same_object(self):
+        snapshots = self.change.get_snapshots()
+
+        self.assertEqual(snapshots["prechange"]["description"], "before")
+        self.assertEqual(snapshots["postchange"]["description"], "after")
+        self.assertEqual(snapshots["differences"]["added"], {"description": "after"})
+
+    def test_previous_and_next_navigate_between_retained_records(self):
+        self.assertEqual(self.change.get_prev_change(), self.earlier)
+        self.assertEqual(self.earlier.get_next_change(), self.change)
+
+    def test_a_record_with_no_predecessor_does_not_raise(self):
+        self.assertIsNone(self.earlier.get_prev_change())
+        self.assertIsNotNone(self.earlier.get_snapshots())
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
 class RetainedHistoryPermissionTestCase(TestCase):
     """Retained history is gated by its own ordinary `view` permission, granted to nobody by default."""
 
