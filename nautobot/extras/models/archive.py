@@ -48,6 +48,20 @@ def archive_model_for(model):
     return registry["changelog_archive_models"].get(model._meta.label_lower)
 
 
+def warm_model_for(model):
+    """
+    The warm model a retention mirror stands for, or None when `model` is not a mirror.
+
+    For anything outside retention asking what is being rendered: a mirror has no content type of its own.
+    """
+    from django.apps import apps
+
+    from nautobot.extras.registry import registry
+
+    label = next((warm for warm, mirror in registry["changelog_archive_models"].items() if mirror is model), None)
+    return apps.get_model(label) if label else None
+
+
 class ArchivedRecord(BaseModel):
     """
     Shared shape for every retained-history mirror.
