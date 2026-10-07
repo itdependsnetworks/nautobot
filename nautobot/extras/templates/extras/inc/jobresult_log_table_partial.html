@@ -30,7 +30,8 @@
             perPageSelect.removeAttribute('onchange');
 
             // build base url without params (change `per_page` should back to 1 page)
-            const baseUrl = "{% url 'extras:jobresult_log-table' pk=job_result.pk %}";
+            {% firstof log_table_url_name 'extras:jobresult_log-table' as log_table_route %}
+            const baseUrl = "{% url log_table_route pk=job_result.pk %}";
 
             // Add htmx attributes to select
             perPageSelect.setAttribute('hx-get', baseUrl);

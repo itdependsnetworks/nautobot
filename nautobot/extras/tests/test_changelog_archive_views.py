@@ -18,7 +18,7 @@ from django.test import override_settings
 from django.urls import NoReverseMatch, reverse
 
 from nautobot.core.testing import TestCase
-from nautobot.extras.choices import JobResultStatusChoices, ObjectChangeActionChoices
+from nautobot.extras.choices import JobResultStatusChoices, LogLevelChoices, ObjectChangeActionChoices
 from nautobot.extras.models import (
     ArchivedJobConsoleEntry,
     ArchivedJobLogEntry,
@@ -232,6 +232,114 @@ class RetainedJobResultSummaryTestCase(TestCase):
         """
         self.assertIsNone(self.result.job_description)
         self.assertEqual(self.result.files, [])
+
+
+@override_settings(CHANGELOG_ARCHIVE_ENABLED=True)
+class RetainedLogAndConsoleTestCase(TestCase):
+    """The Logs card and the Console Log tab, rendered through the warm page's own templates."""
+
+    user_permissions = (
+        "extras.view_archivedjobresult",
+        "extras.view_archivedjoblogentry",
+        "extras.view_archivedjobconsoleentry",
+    )
+
+    def setUp(self):
+        super().setUp()
+        clear_archive(ArchivedJobResult, ArchivedJobLogEntry, ArchivedJobConsoleEntry)
+        self.addCleanup(clear_archive, ArchivedJobResult, ArchivedJobLogEntry, ArchivedJobConsoleEntry)
+        self.result = ArchivedJobResult.objects.create(
+            id=uuid.uuid4(),
+            name="retained-job",
+            user_name="alice",
+            status=JobResultStatusChoices.STATUS_SUCCESS,
+            date_created=WHEN,
+            date_started=WHEN,
+            date_done=WHEN,
+            celery_kwargs={},
+        )
+        ArchivedJobLogEntry.objects.create(
+            id=uuid.uuid4(),
+            job_result_id=self.result.pk,
+            created=WHEN,
+            grouping="run",
+            log_level=LogLevelChoices.LOG_INFO,
+            message="a retained log line",
+        )
+        ArchivedJobConsoleEntry.objects.create(
+            id=uuid.uuid4(),
+            job_result_id=self.result.pk,
+            timestamp=WHEN,
+            output_type="stdout",
+            text="a retained console line",
+        )
+
+    def test_the_logs_card_points_at_this_view_not_the_warm_one(self):
+        """
+        The shared template defaults to the warm route, which would 404 on a retained key.
+
+        That failure is invisible on the page: the card renders and its body never arrives.
+        """
+        body = self.client.get(self.result.get_absolute_url()).content.decode()
+
+        self.assertIn('id="log-filter"', body)
+        self.assertIn('id="log-table-wrapper"', body)
+        self.assertIn(reverse("extras:archivedjobresult_log-table", kwargs={"pk": self.result.pk}), body)
+        self.assertNotIn(reverse("extras:jobresult_log-table", kwargs={"pk": self.result.pk}), body)
+
+    def test_the_log_table_action_returns_this_result_s_entries(self):
+        response = self.client.get(
+            reverse("extras:archivedjobresult_log-table", kwargs={"pk": self.result.pk}),
+            headers={"HX-Request": "true"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("a retained log line", response.content.decode(response.charset))
+
+    def test_the_log_table_action_filters_on_q(self):
+        response = self.client.get(
+            reverse("extras:archivedjobresult_log-table", kwargs={"pk": self.result.pk}),
+            {"q": "nothing matches this"},
+            headers={"HX-Request": "true"},
+        )
+
+        self.assertNotIn("a retained log line", response.content.decode(response.charset))
+
+    def test_console_output_renders_as_a_console_not_a_table(self):
+        """A sortable Time/Stream/Text table is a working page that looks nothing like the warm one."""
+        body = self.client.get(f"{self.result.get_absolute_url()}?tab=job_console_entries").content.decode()
+
+        self.assertIn('id="console-output"', body)
+        self.assertIn("console-line", body)
+        self.assertIn("a retained console line", body)
+
+    def test_the_console_tab_is_hidden_when_there_is_no_output(self):
+        ArchivedJobConsoleEntry.objects.all().delete()
+
+        body = self.client.get(self.result.get_absolute_url()).content.decode()
+
+        self.assertNotIn("Console Log", body)
+
+    def test_both_export_buttons_point_at_the_retained_entries(self):
+        """The warm links would export a warm result's entries, which for a retained key is none."""
+        body = self.client.get(self.result.get_absolute_url()).content.decode()
+
+        self.assertIn(
+            f"{reverse('extras-api:archivedjoblogentry-list')}?job_result_id={self.result.pk}&amp;format=csv", body
+        )
+        self.assertIn(
+            reverse("extras:archivedjobresult_export_job_console_entries", kwargs={"pk": self.result.pk}), body
+        )
+
+    def test_the_console_export_returns_the_retained_output_as_text(self):
+        response = self.client.get(
+            reverse("extras:archivedjobresult_export_job_console_entries", kwargs={"pk": self.result.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/plain; charset=utf-8")
+        self.assertIn("attachment;", response["Content-Disposition"])
+        self.assertIn("a retained console line", response.content.decode(response.charset))
 
 
 @override_settings(CHANGELOG_ARCHIVE_ENABLED=True)

@@ -4367,14 +4367,38 @@ class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMix
                     "files": [render_jobresult_files],
                 },
             ),
-            object_detail.ObjectsTablePanel(
-                table_title="Logs",
-                section=SectionChoices.FULL_WIDTH,
+            # The warm page's Logs card, filter box included. `log_table_url_name` in `get_extra_context`
+            # points it at this view's own `log_table` action instead of the warm one.
+            object_detail.Panel(
                 weight=300,
-                context_table_key="log_entries_table",
-                # Retained log entries have no list view of their own, so there is nothing to link to.
-                enable_related_link=False,
-                footer_content_template_path=None,
+                section=SectionChoices.FULL_WIDTH,
+                body_content_template_path="extras/inc/log_table_filter.html",
+                body_wrapper_template_path="components/panel/body_wrapper_table.html",
+            ),
+        ),
+        # The warm page's two export buttons. No Run and no Cancel Job: a retained result finished before
+        # it was rotated, so there is nothing left to run or cancel.
+        extra_buttons=(
+            JobResultButton(
+                weight=120,
+                label="Export Logs",
+                color=ButtonActionColorChoices.EXPORT,
+                icon="mdi-database-export",
+                required_permissions=["extras.view_archivedjoblogentry"],
+                link_name=lambda ctx: (
+                    reverse("extras-api:archivedjoblogentry-list") + f"?job_result_id={ctx['object'].pk}&format=csv"
+                ),
+            ),
+            JobResultButton(
+                weight=130,
+                label="Export Console Logs",
+                color=ButtonActionColorChoices.EXPORT,
+                icon="mdi-database-export",
+                required_permissions=["extras.view_archivedjobconsoleentry"],
+                render_on_tab_id=["job_console_entries"],
+                link_name=lambda ctx: reverse(
+                    "extras:archivedjobresult_export_job_console_entries", kwargs={"pk": ctx["object"].pk}
+                ),
             ),
         ),
         extra_tabs=[
@@ -4389,7 +4413,8 @@ class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMix
                         label="Console Log",
                         section=SectionChoices.FULL_WIDTH,
                         weight=100,
-                        body_content_template_path="extras/inc/archivedjobresult_console_log.html",
+                        body_content_template_path="extras/inc/jobresult_console_log_body.html",
+                        header_extra_content_template_path="extras/inc/jobresult_console_log_status.html",
                     ),
                 ],
                 required_permissions=["extras.view_archivedjobconsoleentry"],
@@ -4445,19 +4470,82 @@ class ArchivedJobResultUIViewSet(ArchivedRetentionViewMixin, ObjectDetailViewMix
         ),
     )
 
+    #: The route `extras/inc/log_table_filter.html` and `jobresult_log_table_partial.html` point their
+    #: htmx requests at. Both templates default to the warm route, so this is what redirects them here.
+    log_table_url_name = "extras:archivedjobresult_log-table"
+
+    @action(
+        detail=True,
+        url_path="log-table",
+        url_name="log-table",
+        custom_view_base_action="view",
+    )
+    def log_table(self, request, pk=None):
+        """The Logs panel's table body, the same action the warm page has over the retained entries."""
+        instance = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+
+        queryset = ArchivedJobLogEntry.objects.restrict(request.user, "view").filter(job_result_id=instance.pk)
+        filter_q = request.GET.get("q")
+        if filter_q:
+            queryset = queryset.filter(Q(message__icontains=filter_q) | Q(log_level__icontains=filter_q))
+
+        log_table = tables.ArchivedJobLogEntryTable(data=queryset, user=request.user)
+        paginate = {"paginator_class": EnhancedPaginator, "per_page": get_paginate_count(request)}
+        RequestConfig(request, paginate).configure(log_table)
+
+        if request.headers.get("HX-Request"):
+            context = {
+                "job_result": instance,
+                # A retained result finished before it was rotated, so the warm template's "loading"
+                # placeholder and its poller are both switched off.
+                "job_is_pending": False,
+                "has_logs": queryset.exists(),
+                "table_html": log_table.as_html(request),
+                "log_table_url": request.get_full_path(),
+                "log_table_url_name": self.log_table_url_name,
+            }
+            response = render(request, "extras/inc/jobresult_log_table_partial.html", context)
+            patch_vary_headers(response, ["HX-Request"])
+            return response
+
+        response = HttpResponse(log_table.as_html(request))
+        patch_vary_headers(response, ["HX-Request"])
+        return response
+
+    @action(
+        detail=True,
+        url_path="export-job-console-entries",
+        url_name="export_job_console_entries",
+        custom_view_base_action="view",
+        custom_view_additional_permissions=["extras.view_archivedjobconsoleentry"],
+    )
+    def export_job_console_entries(self, request, pk=None):
+        """
+        Retained console output as a plain-text file, in the format the warm page exports.
+
+        A UI action and not a REST endpoint, because that is what the warm page offers: `JobConsoleEntry`
+        has no REST endpoint, so neither does `ArchivedJobConsoleEntry`.
+        """
+        instance = get_object_or_404(self.queryset.restrict(request.user, "view"), pk=pk)
+
+        entries = ArchivedJobConsoleEntry.objects.restrict(request.user, "view").filter(job_result_id=instance.pk)
+        lines = [f"[{entry.timestamp.strftime('%H:%M:%S.%f')[:12]}] {entry.text.strip()}" for entry in entries]
+
+        filename = f"{settings.BRANDING_PREPENDED_FILENAME}job_console_entries_{instance.pk}.txt"
+        response = HttpResponse("\n".join(lines), content_type="text/plain; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
     def get_extra_context(self, request, instance):
-        """This result's own retained log entries, matched on the identifier rotation stores."""
+        """What the Logs card and the Console Log tab render from."""
         context = super().get_extra_context(request, instance)
-        if self.action != "retrieve":
+        if self.action not in ("retrieve", "log_table"):
             return context
-        log_entries_table = tables.ArchivedJobLogEntryTable(
-            data=ArchivedJobLogEntry.objects.restrict(request.user, "view").filter(job_result_id=instance.pk),
-            user=request.user,
-        )
-        RequestConfig(
-            request, {"paginator_class": EnhancedPaginator, "per_page": get_paginate_count(request)}
-        ).configure(log_entries_table)
-        context["log_entries_table"] = log_entries_table
+        # `result` is the name the shared log templates read, and the Logs card renders nothing without
+        # it: its htmx wrapper sits inside `{% if result and result.pk %}`.
+        context["result"] = instance
+        # Both shared log templates default to the warm route; this is what redirects them here.
+        context["log_table_url_name"] = self.log_table_url_name
         # `entries` is the name the warm console partial reads. `ArchivedJobConsoleEntry` orders by
         # `timestamp` ascending, so the stream reads in the order it was written.
         context["entries"] = ArchivedJobConsoleEntry.objects.restrict(request.user, "view").filter(
